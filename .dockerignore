@@ -3,9 +3,3 @@ node_modules
 .git
 test
 README.md
-
-
-cd C:\Projects\captain
-git init
-git add -A
-git status
