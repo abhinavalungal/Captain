@@ -36,6 +36,7 @@ const { isBriefingRequest, buildBriefing } = require('./alerts');
 const { converse } = require('./companion_src');
 const { answerInstant, formatNow } = require('./instant_src');
 const identity = require('./identity');
+const agent = require('./agent');
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -63,6 +64,29 @@ async function route(input, db, opts) {
 
   const text = String(input.text || '').trim();
   if (!text) return { status: 'unparsed', text: 'Ask me about a vessel, the app, or say hello.', source: 'router' };
+
+  // --- AI-FIRST MODE ------------------------------------------------------------
+  // CAPTAIN_MODE=agent hands the whole message to the model with tools, and none
+  // of the matching below runs. The model works out intent for itself; the tools
+  // it can reach are the same deterministic engine/RBAC/guide code used here.
+  // If the model layer is unreachable, we fall back to this router rather than
+  // leaving the user with nothing (set CAPTAIN_AGENT_FALLBACK=0 to disable).
+  if (String(env.CAPTAIN_MODE || '').toLowerCase() === 'agent') {
+    let agentOut = null;
+    try {
+      agentOut = await agent.run(input, getDb, opts);
+    } catch (err) {
+      console.error('captain: agent failed', err);
+      agentOut = { status: 'error', source: 'agent', reason: 'model_error', text: '' };
+    }
+    if (agentOut && agentOut.status !== 'error') return agentOut;
+    if (env.CAPTAIN_AGENT_FALLBACK === '0') {
+      return agentOut && agentOut.text
+        ? agentOut
+        : { status: 'error', source: 'agent', text: 'I could not reach my reasoning service just now. Nothing was changed.' };
+    }
+    // fall through to the deterministic router below
+  }
 
   const userName = input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null;
   const vesselName = input.context && input.context.vesselName ? String(input.context.vesselName) : null;
@@ -231,7 +255,31 @@ function isLightMessage(text) {
 async function companionReply(text, input, opts, env) {
   const guideSnippets = searchGuide(text, 3).map(function (g) { return { title: g.title, answer: g.answer }; });
   const tz = input.context && input.context.tz ? String(input.context.tz) : null;
-  const convo = await converse(text, {
+  let convo;
+  try {
+    convo = await converseSafe(text, input, opts, env, guideSnippets, tz);
+  } catch (err) {
+    // The companion must NEVER take the whole request down. Whatever the
+    // model layer throws, the user gets a plain honest sentence, not a 500.
+    console.error('captain: companion failed', err);
+    convo = {
+      text: 'I hit a snag answering that one — nothing was changed. I can still read your vessel data and help with the app.',
+      blocked: false,
+      error: String((err && err.message) || err),
+    };
+  }
+  return {
+    status: 'answer',
+    text: convo.text,
+    source: 'companion',
+    chart: convo.chart || undefined,
+    blocked: convo.blocked || undefined,
+    options: convo.blocked ? examplePrompts() : undefined,
+  };
+}
+
+async function converseSafe(text, input, opts, env, guideSnippets, tz) {
+  return converse(text, {
     env: env,
     light: isLightMessage(text),
     nowLabel: formatNow(input.now ? new Date(input.now) : new Date(), tz).label,
@@ -241,14 +289,6 @@ async function companionReply(text, input, opts, env) {
     context: input.context && input.context.vesselName ? { vesselName: String(input.context.vesselName).slice(0, 80) } : null,
     fetchImpl: opts.fetchImpl,
   });
-  return {
-    status: 'answer',
-    text: convo.text,
-    source: 'companion',
-    chart: convo.chart || undefined,
-    blocked: convo.blocked || undefined,
-    options: convo.blocked ? examplePrompts() : undefined,
-  };
 }
 
 /**
@@ -425,4 +465,4 @@ function tagSource(result, source) {
 /** Exposed so the learned-term cache can be cleared when vocabulary changes or in tests. */
 function clearLearnedCache() { learnedCache.clear(); }
 
-module.exports = { route: route, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite };
+module.exports = { route: route, agent: agent, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite };

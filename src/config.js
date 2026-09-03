@@ -1,4 +1,4 @@
-'use strict';
+\'use strict';
 
 /**
  * ============================================================================
@@ -57,6 +57,41 @@ const SOURCES = {
     timeColumnType: 'date',
     granularity: 'daily',
     description: 'Veson IMOS FuelEU off-hire report',
+  },
+
+  // --- fueleu_final / dnv -----------------------------------------------------
+  // Both read through a VIEW, not the raw table (see db/003_captain_fueleu_dnv_views.sql).
+  // Reason: the underlying tables use identifiers with spaces ("CB at Start",
+  // "Gross CB") that Captain's identifier validator correctly refuses to
+  // declare directly — that refusal is what makes SQL injection structurally
+  // impossible elsewhere in this file, so the view exists instead of loosening it.
+  //
+  // GRANULARITY CAVEAT: both sources are per-voyage / per-period rows, not one
+  // row per calendar day. "daily" is declared because it is the finest option
+  // this schema supports meaningfully — but a voyage spanning e.g. 3 days has
+  // ONE row for the whole span, not a value for each day inside it. A question
+  // like "gross CB for Aurora Trader yesterday" will only match if a voyage
+  // record's own start/end falls inside "yesterday" — it will NOT prorate or
+  // interpolate a mid-voyage value. Fine for "this voyage" / "this month"
+  // style questions; misleading for anything asking about a single day inside
+  // a longer voyage. Flag if that's not the behaviour you want.
+  captain_fueleu_final: {
+    key: 'captain_fueleu_final',
+    table: 'captain_fueleu_final',
+    vesselColumn: 'imo',
+    timeColumn: 'voyage_start',
+    timeColumnType: 'timestamptz',
+    granularity: 'daily',
+    description: 'FuelEU compliance balance by voyage',
+  },
+  captain_dnv: {
+    key: 'captain_dnv',
+    table: 'captain_dnv',
+    vesselColumn: 'imo',
+    timeColumn: 'reallocation_period_start',
+    timeColumnType: 'date',
+    granularity: 'daily',
+    description: 'DNV FuelEU reallocation period figures',
   },
 };
 
@@ -120,6 +155,34 @@ const METRICS = [
     aliases: ['off hire', 'offhire', 'off hire hours', 'offhire hours', 'off hire time', 'downtime', 'off hire duration'] },
   { key: 'offhire_days', label: 'Off-hire days', unit: 'days', source: 'veson_offhire', column: 'offhire_days', kind: 'quantity', decimals: 2,
     aliases: ['off hire days', 'offhire days', 'days off hire'] },
+
+  // --- fueleu_final (via captain_fueleu_final view) ---------------------------
+  // UNIT NOT CONFIRMED: gCO2e is a guess, matching how `compliance_balance`
+  // above is declared for veson_legs, and matching bigint values that size.
+  // Confirm with Nav before this reaches a user.
+  { key: 'gross_cb', label: 'Gross compliance balance', unit: 'gCO2e /* UNCONFIRMED */', source: 'captain_fueleu_final', column: 'gross_cb', kind: 'quantity', decimals: 0,
+    aliases: ['gross cb', 'gross compliance balance', 'voyage compliance balance', 'fueleu gross cb'],
+    description: 'Gross FuelEU compliance balance for the voyage' },
+  { key: 'cb_at_start', label: 'Compliance balance at voyage start', unit: 'gCO2e /* UNCONFIRMED */', source: 'captain_fueleu_final', column: 'cb_at_start', kind: 'quantity', decimals: 0,
+    aliases: ['cb at start', 'starting compliance balance', 'opening cb', 'compliance balance at start'] },
+  { key: 'voyage_gross_days', label: 'Voyage gross days', unit: 'days', source: 'captain_fueleu_final', column: 'voyage_gross_days', kind: 'quantity', decimals: 2,
+    aliases: ['voyage gross days', 'gross voyage days', 'voyage days'] },
+  { key: 'fueleu_offhire_gross_days', label: 'Off-hire gross days (FuelEU)', unit: 'days', source: 'captain_fueleu_final', column: 'offhire_gross_days', kind: 'quantity', decimals: 2,
+    aliases: ['fueleu offhire gross days', 'fueleu off hire gross days'] },
+  { key: 'net_gross_days', label: 'Net gross days', unit: 'days', source: 'captain_fueleu_final', column: 'net_gross_days', kind: 'quantity', decimals: 2,
+    aliases: ['net gross days', 'net voyage days'] },
+
+  // --- dnv (via captain_dnv view) ----------------------------------------------
+  // UNIT NOT CONFIRMED for all four below — best guesses only.
+  { key: 'dnv_compliance_balance', label: 'DNV compliance balance', unit: 'gCO2e /* UNCONFIRMED */', source: 'captain_dnv', column: 'compliance_balance', kind: 'quantity', decimals: 0,
+    aliases: ['dnv cb', 'dnv compliance balance', 'reallocation compliance balance', 'dnv balance'],
+    description: 'FuelEU compliance balance for the reallocation period, per DNV' },
+  { key: 'fueleu_penalty', label: 'FuelEU penalty', unit: 'EUR /* UNCONFIRMED */', source: 'captain_dnv', column: 'fueleu_penalty', kind: 'quantity', decimals: 2,
+    aliases: ['fueleu penalty', 'dnv penalty', 'compliance penalty', 'fueleu fine'] },
+  { key: 'fueleu_energy', label: 'FuelEU energy', unit: 'MJ /* UNCONFIRMED */', source: 'captain_dnv', column: 'fueleu_energy', kind: 'quantity', decimals: 0,
+    aliases: ['fueleu energy', 'dnv energy', 'energy used fueleu'] },
+  { key: 'actual_ghg', label: 'Actual GHG intensity', unit: 'gCO2e/MJ /* UNCONFIRMED */', source: 'captain_dnv', column: 'actual_ghg', kind: 'rate', decimals: 2,
+    aliases: ['actual ghg', 'actual ghg intensity', 'dnv ghg', 'realised ghg intensity'] },
 ];
 
 /**

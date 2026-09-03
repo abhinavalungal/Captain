@@ -883,7 +883,7 @@
       // Assistant turns are kept only for conversational sources, so the
       // companion's context stays conversation, not figures.
       self.history.push({ role: 'user', text: body });
-      if (data.source === 'companion' || data.source === 'guide' || data.source === 'identity') {
+      if (data.source === 'companion' || data.source === 'guide' || data.source === 'identity' || data.source === 'agent') {
         self.history.push({ role: 'assistant', text: data.text });
       }
       self.history = self.history.slice(-8);
