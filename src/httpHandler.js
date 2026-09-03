@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/captain (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const CAPTAIN_BUILD = '2026-09-04.1';
+const CAPTAIN_BUILD = '2026-09-04.2';
 const router = require('./router');
 const { LIMITS, METRICS, SOURCES } = require('./config');
 const { readEnv: llmConfig } = require('./companion_src');
@@ -33,6 +33,13 @@ function sslFor(env) {
 }
 
 /** How long to wait for a TCP+TLS connection before giving up (default 8s). */
+function typeErrorDetail(err) {
+  const msg = String(err.message || '').replace(/https?:\/\/\S+/g, '<url>').slice(0, 160);
+  const frame = String(err.stack || '').split('\n').map((l) => l.trim()).find((l) => /^at /.test(l)) || '';
+  const m = frame.match(/([^\/\\\s(]+\.js):(\d+)/);
+  return msg + (m ? ' @ ' + m[1] + ':' + m[2] : '');
+}
+
 function connectTimeoutMs(env) {
   const n = parseInt(env.CAPTAIN_PG_CONNECT_TIMEOUT_MS || '8000', 10);
   return Number.isFinite(n) && n > 0 ? n : 8000;
@@ -160,12 +167,20 @@ function corsHeaders(requestOrigin, env) {
   return h;
 }
 
+function safeAgentBuild() {
+  try { return require('./agent').AGENT_BUILD || 'pre-2026-09-04'; } catch (_) { return 'missing'; }
+}
+
 function health(env) {
   const llm = llmConfig(env);
   return {
     status: 'ok',
     service: 'captain',
     build: CAPTAIN_BUILD,
+    // Every file that matters reports its own stamp. If these disagree, a
+    // deploy shipped a mix of old and new files - the exact failure mode a
+    // copy/paste pipeline produces.
+    builds: { httpHandler: CAPTAIN_BUILD, router: router.ROUTER_BUILD || 'pre-2026-09-04', agent: safeAgentBuild() },
     database: !!env.CAPTAIN_READ_URL,
     writer: !!env.CAPTAIN_WRITE_URL,
     auth: env.CAPTAIN_DEV_SESSION === '1' ? 'prototype' : 'production',
@@ -277,6 +292,11 @@ async function handleCaptain(req) {
       text: 'Something went wrong on my side. Nothing was changed \u2014 please try again in a moment.',
       build: CAPTAIN_BUILD,
       code: String((err && (err.code || err.name)) || 'Error').slice(0, 40),
+      // A TypeError is a programming error, not a data error: its message
+      // ("x is not a function", "cannot read properties of undefined") never
+      // carries user data or credentials, and the top stack frame (file:line,
+      // basename only) is exactly what is needed to fix it from a screenshot.
+      detail: err instanceof TypeError ? typeErrorDetail(err) : undefined,
     });
   } finally {
     if (client) client.release();

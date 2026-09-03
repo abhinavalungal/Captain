@@ -37,6 +37,8 @@ const { converse } = require('./companion_src');
 const { answerInstant, formatNow } = require('./instant_src');
 const identity = require('./identity');
 const agent = require('./agent');
+
+const ROUTER_BUILD = '2026-09-04.2';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -475,4 +477,4 @@ function tagSource(result, source) {
 /** Exposed so the learned-term cache can be cleared when vocabulary changes or in tests. */
 function clearLearnedCache() { learnedCache.clear(); }
 
-module.exports = { route: route, agent: agent, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite };
+module.exports = { route: route, agent: agent, ROUTER_BUILD: ROUTER_BUILD, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite };

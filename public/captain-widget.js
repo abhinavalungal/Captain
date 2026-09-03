@@ -994,7 +994,7 @@
     // Server-side failures carry a build stamp and an error class. Showing them
     // small under the card means a screenshot is enough to diagnose.
     if (data.status === 'error' && (data.code || data.build)) {
-      card.appendChild(el('p', 'subject', [data.code, data.build ? 'build ' + data.build : null].filter(Boolean).join(' \u00b7 ')));
+      card.appendChild(el('p', 'subject', [data.code, data.detail || null, data.build ? 'build ' + data.build : null].filter(Boolean).join(' \u00b7 ')));
     }
     if (data.footnote) card.appendChild(el('p', 'subject', data.footnote));
     if (data.note) card.appendChild(el('div', 'caution', data.note));
