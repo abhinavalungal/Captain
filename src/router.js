@@ -33,8 +33,8 @@ const parser = require('./parser');
 const terms = require('./terms');
 const { matchGuide, searchGuide } = require('./guide');
 const { isBriefingRequest, buildBriefing } = require('./alerts');
-const { converse } = require('./companion');
-const { answerInstant, formatNow } = require('./instant');
+const { converse } = require('./companion_src');
+const { answerInstant, formatNow } = require('./instant_src');
 const { METRICS } = require('./config');
 
 const DB_NOT_CONFIGURED = 'My database connection is not configured yet, so I cannot read vessel records. I can still help with the app, or just chat.';
