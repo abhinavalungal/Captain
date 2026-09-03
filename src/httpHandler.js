@@ -92,16 +92,48 @@ async function resolveSession(headers, env) {
 }
 
 // --- CORS: works the same regardless of host --------------------------------
-// CAPTAIN_ALLOW_ORIGIN may be one origin, a comma-separated list, or "*".
+// CAPTAIN_ALLOW_ORIGIN may be one origin, a comma-separated list, "*" for
+// any origin, or a subdomain wildcard like "*.netlify.app" or
+// "*.geoserves.com" \u2014 the last matches every subdomain (including Netlify's
+// per-deploy preview URLs) under that domain, without matching arbitrary
+// third-party sites the way a bare "*" would. Entries can be mixed freely:
+// "https://perform.geoserves.com,*.netlify.app" is valid.
 function allowedOriginsList(env) {
   return String(env.CAPTAIN_ALLOW_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/** True if `hostname` is exactly `suffixDomain` or a subdomain of it. */
+function hostMatchesSuffix(hostname, suffixDomain) {
+  return hostname === suffixDomain || hostname.endsWith('.' + suffixDomain);
+}
+
+function originMatchesPattern(requestOrigin, pattern, requestHostname) {
+  if (pattern === '*') return true;
+  if (pattern === requestOrigin) return true;
+  if (pattern.startsWith('*.') && requestHostname) {
+    return hostMatchesSuffix(requestHostname, pattern.slice(2));
+  }
+  return false;
 }
 
 function corsHeaders(requestOrigin, env) {
   const allowed = allowedOriginsList(env);
   let allow = '';
-  if (allowed.includes('*')) allow = '*';
-  else if (requestOrigin && allowed.includes(requestOrigin)) allow = requestOrigin;
+  if (requestOrigin) {
+    let hostname = null;
+    try { hostname = new URL(requestOrigin).hostname; } catch (_) { hostname = null; }
+    if (allowed.some((p) => originMatchesPattern(requestOrigin, p, hostname))) {
+      // Echo the exact requesting origin rather than "*" whenever a specific
+      // match (literal or wildcard) fired \u2014 this is what lets the caller
+      // still use credentialed requests later if it ever needs to, and it is
+      // more auditable in logs than a blanket "*" on every response.
+      allow = allowed.includes('*') && !allowed.some((p) => p !== '*' && originMatchesPattern(requestOrigin, p, hostname))
+        ? '*'
+        : requestOrigin;
+    }
+  } else if (allowed.includes('*')) {
+    allow = '*'; // non-browser caller (health checks, curl) sends no Origin header
+  }
 
   const h = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Vary': 'Origin' };
   if (allow) {
