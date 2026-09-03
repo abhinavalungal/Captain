@@ -35,6 +35,8 @@ const { matchGuide, searchGuide } = require('./guide');
 const { isBriefingRequest, buildBriefing } = require('./alerts');
 const { converse } = require('./companion_src');
 const { answerInstant, formatNow } = require('./instant_src');
+const identity = require('./identity');
+const dates = require('./dates');
 const { METRICS } = require('./config');
 
 const DB_NOT_CONFIGURED = 'My database connection is not configured yet, so I cannot read vessel records. I can still help with the app, or just chat.';
@@ -62,6 +64,23 @@ async function route(input, db, opts) {
   const text = String(input.text || '').trim();
   if (!text) return { status: 'unparsed', text: 'Ask me about a vessel, the app, or say hello.', source: 'router' };
 
+  const userName = input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null;
+  const vesselName = input.context && input.context.vesselName ? String(input.context.vesselName) : null;
+
+  // The previous turn asked for the user's name. A bare "Nav" here is the
+  // answer, not a data question — but the user is free to ignore the question
+  // and ask about fuel instead, in which case this resolves to null and the
+  // message routes normally below.
+  if (input.pending && input.pending.kind === 'name') {
+    const reply = parser.classify(text, [], input.now) === 'other'
+      ? identity.resolveNameReply(text, { vesselName: vesselName })
+      : null;
+    if (reply) {
+      return { status: 'answer', source: 'identity', instant: true, text: reply.text, remember: reply.remember || undefined };
+    }
+    input = Object.assign({}, input, { pending: null }); // fall through, question dropped
+  }
+
   // A pending clarification or teach-confirmation is a data conversation in
   // flight — it belongs to the engine, which needs the records.
   if (input.pending) {
@@ -81,6 +100,19 @@ async function route(input, db, opts) {
   const tz = input.context && input.context.tz ? String(input.context.tz) : null;
   const instant = answerInstant(text, { now: input.now, tz: tz });
   if (instant) return { status: 'answer', source: 'instant', kind: instant.kind, text: instant.text, instant: true };
+
+  // --- 0.5 identity: names, in both directions — exact, local, no model ---------
+  // "What's your name" / "my name is Nav" / "what's my name". Captured names
+  // travel back to the widget in `remember` and return on every message in
+  // context.userName; the server itself stays stateless.
+  const whoAmI = identity.answerIdentity(text, { userName: userName, vesselName: vesselName });
+  if (whoAmI) {
+    return {
+      status: 'answer', source: 'identity', instant: true, text: whoAmI.text,
+      remember: whoAmI.remember || undefined,
+      pending: whoAmI.pending || undefined,
+    };
+  }
 
   // --- 1. classify without the database ---------------------------------------
   let kind = parser.classify(text, [], input.now);
@@ -108,16 +140,32 @@ async function route(input, db, opts) {
     });
   }
 
+  // --- 1.5 follow-ups: "and last week?" inherits the previous data question ------
+  // A bare time range (with an optional cue like "and" / "what about") after a
+  // data question means the same metric and vessel over the new period. The
+  // rewrite is deterministic — previous question with its old range swapped
+  // for the new one — and the rewritten text is returned in `interpreted` so
+  // the user can see exactly what was answered.
+  const followUp = followUpRewrite(text, input.history, input.now, opts.dateOrder);
+  if (followUp) {
+    return withDb(getDb, function (client) {
+      return engine.ask(Object.assign({}, input, { text: followUp }), client, opts).then(function (r) {
+        r.interpreted = followUp;
+        return tagSource(r, 'data');
+      });
+    });
+  }
+
   // --- 2. small talk: answered locally, in microseconds -------------------------------
   // A greeting, thanks or goodbye is answered from a fixed set of replies and
   // NEVER sent to a model. Routing "hi" through a frontier reasoning model
   // costs tens of seconds and buys nothing, so it does not happen. Set
   // CAPTAIN_SMALLTALK_MODEL=1 if you would rather a model handle these.
   if (isSmallTalk(text) && env.CAPTAIN_SMALLTALK_MODEL !== '1') {
-    return { status: 'answer', source: 'router', text: smallTalkReply(text), instant: true };
+    return { status: 'answer', source: 'router', text: smallTalkReply(text, userName), instant: true };
   }
   if (isSmallTalk(text)) {
-    if (env.CAPTAIN_ENABLE_LLM === '0') return { status: 'answer', source: 'router', text: smallTalkReply(text), instant: true };
+    if (env.CAPTAIN_ENABLE_LLM === '0') return { status: 'answer', source: 'router', text: smallTalkReply(text, userName), instant: true };
     return companionReply(text, input, opts, env);
   }
 
@@ -180,6 +228,7 @@ async function companionReply(text, input, opts, env) {
     nowLabel: formatNow(input.now ? new Date(input.now) : new Date(), tz).label,
     guideSnippets: guideSnippets,
     history: input.history,
+    userName: input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null,
     context: input.context && input.context.vesselName ? { vesselName: String(input.context.vesselName).slice(0, 80) } : null,
     fetchImpl: opts.fetchImpl,
   });
@@ -234,6 +283,65 @@ async function loadLearnedIfAvailable(getDb, orgId) {
   }
 }
 
+/**
+ * Rewrite a follow-up like "and last week?" into a full data question by
+ * inheriting the most recent data question from the conversation history.
+ * Returns the rewritten question, or null when this isn't a follow-up.
+ *
+ * Deliberately strict: the new message must resolve to a time range, must not
+ * itself name a metric, and once the range and cue words are removed there
+ * must be nothing substantive left — "how did last week compare to the
+ * forecast" is NOT a follow-up and goes to the companion as before.
+ */
+const FOLLOWUP_CUE_RE = /^\s*(?:and|what about|how about|what abt|same(?:\s+(?:for|thing|period|again))?|also|now|then|ok(?:ay)?)\b/i;
+
+function followUpRewrite(text, history, now, dateOrder) {
+  if (!Array.isArray(history) || !history.length) return null;
+  const raw = String(text || '').trim();
+  if (!raw || raw.length > 80) return null;
+  if (parser.classify(raw, [], now) !== 'other') return null;
+
+  const newRange = dates.resolveTimeRange(raw, now ? new Date(now) : new Date(), { dateOrder: dateOrder });
+  if (!newRange || newRange.needsDate || !newRange.matched) return null;
+
+  // What is left once the range and the cue are gone? Only filler and time
+  // vocabulary may remain. (The stripped `matched` value is a canonical form
+  // — "year to date" for "this year" — so the surface words of a period must
+  // be tolerated on their own.)
+  const leftover = raw.toLowerCase()
+    .replace(new RegExp(escapeRe(newRange.matched), 'i'), ' ')
+    .replace(FOLLOWUP_CUE_RE, ' ')
+    .replace(/[?.!,]/g, ' ');
+  const leftoverWords = leftover.split(/\s+/).filter(function (w) {
+    return w && FOLLOWUP_FILLER.indexOf(w) < 0 && !TIME_WORD_RE.test(w) && !/^\d/.test(w);
+  });
+  if (leftoverWords.length > 0) return null;
+
+  // The most recent user message that was a data question.
+  let prior = null;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
+    if (!h || h.role === 'assistant') continue;
+    const t = String(h.text || '').trim();
+    if (t && parser.classify(t, [], now) === 'data') { prior = t; break; }
+  }
+  if (!prior) return null;
+
+  const priorRange = dates.resolveTimeRange(prior, now ? new Date(now) : new Date(), { dateOrder: dateOrder });
+  let base = priorRange && priorRange.matched
+    ? prior.replace(new RegExp(escapeRe(priorRange.matched), 'i'), ' ')
+    : prior;
+  // Some resolutions carry no `matched` text ("yesterday", "today"); strip
+  // those literal words too, or the rewrite would carry two periods.
+  base = base.replace(/\b(?:day before yesterday|yesterday|today|tonight|right now|now)\b/gi, ' ');
+  return (base + ' ' + newRange.matched).replace(/[?.!]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const FOLLOWUP_FILLER = ['for', 'in', 'the', 'over', 'during', 'of', 'it', 'that', 'show', 'me', 'and', 'to', 'so', 'far'];
+const TIME_WORD_RE = /^(?:this|last|previous|prior|current|past|yesterday|today|ytd|mtd|day|days|hour|hours|week|weeks|month|months|year|years|quarter|quarters|q[1-4]|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|date|since|until|till|from|between)$/;
+
+function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
 const SMALL_TALK = new Set(['hi', 'hello', 'hey', 'hiya', 'yo', 'sup', 'thanks', 'thank', 'you', 'thx', 'ty', 'ok', 'okay',
   'good', 'morning', 'afternoon', 'evening', 'night', 'bye', 'goodbye', 'cheers', 'please', 'cool', 'great', 'nice',
   'captain', 'there', 'how', 'are', 'doing', 'whats', 'up', 'yes', 'no', 'yep', 'nope', 'lol', 'haha']);
@@ -276,16 +384,24 @@ function pick(list, seed) {
   return list[Math.abs(seed) % list.length];
 }
 
-function smallTalkReply(text) {
+function smallTalkReply(text, name) {
   const t = String(text).toLowerCase();
   // Seeded from the message so the same input is stable within a session but
   // different greetings vary.
   const seed = t.length * 31 + (t.charCodeAt(0) || 0) + Date.now() / 60000 | 0;
-  if (/thank|thx|\bty\b|cheers|appreciate/.test(t)) return pick(SMALL_TALK_REPLIES.thanks, seed);
-  if (/\bbye\b|goodbye|good night|\bnight\b|see you|later/.test(t)) return pick(SMALL_TALK_REPLIES.bye, seed);
+  if (/thank|thx|\bty\b|cheers|appreciate/.test(t)) return personalize(pick(SMALL_TALK_REPLIES.thanks, seed), name);
+  if (/\bbye\b|goodbye|good night|\bnight\b|see you|later/.test(t)) return personalize(pick(SMALL_TALK_REPLIES.bye, seed), name);
   if (/how are you|how.?s it going|how are things|you doing|what.?s up|sup\b/.test(t)) return pick(SMALL_TALK_REPLIES.howareyou, seed);
   if (/^\s*(ok|okay|yes|yep|yeah|no|nope|cool|great|nice|sure|got it|alright)\b/.test(t)) return pick(SMALL_TALK_REPLIES.affirm, seed);
-  return pick(SMALL_TALK_REPLIES.greet, seed);
+  return personalize(pick(SMALL_TALK_REPLIES.greet, seed), name);
+}
+
+/** "Hello." becomes "Hello, Nav." when the widget has remembered a name. */
+function personalize(reply, name) {
+  if (!name) return reply;
+  const safe = String(name).replace(/[^\w'\u2019. -]/g, '').trim().slice(0, 40);
+  if (!safe) return reply;
+  return reply.replace(/^([A-Za-z][\w' ]*?)([.!])/, '$1, ' + safe + '$2');
 }
 
 function examplePrompts() {
@@ -300,4 +416,4 @@ function tagSource(result, source) {
 /** Exposed so the learned-term cache can be cleared when vocabulary changes or in tests. */
 function clearLearnedCache() { learnedCache.clear(); }
 
-module.exports = { route: route, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage };
+module.exports = { route: route, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite };

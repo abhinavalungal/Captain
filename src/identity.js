@@ -1,0 +1,155 @@
+'use strict';
+
+/**
+ * Identity — who Captain is, and who the user is.
+ *
+ * All of this is deterministic string work: no model, no database,
+ * microseconds. It sits in the router ABOVE the companion, so "what's your
+ * name" is answered in under a millisecond instead of a model round-trip.
+ *
+ * The user's name is remembered by the WIDGET, not the server. The server is
+ * stateless: when a name is captured here, the reply carries
+ * `remember: { userName }`; the widget stores it in memory for the page's
+ * lifetime and sends it back inside `context.userName` on every message.
+ * Nothing is written to disk or localStorage, matching the widget's
+ * no-storage design.
+ */
+
+const CAPTAIN_NAME = 'Captain Nav';
+
+// --- what is YOUR name / who are you ---------------------------------------
+
+const CAPTAIN_NAME_RE = new RegExp(
+  "\\b(?:what(?:'?s| is| was)? (?:your|ur|thy) name|who are (?:you|u)\\b"
+  + '|what are you called|do you have a name|what should i call you'
+  + '|tell me your name|your name\\s*[?]|may i know your name'
+  + '|who am i (?:talking|speaking|chatting) (?:to|with))', 'i');
+
+// --- what is MY name --------------------------------------------------------
+
+const MY_NAME_RE = /\b(?:what(?:'?s| is) my name|do you (?:know|remember) (?:my|the) name|say my name|remember me|who am i)\s*[?.!]*\s*$/i;
+
+// --- "my name is X" ----------------------------------------------------------
+
+const NAME_STMT_RE = /^\s*(?:hi|hello|hey|yo)?[,!.\s]*(?:my name(?:'?s| is)|i am|i'?m|call me|you can call me|you may call me|this is|name'?s|the name is|it'?s)\s+([A-Za-z][A-Za-z'\u2019.-]{0,29}(?:\s+[A-Za-z][A-Za-z'\u2019.-]{0,29}){0,2})\s*(?:here|speaking)?\s*[.!?]*\s*$/i;
+
+/**
+ * Words that follow "i'm ..." far more often than a name does. If the first
+ * captured word is one of these, the sentence is a state of mind, not an
+ * introduction — it falls through to the companion, which handles "i'm tired"
+ * far better than a nametag would.
+ */
+const NOT_A_NAME = new Set([
+  'fine', 'good', 'great', 'ok', 'okay', 'well', 'tired', 'bored', 'busy',
+  'sorry', 'sure', 'not', 'so', 'very', 'here', 'back', 'done', 'confused',
+  'lost', 'hungry', 'happy', 'sad', 'angry', 'new', 'just', 'still', 'also',
+  'curious', 'ready', 'looking', 'trying', 'asking', 'wondering', 'thinking',
+  'testing', 'going', 'doing', 'working', 'interested', 'glad', 'stuck',
+  'a', 'an', 'the', 'all', 'always', 'never', 'really', 'kind', 'kinda',
+  'afraid', 'unsure', 'having', 'getting', 'checking', 'waiting', 'unable',
+  'no', 'yes', 'yeah', 'nope', 'none', 'nothing', 'nobody', 'anonymous',
+  // time and metric vocabulary — a data question must never read as a name
+  'yesterday', 'today', 'tomorrow', 'week', 'month', 'year', 'quarter',
+  'power', 'fuel', 'speed', 'distance', 'consumption', 'shaft', 'rpm',
+  'help', 'hello', 'hi', 'hey', 'thanks', 'thank', 'captain',
+]);
+
+const DECLINE_RE = /^\s*(?:no(?:pe)?|nah|rather not|i'?d rather not|prefer not|none of your business|why|skip|never ?mind|doesn'?t matter|not telling|secret|guess|na)\b/i;
+
+function titleCase(name) {
+  return String(name).trim().replace(/\s+/g, ' ')
+    .split(' ')
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+/** A plausible personal name captured from a statement, or null. */
+function extractName(text) {
+  const m = String(text || '').match(NAME_STMT_RE);
+  if (!m) return null;
+  const candidate = m[1].trim();
+  const first = candidate.split(/\s+/)[0].toLowerCase().replace(/[^a-z]/g, '');
+  if (!first || NOT_A_NAME.has(first)) return null;
+  if (candidate.split(/\s+/).some((w) => NOT_A_NAME.has(w.toLowerCase().replace(/[^a-z]/g, '')))) return null;
+  return titleCase(candidate);
+}
+
+/**
+ * The previous turn asked "What's your name?" (pending { kind: 'name' }), and
+ * this message is the reply. A bare "Nav" or "Priya Sharma" is accepted; a
+ * decline is respected without nagging; anything else falls through (null)
+ * and is routed as a normal message — the user is allowed to ignore the
+ * question and just ask about fuel.
+ */
+function resolveNameReply(text, ctx = {}) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+
+  if (DECLINE_RE.test(raw)) {
+    return { text: 'No trouble at all. What can I do for you?', kind: 'name_declined' };
+  }
+
+  // A full "my name is X" works here too.
+  const stated = extractName(raw);
+  if (stated) return greetByName(stated, ctx);
+
+  // Bare name: one to three words, letters only, nothing that reads as a
+  // question or a request.
+  if (/[?]/.test(raw) || raw.length > 40) return null;
+  const words = raw.replace(/[.!,]+$/, '').split(/\s+/);
+  if (words.length > 2) return null;
+  if (!words.every((w) => /^[A-Za-z][A-Za-z'\u2019.-]*$/.test(w))) return null;
+  if (words.some((w) => NOT_A_NAME.has(w.toLowerCase().replace(/[^a-z]/g, '')))) return null;
+  return greetByName(titleCase(words.join(' ')), ctx);
+}
+
+function greetByName(name, ctx = {}) {
+  const vessel = ctx.vesselName ? ` I see you're on the ${ctx.vesselName} page — ask away and I'll default to her.` : '';
+  return {
+    text: `Pleasure to meet you, ${name}. I'll remember that while we talk.${vessel} What can I look up for you?`,
+    kind: 'name_captured',
+    remember: { userName: name },
+  };
+}
+
+/**
+ * Answer an identity message, or return null if this isn't one.
+ *
+ * @param {string} text
+ * @param {object} ctx  { userName, vesselName }
+ * @returns {{ text, kind, remember?, pending? } | null}
+ */
+function answerIdentity(text, ctx = {}) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+
+  if (CAPTAIN_NAME_RE.test(raw)) {
+    if (ctx.userName) {
+      return {
+        text: `I'm ${CAPTAIN_NAME} — your assistant for the fleet's records and the app. And you're ${ctx.userName}, if I have it right.`,
+        kind: 'captain_name',
+      };
+    }
+    return {
+      text: `I'm ${CAPTAIN_NAME} — your assistant for the fleet's records and the app. What's your name?`,
+      kind: 'captain_name',
+      pending: { kind: 'name' },
+    };
+  }
+
+  if (MY_NAME_RE.test(raw)) {
+    if (ctx.userName) return { text: `You're ${ctx.userName}. I haven't forgotten.`, kind: 'my_name' };
+    return {
+      text: "You haven't told me yet. What's your name?",
+      kind: 'my_name',
+      pending: { kind: 'name' },
+    };
+  }
+
+  const stated = extractName(raw);
+  if (stated) return greetByName(stated, ctx);
+
+  return null;
+}
+
+module.exports = { answerIdentity, resolveNameReply, extractName, titleCase, CAPTAIN_NAME };

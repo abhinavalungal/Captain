@@ -126,15 +126,19 @@ function systemPrompt(opts) {
     ? '\n\nCurrent date and time: ' + opts.nowLabel + '. Use this for anything about today, dates, deadlines or elapsed time. Never say you do not know the date or time. You do not have live news or prices; if asked about current events, say your knowledge may be out of date rather than guessing.'
     : '';
 
+  const userLine = opts.userName
+    ? '\n\nThe user\'s name is ' + opts.userName + '. Address them by name occasionally and naturally \u2014 not in every reply.'
+    : '';
+
   return think
-    + 'You are Captain, the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. You are a capable general assistant with the manner of an experienced, trustworthy ship\'s captain: warm, direct, precise.\n\n'
+    + 'You are Captain Nav, the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is Captain Nav; if asked, say so. You are a capable general assistant with the manner of an experienced, trustworthy ship\'s captain: warm, direct, precise.\n\n'
     + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), arithmetic and unit conversions, comparing numbers the user gives you, writing help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. Match the depth to the question: one line for a quick fact, a short structured answer for something that needs it. Show working for calculations.\n\n'
     + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data.\n\n'
     + 'Charts: when a chart would genuinely help and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
     + 'CHART {"type":"bar","title":"...","labels":["A","B"],"values":[1,2],"unit":""}\n'
     + '(type is "bar" or "line"; 2 to 24 points). Do not add a chart to answers that don\'t need one.\n\n'
     + (opts.light ? 'This is a short question: answer it directly in one or two sentences. Do not pad, do not add caveats, do not restate the question.\n\n' : '')
-    + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + nowLine + guideBlock + ctx;
+    + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + nowLine + userLine + guideBlock + ctx;
 }
 
 function readEnv(env) {
@@ -154,6 +158,10 @@ function readEnv(env) {
     // model if unset, so this is optional configuration, not required.
     fastModel: env.CAPTAIN_LLM_FAST_MODEL || null,
     fastTimeoutMs: parseInt(env.CAPTAIN_LLM_FAST_TIMEOUT_MS || String(DEFAULTS.fastTimeoutMs), 10),
+    // Ollama unloads a model after ~5 idle minutes by default; the NEXT message
+    // then waits 20-60s while it reloads from disk. Keeping it resident is the
+    // single biggest latency fix for a self-hosted setup.
+    keepAlive: env.CAPTAIN_LLM_KEEP_ALIVE || '30m',
   };
 }
 
@@ -187,6 +195,7 @@ function buildRequest(cfg, system, messages, light) {
       model: (light && cfg.fastModel) ? cfg.fastModel : cfg.model,
       messages: [{ role: 'system', content: system }].concat(messages),
       stream: false,
+      keep_alive: cfg.keepAlive,
       options: { temperature: DEFAULTS.temperature, num_predict: light ? DEFAULTS.fastMaxTokens : DEFAULTS.maxTokens },
     },
     extract: function (data) {
@@ -214,7 +223,7 @@ async function converse(text, opts) {
     .concat([{ role: 'user', content: String(text || '').slice(0, 1000) }]);
 
   const light = !!opts.light;
-  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff, light: light, nowLabel: opts.nowLabel });
+  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff, light: light, nowLabel: opts.nowLabel, userName: opts.userName || null });
   const req = buildRequest(cfg, system, messages, light);
   // No tools field in either request shape. That is the structural guarantee.
 

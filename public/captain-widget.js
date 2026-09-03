@@ -443,7 +443,7 @@
     endpoint: SCRIPT_ORIGIN + '/api/captain',
     getToken: null,
     ask: null,
-    title: 'Captain',
+    title: 'Captain Nav',
     subtitle: 'Your guide to the fleet and the app',
     greeting: 'Ask about a vessel, the app, or just say hello.',
     examples: [
@@ -470,6 +470,10 @@
     this.pending = null;
     this.history = [];
     this.context = null;
+    // Who Captain Nav is talking to. Lives in memory only (no storage, by
+    // design); the server sends it back via `remember` when a name is given,
+    // and it rides along in context.userName on every later message.
+    this.profile = { userName: null };
     this.busy = false;
     this.open = false;
     this.inline = false;
@@ -571,12 +575,12 @@
     var ta = el('textarea');
     ta.rows = 1;
     ta.placeholder = 'Ask about your vessel\u2026';
-    ta.setAttribute('aria-label', 'Ask Captain about your vessel data');
+    ta.setAttribute('aria-label', 'Ask Captain Nav about your vessel data');
     var send = el('button', null, 'Ask');
     send.type = 'submit';
     form.appendChild(ta); form.appendChild(send);
     composer.appendChild(form);
-    composer.appendChild(el('p', 'foot', 'Captain reads your vessel data. It cannot change it.'));
+    composer.appendChild(el('p', 'foot', 'Captain Nav reads your vessel data. He cannot change it.'));
     this.input = ta;
     this.sendBtn = send;
 
@@ -754,6 +758,7 @@
    * real mood via moodFor(); this only governs the waiting expression, so it
    * can never contradict what Captain ends up saying.
    */
+  var CURIOUS_RE = /\b(random|weird|strange|odd|funny|joke|riddle|guess|imagine|hypothetical(?:ly)?|trivia|fun fact)\b/i;
   var COMPLIMENT_RE = /\b(good (job|bot|work)|well done|nice job|(?:you'?re|you are) (so |really )?(smart|great|awesome|amazing|helpful|the best|brilliant)|love (you|this bot)|amazing (job|work)|impressive|brilliant work|you rock)\b/i;
   var POSITIVE_RE = /\b(perfect|exactly|that'?s it|awesome|great|nice one|excellent|fantastic|love it|woohoo)\b/i;
   var SORRY_TRIGGER_RE = /\b(that'?s wrong|you'?re wrong|incorrect|not right|that'?s not right|wrong answer|mistake|error in that)\b/i;
@@ -769,6 +774,7 @@
     if (COMPLIMENT_RE.test(t)) return 'shy';
     if (SURPRISE_RE.test(t)) return 'surprised';
     if (POSITIVE_RE.test(t)) return 'excited';
+    if (CURIOUS_RE.test(t)) return 'curious';
     if (this.isFatigued()) return 'tired';
     return 'thinking';
   };
@@ -810,7 +816,8 @@
     // and grounds the model in the user's present.
     var context = Object.assign({}, this.context || {}, {
       tz: (function () { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (_) { return null; } })(),
-      locale: (typeof navigator !== 'undefined' && navigator.language) || null
+      locale: (typeof navigator !== 'undefined' && navigator.language) || null,
+      userName: this.profile.userName || null
     });
     if (typeof this.opts.ask === 'function') return Promise.resolve(this.opts.ask(text, pending, history, context));
 
@@ -869,11 +876,17 @@
       // Conversational turns build history for continuity; data lookups and
       // clarifications do not — there is nothing about a fuel figure the
       // companion needs to remember for small talk later.
-      if (data.source === 'companion' || data.source === 'guide') {
-        self.history.push({ role: 'user', text: body });
+      // Captain Nav asked for, or was told, the user's name.
+      if (data.remember && data.remember.userName) self.profile.userName = String(data.remember.userName).slice(0, 60);
+      // Every USER turn goes into history: that is what lets the server turn
+      // "and last week?" into the previous question over a new period.
+      // Assistant turns are kept only for conversational sources, so the
+      // companion's context stays conversation, not figures.
+      self.history.push({ role: 'user', text: body });
+      if (data.source === 'companion' || data.source === 'guide' || data.source === 'identity') {
         self.history.push({ role: 'assistant', text: data.text });
-        self.history = self.history.slice(-6);
       }
+      self.history = self.history.slice(-8);
       // A real, successful answer still yields to visible tiredness after a
       // burst of rapid-fire questions — the content itself is unaffected,
       // only the expression that accompanies it.
@@ -899,7 +912,7 @@
   // answer is still correct, it just means a spinner did or didn't flash.
   var SMALL_TALK_RE = /^\s*(hi|hey|hello|hiya|yo|sup|thanks?|thank you|thx|ty|ok|okay|cheers|bye|goodbye|good (morning|afternoon|evening|night)|how are you|how's it going|what's up|yes|yep|no|nope|cool|great|nice|lol|haha)[\s!.?,]*$/i;
 
-  var INSTANT_RE = /\b(what(?:'s| is)(?: the| today'?s)? (?:date|time|year|day)|what (?:day|time) is it|days? until|from now|divided by|times|plus|minus|% of)\b|^[\d\s+\-*/^().,]+$/i;
+  var INSTANT_RE = /\b(what(?:'s| is)(?: the| today'?s)? (?:date|time|year|day)|what (?:day|time) is it|days? until|from now|divided by|times|plus|minus|% of|your name|who are you|what should i call you|my name is|call me|what'?s my name|convert \d)\b|^[\d\s+\-*/^().,]+$/i;
 
   function waitLabelFor(text) {
     if (/\b(brief|anything i should know|status)\b/i.test(text)) return 'Checking your fleet';
@@ -910,6 +923,7 @@
 
   function moodFor(data) {
     if (data.status === 'clarify' || data.status === 'confirm') return 'asking';
+    if (data.pending && data.pending.kind === 'name') return 'asking';
     if (data.status === 'unsupported' || data.status === 'error' || data.status === 'denied') return 'blocked';
     if (data.empty || data.status === 'no_scope' || data.status === 'unparsed') return 'nothing';
     return 'answered';
@@ -976,6 +990,7 @@
     if (data.stats) card.appendChild(renderStats(data));
     if (data.metrics) card.appendChild(renderCatalogue(data));
 
+    if (data.interpreted) card.appendChild(el('p', 'subject', 'Read as: \u201c' + data.interpreted + '\u201d'));
     if (data.footnote) card.appendChild(el('p', 'subject', data.footnote));
     if (data.note) card.appendChild(el('div', 'caution', data.note));
     if (data.truncated) card.appendChild(el('div', 'caution hard', 'Only the first ' + data.rows.length + ' readings are shown. Narrow the period to see the rest.'));

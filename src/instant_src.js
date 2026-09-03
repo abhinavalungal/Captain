@@ -153,6 +153,107 @@ function tryArithmetic(text) {
   return { text: `${label} = ${out}`, kind: 'arithmetic', value };
 }
 
+// --- unit conversion ---------------------------------------------------------------
+//
+// Exact, table-driven conversions for the units this domain actually uses:
+// speed, distance, mass, power, volume, energy and temperature. No model —
+// a model rounds; these factors are exact (or the defined standard value).
+
+const UNIT_DEFS = [
+  // speed — base m/s
+  { key: 'kn', dim: 'speed', factor: 0.5144444444444445, label: 'knots', sym: 'kn', names: ['kn', 'kt', 'kts', 'knot', 'knots'] },
+  { key: 'kmh', dim: 'speed', factor: 1 / 3.6, label: 'km/h', names: ['km/h', 'kmh', 'kph', 'kmph', 'kilometers per hour', 'kilometres per hour'] },
+  { key: 'mph', dim: 'speed', factor: 0.44704, label: 'mph', names: ['mph', 'miles per hour'] },
+  { key: 'ms', dim: 'speed', factor: 1, label: 'm/s', names: ['m/s', 'mps', 'meters per second', 'metres per second'] },
+  // distance — base metres
+  { key: 'nm', dim: 'distance', factor: 1852, label: 'nautical miles', sym: 'nm', names: ['nm', 'nmi', 'nautical mile', 'nautical miles'] },
+  { key: 'km', dim: 'distance', factor: 1000, label: 'km', names: ['km', 'kilometer', 'kilometers', 'kilometre', 'kilometres'] },
+  { key: 'mi', dim: 'distance', factor: 1609.344, label: 'miles', sym: 'mile', names: ['mi', 'mile', 'miles', 'statute miles'] },
+  { key: 'ft', dim: 'distance', factor: 0.3048, label: 'ft', names: ['ft', 'foot', 'feet'] },
+  { key: 'm', dim: 'distance', factor: 1, label: 'm', names: ['m', 'meter', 'meters', 'metre', 'metres'] },
+  // mass — base kg. "t"/"ton" is read as the metric tonne, the unit of this trade.
+  { key: 'mt', dim: 'mass', factor: 1000, label: 'MT', names: ['mt', 't', 'tonne', 'tonnes', 'metric ton', 'metric tons', 'metric tonne', 'metric tonnes', 'ton', 'tons'] },
+  { key: 'kg', dim: 'mass', factor: 1, label: 'kg', names: ['kg', 'kilo', 'kilos', 'kilogram', 'kilograms'] },
+  { key: 'lb', dim: 'mass', factor: 0.45359237, label: 'lb', names: ['lb', 'lbs', 'pound', 'pounds'] },
+  { key: 'g', dim: 'mass', factor: 0.001, label: 'g', names: ['g', 'gram', 'grams'] },
+  // power — base W
+  { key: 'mw', dim: 'power', factor: 1e6, label: 'MW', names: ['mw', 'megawatt', 'megawatts'] },
+  { key: 'kw', dim: 'power', factor: 1000, label: 'kW', names: ['kw', 'kilowatt', 'kilowatts'] },
+  { key: 'hp', dim: 'power', factor: 745.699872, label: 'hp', names: ['hp', 'horsepower', 'bhp'] },
+  { key: 'w', dim: 'power', factor: 1, label: 'W', names: ['w', 'watt', 'watts'] },
+  // volume — base litres
+  { key: 'm3', dim: 'volume', factor: 1000, label: 'm³', names: ['m3', 'cbm', 'cubic meter', 'cubic meters', 'cubic metre', 'cubic metres'] },
+  { key: 'gal', dim: 'volume', factor: 3.785411784, label: 'US gal', names: ['gal', 'gallon', 'gallons', 'us gal', 'us gallon', 'us gallons'] },
+  { key: 'l', dim: 'volume', factor: 1, label: 'L', names: ['l', 'litre', 'litres', 'liter', 'liters'] },
+  // energy — base J
+  { key: 'gj', dim: 'energy', factor: 1e9, label: 'GJ', names: ['gj', 'gigajoule', 'gigajoules'] },
+  { key: 'mj', dim: 'energy', factor: 1e6, label: 'MJ', names: ['mj', 'megajoule', 'megajoules'] },
+  { key: 'kwh', dim: 'energy', factor: 3.6e6, label: 'kWh', names: ['kwh', 'kilowatt hour', 'kilowatt hours', 'kilowatt-hour', 'kilowatt-hours'] },
+  { key: 'j', dim: 'energy', factor: 1, label: 'J', names: ['j', 'joule', 'joules'] },
+  // temperature — handled by formula, factor unused
+  { key: 'c', dim: 'temp', factor: 1, label: '°C', names: ['c', '°c', 'celsius', 'centigrade', 'degrees c', 'degrees celsius'] },
+  { key: 'f', dim: 'temp', factor: 1, label: '°F', names: ['f', '°f', 'fahrenheit', 'degrees f', 'degrees fahrenheit'] },
+  { key: 'k', dim: 'temp', factor: 1, label: 'K', names: ['k', 'kelvin'] },
+];
+
+const UNIT_BY_NAME = (() => {
+  const map = new Map();
+  for (const u of UNIT_DEFS) for (const n of u.names) map.set(n, u);
+  return map;
+})();
+// Longest names first, so "nautical miles" beats "mi", "km/h" beats "k".
+const UNIT_NAME_ALT = Array.from(UNIT_BY_NAME.keys())
+  .sort((a, b) => b.length - a.length)
+  .map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
+  .join('|');
+
+const CONVERT_STRIP_RE = /^(?:please\s+)?(?:convert|what(?:'s| is)|how (?:much|many|far|fast) is|change|turn)\s*/i;
+const CONVERT_RE = new RegExp(
+  '^(-?\\d[\\d,]*(?:\\.\\d+)?)\\s*(?:degrees\\s+)?(' + UNIT_NAME_ALT + ')\\s+(?:to|into|in|as|equals?|->|=)\\s+(?:degrees\\s+)?(' + UNIT_NAME_ALT + ')\\s*[?.!]*$', 'i');
+
+function toCelsius(v, key) {
+  if (key === 'c') return v;
+  if (key === 'f') return (v - 32) * 5 / 9;
+  return v - 273.15; // kelvin
+}
+function fromCelsius(v, key) {
+  if (key === 'c') return v;
+  if (key === 'f') return v * 9 / 5 + 32;
+  return v + 273.15;
+}
+
+/**
+ * "10 knots in km/h", "convert 8400 nm to km", "500 mt to lbs", "25 c to f".
+ * The whole message (minus a lead-in like "convert" or "what is") must be the
+ * conversion phrase, so a data question that merely mentions a unit —
+ * "fuel consumption in mt last week" — can never be claimed by this path.
+ */
+function tryConversion(text) {
+  const cleaned = String(text || '').trim().replace(CONVERT_STRIP_RE, '').trim();
+  const m = cleaned.match(CONVERT_RE);
+  if (!m) return null;
+  const value = parseFloat(m[1].replace(/,/g, ''));
+  const from = UNIT_BY_NAME.get(m[2].toLowerCase());
+  const to = UNIT_BY_NAME.get(m[3].toLowerCase());
+  if (!from || !to || !Number.isFinite(value)) return null;
+  if (from.key === to.key) {
+    return { text: `${formatNumber(value)} ${from.label} is already in ${to.label}.`, kind: 'conversion', value };
+  }
+  if (from.dim !== to.dim) {
+    return {
+      text: `I can't convert ${from.label} to ${to.label} — one measures ${from.dim === 'temp' ? 'temperature' : from.dim}, the other ${to.dim === 'temp' ? 'temperature' : to.dim}.`,
+      kind: 'conversion',
+    };
+  }
+  let out;
+  if (from.dim === 'temp') out = fromCelsius(toCelsius(value, from.key), to.key);
+  else out = (value * from.factor) / to.factor;
+  const shown = formatNumber(parseFloat(out.toPrecision(10)));
+  if (shown == null) return null;
+  const factorNote = from.dim === 'temp' ? '' : ` (1 ${from.sym || from.label} = ${formatNumber(parseFloat((from.factor / to.factor).toPrecision(6)))} ${to.sym || to.label})`;
+  return { text: `${formatNumber(value)} ${from.label} = ${shown} ${to.label}${factorNote}`, kind: 'conversion', value: out };
+}
+
 // --- main -------------------------------------------------------------------------
 
 /**
@@ -209,10 +310,13 @@ function answerInstant(text, ctx = {}) {
     return { text: `${n} ${unit}${n === 1 ? '' : 's'} from today is ${weekday}, ${dates.humanDate(target)}.`, kind: 'date' };
   }
 
+  const conv = tryConversion(raw);
+  if (conv) return conv;
+
   const arith = tryArithmetic(raw);
   if (arith) return arith;
 
   return null;
 }
 
-module.exports = { answerInstant, formatNow, tryArithmetic, evaluate, validTz };
+module.exports = { answerInstant, formatNow, tryArithmetic, tryConversion, evaluate, validTz };
