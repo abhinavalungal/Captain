@@ -263,8 +263,32 @@ function formatAnswer(shape, rows, plan, metric, provenance) {
     })).filter((x) => x.rowsUsed > 0);
     if (!named.length) return noData(plan, metric, provenance);
     const word = AGG_WORD[plan.aggregation] || 'Value';
-    const parts = named.map((x) => `${x.vessel} ${withUnit(x.value, metric)} (${x.rowsUsed} report${x.rowsUsed === 1 ? '' : 's'})`);
     const missing = provenance.vessels.filter((n) => !named.some((x) => x.vessel === n));
+
+    // Ranking: lead with the answer (a vessel), then the ordered list.
+    if (plan.ranking) {
+      const desc = plan.ranking.order !== 'asc';
+      const ranked = named.filter((x) => x.value != null).sort((a, b) => desc ? b.value - a.value : a.value - b.value);
+      if (!ranked.length) return noData(plan, metric, provenance);
+      const top = ranked.slice(0, plan.ranking.limit || 5);
+      const superlative = desc ? 'highest' : 'lowest';
+      const lead = `${ranked[0].vessel} has the ${superlative} ${word.toLowerCase()} ${metric.label.toLowerCase()} ${provenance.period}: ${withUnit(ranked[0].value, metric)}.`;
+      const rest = top.slice(1).map((x, i) => `${i + 2}. ${x.vessel} ${withUnit(x.value, metric)}`).join('; ');
+      const coverage = ranked.length < provenance.vessels.length
+        ? ` Ranked across ${ranked.length} of ${provenance.vessels.length} vessels; ${missing.length ? missing.length + ' had no records in that period.' : ''}`
+        : ` Ranked across all ${ranked.length} vessels.`;
+      return {
+        text: lead + (rest ? ` Then: ${rest}.` : '') + coverage.replace(/\s+$/, ''),
+        unit: metric.unit,
+        rowsUsed: named.reduce((a, x) => a + x.rowsUsed, 0),
+        byVessel: top,
+        ranking: { order: desc ? 'desc' : 'asc', shown: top.length, of: ranked.length },
+        chart: { type: 'bar', title: `${word} ${metric.label.toLowerCase()} by vessel — ${provenance.period}`, labels: top.map((x) => x.vessel), values: top.map((x) => x.value), unit: metric.unit, decimals: metric.decimals },
+        note: assumptionNote(plan, metric, named.reduce((a, x) => a + x.rowsUsed, 0)),
+      };
+    }
+
+    const parts = named.map((x) => `${x.vessel} ${withUnit(x.value, metric)} (${x.rowsUsed} report${x.rowsUsed === 1 ? '' : 's'})`);
     return {
       text: `${word} ${metric.label.toLowerCase()}, ${provenance.period}: ${parts.join('; ')}.` + (missing.length ? ` No records for ${missing.join(', ')} in that period.` : ''),
       unit: metric.unit,

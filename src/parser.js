@@ -284,6 +284,7 @@ function parse(text, ctx = {}) {
   // --- comparison: two ranges ----------------------------------------------
   let aggregation = detectAggregation(effLower);
   const byVessel = !!resolvedVessels.byVessel && vesselIds.length > 1;
+  const ranking = resolvedVessels.ranking || null;
 
   // "compare A and B last month" is a vessel comparison over ONE period, not a
   // comparison of two periods — so with several vessels named, 'compare' means
@@ -410,9 +411,15 @@ function parse(text, ctx = {}) {
   if (byVessel && aggregation !== 'trend' && aggregation !== 'summary') {
     // One figure per vessel over the same period. Sum for quantities, average
     // for rates, unless the user asked for min/max/count explicitly.
-    const perVesselAgg = ['min', 'max', 'count', 'avg', 'sum'].includes(aggregation)
+    // In a ranking, "highest"/"lowest" describe the ORDER, not how each vessel's
+    // figure is built: each vessel gets its natural aggregate (total for a
+    // quantity, average for a rate) unless "average"/"total" is said outright.
+    const rankAgg = ranking
+      ? (/\b(average|avg|mean)\b/.test(effLower) ? 'avg' : /\b(total|sum)\b/.test(effLower) ? 'sum' : (metric.kind === 'quantity' ? 'sum' : 'avg'))
+      : null;
+    const perVesselAgg = rankAgg || (['min', 'max', 'count', 'avg', 'sum'].includes(aggregation)
       ? aggregation
-      : (metric.kind === 'quantity' ? 'sum' : 'avg');
+      : (metric.kind === 'quantity' ? 'sum' : 'avg'));
     return {
       status: 'plan',
       plan: {
@@ -422,6 +429,7 @@ function parse(text, ctx = {}) {
         range,
         aggregation: perVesselAgg,
         aggregationWasAssumed: !['min', 'max', 'count', 'avg', 'sum'].includes(aggregation),
+        ranking,
         originalText: raw,
       },
     };
@@ -443,6 +451,25 @@ function parse(text, ctx = {}) {
 }
 
 /**
+ * Ranking questions: "which vessel has the highest X", "top 5 vessels by X",
+ * "lowest fuel consumption vessel", "rank the fleet by X", "best/worst vessel".
+ * The answer is a VESSEL (or an ordered list), not a figure - so the question
+ * is fleet-wide by nature even though no vessel is named. Returns
+ * { order: 'desc'|'asc', limit } or null.
+ */
+const RANK_HIGH_RE = /\b(highest|most|largest|biggest|greatest|maximum|max|top|best|leading|leader)\b/;
+const RANK_LOW_RE = /\b(lowest|least|smallest|minimum|min|bottom|worst|fewest)\b/;
+const RANK_SUBJECT_RE = /\b(which|what|who|whose)\s+(vessel|ship|one|of (?:my|our|the) (?:vessels|ships|fleet))\b|\b(top|bottom|first|last)\s+(\d{1,2})\b|\brank(?:ing)?\b|\bleaderboard\b|\b(vessels?|ships?)\s+(?:with|having)\s+the\s+(highest|lowest|most|least)\b|\b(highest|lowest|most|least|best|worst)\s+[a-z ]{0,30}\s+(vessel|ship)\b/;
+function detectRanking(lower) {
+  if (!RANK_SUBJECT_RE.test(lower)) return null;
+  const low = RANK_LOW_RE.test(lower);
+  const high = RANK_HIGH_RE.test(lower);
+  if (!low && !high && !/\brank|leaderboard\b/.test(lower)) return null;
+  const n = lower.match(/\b(?:top|bottom|first|last)\s+(\d{1,2})\b/);
+  return { order: low && !high ? 'asc' : 'desc', limit: n ? Math.max(1, Math.min(25, parseInt(n[1], 10))) : 5 };
+}
+
+/**
  * Decide which vessels a question is about, using only vessels already inside
  * the caller's scope. Returns { vesselIds } or { clarify }.
  */
@@ -452,6 +479,13 @@ function resolveVesselIds(text, lower, vessels, pending, extra = {}) {
   if (!vesselIds) {
     const mentioned = detectVesselMention(text, vessels);
     const fleetWide = /\b(fleet|all vessels|all ships|every vessel|whole fleet|across the fleet)\b/.test(lower);
+
+    const ranking = detectRanking(lower);
+    if (ranking && mentioned.length <= 1) {
+      // "Which vessel has the highest X" - the whole scope, one figure each,
+      // regardless of which page the user is on or whether a name appears.
+      return { vesselIds: vessels.map((v) => v.id), byVessel: true, ranking: ranking };
+    }
 
     if (mentioned.length === 1) {
       vesselIds = [mentioned[0].id];
@@ -486,9 +520,11 @@ function resolveVesselIds(text, lower, vessels, pending, extra = {}) {
         clarify: {
           status: 'clarify',
           reason: 'missing_vessel',
-          question: 'Which vessel?',
-          options: vessels.slice(0, 25).map((v) => ({ value: v.id, label: v.name }))
-            .concat(vessels.length <= 25 ? [{ value: '__all__', label: 'All my vessels' }] : []),
+          question: vessels.length > 8
+            ? `Which vessel? You have ${vessels.length} - type the name, or say "all vessels" for the whole fleet.`
+            : 'Which vessel?',
+          options: vessels.slice(0, 8).map((v) => ({ value: v.id, label: v.name }))
+            .concat([{ value: '__all__', label: 'All my vessels' }]),
           pending: { originalText: extra.raw, field: 'vesselIds', metricKey: extra.metricKey },
         },
       };

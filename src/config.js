@@ -146,7 +146,7 @@ const METRICS = [
   { key: 'eu_scope', label: 'EU scope share', unit: '%', source: 'veson_legs', column: 'eu_scope_pct', kind: 'rate', decimals: 1,
     aliases: ['eu scope', 'eu share', 'scope', 'fueleu scope', 'eu coverage'] },
   { key: 'compliance_balance', label: 'FuelEU compliance balance', unit: 'gCO2e', source: 'veson_legs', column: 'compliance_balance', kind: 'quantity', decimals: 0,
-    aliases: ['compliance balance', 'fueleu balance', 'balance', 'surplus', 'deficit', 'compliance surplus', 'compliance deficit'] },
+    aliases: ['veson compliance balance', 'leg compliance balance', 'fueleu balance', 'surplus', 'deficit', 'compliance surplus', 'compliance deficit'] },
   { key: 'legs', label: 'Voyage legs', unit: 'legs', source: 'veson_legs', column: 'leg_date', kind: 'quantity', decimals: 0, countOnly: true,
     aliases: ['legs', 'voyage legs', 'number of legs', 'how many legs', 'leg count'] },
 
@@ -201,6 +201,8 @@ const METRIC_GROUPS = [
   // Three tables carry a compliance balance. "CB" alone is ambiguous between
   // them, so Captain asks which one rather than picking.
   { term: 'cb', metrics: ['gross_cb', 'dnv_compliance_balance', 'compliance_balance'] },
+  { term: 'compliance balance', metrics: ['gross_cb', 'dnv_compliance_balance', 'compliance_balance'] },
+  { term: 'balance', metrics: ['gross_cb', 'dnv_compliance_balance', 'compliance_balance'] },
   { term: 'penalty', metrics: ['fueleu_penalty', 'dnv_compliance_balance'] },
 ];
 
