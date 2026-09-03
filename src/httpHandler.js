@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/captain (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const CAPTAIN_BUILD = '2026-09-04.3';
+const CAPTAIN_BUILD = '2026-09-04.4';
 const router = require('./router');
 const { LIMITS, METRICS, SOURCES } = require('./config');
 const { readEnv: llmConfig } = require('./companion_src');
@@ -282,17 +282,23 @@ async function handleCaptain(req) {
   // needs vessel records at all; only then does it call getDb(). A greeting or
   // an app question is answered even when Postgres is down or not configured.
   let client = null;
+  let lastDbError = null;           // so the reply can name the cause even if router.js is older
   const getDb = async function () {
     if (client) return client;
-    const p = pools(env);           // throws DB_NOT_CONFIGURED if no URL
     try {
+      const p = pools(env);         // throws DB_NOT_CONFIGURED if no URL
       client = await p.readPool.connect();
     } catch (err) {
-      console.error('captain: database connect failed', err);
-      const d = classifyDbError(err);
-      err.captainCode = d.code;     // router surfaces these; they never carry secrets
-      err.captainHint = d.hint;
-      throw err;                    // router turns this into a plain answer
+      if (!(err && err.code === 'DB_NOT_CONFIGURED')) {
+        console.error('captain: database connect failed', err);
+        const d = classifyDbError(err);
+        const e = (err && typeof err === 'object') ? err : new Error(String(err));
+        e.captainCode = d.code;     // never carries secrets
+        e.captainHint = d.hint;
+        lastDbError = e;
+        throw e;                    // router turns this into a plain answer
+      }
+      throw err;
     }
     return client;
   };
@@ -340,6 +346,18 @@ async function handleCaptain(req) {
     }
     if (out.status === 'error') {
       out.build = CAPTAIN_BUILD;
+      // Belt and braces: if the router did not attach the cause (older
+      // router.js), attach it here from the connection error we saw.
+      if (!out.code && lastDbError && /^db_/.test(out.reason || '')) {
+        out.code = lastDbError.captainCode;
+        out.detail = lastDbError.captainHint;
+      }
+      // A mixed deploy (new handler, old router) is the failure mode a copy /
+      // paste pipeline produces. Say so on the card instead of hiding it.
+      const rb = router.ROUTER_BUILD || 'pre-2026-09-04';
+      if (rb !== CAPTAIN_BUILD) {
+        out.detail = (out.detail ? out.detail + ' | ' : '') + 'FILES OUT OF SYNC: router.js is build ' + rb + ', httpHandler.js is ' + CAPTAIN_BUILD + ' - redeploy every file from the same delivery.';
+      }
       if (!diagnosticsOn(env)) { delete out.detail; delete out.code; }
     }
     // A database problem is reported as 503 so monitoring can see it, but only

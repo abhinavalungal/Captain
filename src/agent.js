@@ -43,6 +43,8 @@ const { containsStatedFigure } = require('./companion_src');
 const { formatNow } = require('./instant_src');
 const { METRICS } = require('./config');
 
+const AGENT_BUILD = '2026-09-04.4';
+
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
   timeoutMs: 45000,     // whole message budget, all steps together
@@ -563,4 +565,4 @@ function finish(text, visuals, cfg, trace, input, fleet) {
   return answer;
 }
 
-module.exports = { run, systemPrompt, toolDefs, readEnv, parseArgs, summariseData, fleetNames, DEFAULTS };
+module.exports = { run, systemPrompt, toolDefs, readEnv, parseArgs, summariseData, fleetNames, DEFAULTS, AGENT_BUILD };
