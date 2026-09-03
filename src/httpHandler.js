@@ -187,7 +187,9 @@ async function handleCaptain(req) {
         context: payload.context && typeof payload.context === 'object'
           ? { vesselId: payload.context.vesselId != null ? String(payload.context.vesselId).slice(0, 40) : null,
               vesselName: payload.context.vesselName != null ? String(payload.context.vesselName).slice(0, 80) : null,
-              page: payload.context.page != null ? String(payload.context.page).slice(0, 80) : null }
+              page: payload.context.page != null ? String(payload.context.page).slice(0, 80) : null,
+              tz: payload.context.tz != null ? String(payload.context.tz).slice(0, 64) : null,
+              locale: payload.context.locale != null ? String(payload.context.locale).slice(0, 16) : null }
           : null,
       },
       getDb,

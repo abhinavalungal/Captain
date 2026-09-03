@@ -805,7 +805,13 @@
 
   // --- transport ------------------------------------------------------------
   Widget.prototype.transport = function (text, pending, history) {
-    var context = this.context;
+    // The browser knows the user's time zone; the server does not. Sending it
+    // lets "what's the date" and "what time is it" be answered in local time,
+    // and grounds the model in the user's present.
+    var context = Object.assign({}, this.context || {}, {
+      tz: (function () { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (_) { return null; } })(),
+      locale: (typeof navigator !== 'undefined' && navigator.language) || null
+    });
     if (typeof this.opts.ask === 'function') return Promise.resolve(this.opts.ask(text, pending, history, context));
 
     var headers = { 'Content-Type': 'application/json' };
@@ -847,7 +853,11 @@
     this.turnCount++;
     this.setMood(reactiveMood);
 
-    var slot = this.showWaiting();
+    // The label should match the work actually being done: a greeting is not a
+    // database read. Small talk is answered locally in microseconds, so its
+    // spinner would flash for a single frame — we skip it entirely.
+    var localSmallTalk = (SMALL_TALK_RE.test(body) && body.length <= 30) || INSTANT_RE.test(body);
+    var slot = localSmallTalk ? this.addTurn('captain') : this.showWaiting(waitLabelFor(body));
     var carried = this.pending;
     var historySnapshot = this.history.slice(-6);
     this.pending = null;
@@ -884,6 +894,20 @@
     });
   };
 
+  // Mirrors the server's small-talk set closely enough to decide whether to
+  // show a spinner at all. Cosmetic only — if it disagrees with the server the
+  // answer is still correct, it just means a spinner did or didn't flash.
+  var SMALL_TALK_RE = /^\s*(hi|hey|hello|hiya|yo|sup|thanks?|thank you|thx|ty|ok|okay|cheers|bye|goodbye|good (morning|afternoon|evening|night)|how are you|how's it going|what's up|yes|yep|no|nope|cool|great|nice|lol|haha)[\s!.?,]*$/i;
+
+  var INSTANT_RE = /\b(what(?:'s| is)(?: the| today'?s)? (?:date|time|year|day)|what (?:day|time) is it|days? until|from now|divided by|times|plus|minus|% of)\b|^[\d\s+\-*/^().,]+$/i;
+
+  function waitLabelFor(text) {
+    if (/\b(brief|anything i should know|status)\b/i.test(text)) return 'Checking your fleet';
+    if (/\b(how do i|where is|how can i)\b/i.test(text)) return 'Looking that up';
+    if (SMALL_TALK_RE.test(text) || INSTANT_RE.test(text)) return 'One moment';
+    return 'Reading the records';
+  }
+
   function moodFor(data) {
     if (data.status === 'clarify' || data.status === 'confirm') return 'asking';
     if (data.status === 'unsupported' || data.status === 'error' || data.status === 'denied') return 'blocked';
@@ -906,11 +930,11 @@
     this.scrollDown();
   };
 
-  Widget.prototype.showWaiting = function () {
+  Widget.prototype.showWaiting = function (label) {
     var t = this.addTurn('captain');
     var w = el('div', 'waiting');
     w.appendChild(el('i')); w.appendChild(el('i')); w.appendChild(el('i'));
-    w.appendChild(el('span', null, 'Reading the records'));
+    w.appendChild(el('span', null, label || 'Reading the records'));
     t.appendChild(w);
     this.scrollDown();
     return t;

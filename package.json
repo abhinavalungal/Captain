@@ -5,8 +5,8 @@
   "description": "Vessel-data assistant with a deterministic core (never fabricates a figure) and an optional LLM layer for app navigation and conversation, with no database access.",
   "main": "server.js",
   "scripts": {
-    "test": "node test/run.js && node test/integrations.js && node test/companion.js && node test/functions.js && node test/server.js && node test/widget.js",
-    "test:offline": "node test/functions.js && node test/server.js && CAPTAIN_TEST_URL= node test/run.js && CAPTAIN_TEST_URL= node test/integrations.js && CAPTAIN_TEST_URL= node test/companion.js",
+    "test": "node test/run.js && node test/instant.js && node test/integrations.js && node test/companion.js && node test/functions.js && node test/server.js && node test/widget.js",
+    "test:offline": "node test/instant.js && node test/functions.js && node test/server.js && CAPTAIN_TEST_URL= node test/run.js && CAPTAIN_TEST_URL= node test/integrations.js && CAPTAIN_TEST_URL= node test/companion.js",
     "discover": "node scripts/discover.js",
     "sync": "node scripts/sync.js",
     "start": "node server.js"

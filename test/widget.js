@@ -50,7 +50,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let next = null;
   const asked = [];
-  const transport = async (text, pending) => { asked.push({ text, pending }); return next; };
+  const transport = async (text, pending, history, context) => { asked.push({ text, pending, history, context }); return next; };
   window.Captain.init({ ask: transport });
   await wait(20);
 
@@ -322,10 +322,11 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     q('textarea').value = 'shaft power on 15 August 2026';
     q('form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
     await wait(30);
-    t('context is sent with every request', () => {
+    t('context is sent with every request, including the browser time zone', () => {
       const last = asked[asked.length - 1];
-      // the stub transport receives (text, pending, history, context)
       if (!last.text) throw new Error('no request');
+      if (!last.context || !('tz' in last.context)) throw new Error('time zone not sent: ' + JSON.stringify(last.context));
+      if (last.context.vesselId !== '9851701') throw new Error('page context lost when merging tz: ' + JSON.stringify(last.context));
     });
     window.Captain.clearContext();
   }

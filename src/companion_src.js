@@ -29,12 +29,16 @@
  */
 
 const DEFAULTS = {
-  provider: 'openai_compat',
-  url: 'https://openrouter.ai/api',
-  model: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+  provider: 'ollama',
+  url: 'http://127.0.0.1:11434',
+  model: 'llama3.1:8b',
   timeoutMs: 25000,
   maxTokens: 700,
   temperature: 0.4,
+  // Light messages get a small, fast model, a tight token budget and a short
+  // timeout — a quick question should never wait on a frontier model.
+  fastTimeoutMs: 8000,
+  fastMaxTokens: 220,
 };
 
 /**
@@ -118,6 +122,9 @@ function systemPrompt(opts) {
     ? '\n\nThe user is currently viewing the vessel "' + opts.context.vesselName + '" in the app. You may refer to it by name, but you have no data about it.'
     : '';
   const think = opts.reasoningOff ? '/no_think\n\n' : '';
+  const nowLine = opts.nowLabel
+    ? '\n\nCurrent date and time: ' + opts.nowLabel + '. Use this for anything about today, dates, deadlines or elapsed time. Never say you do not know the date or time. You do not have live news or prices; if asked about current events, say your knowledge may be out of date rather than guessing.'
+    : '';
 
   return think
     + 'You are Captain, the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. You are a capable general assistant with the manner of an experienced, trustworthy ship\'s captain: warm, direct, precise.\n\n'
@@ -126,7 +133,8 @@ function systemPrompt(opts) {
     + 'Charts: when a chart would genuinely help and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
     + 'CHART {"type":"bar","title":"...","labels":["A","B"],"values":[1,2],"unit":""}\n'
     + '(type is "bar" or "line"; 2 to 24 points). Do not add a chart to answers that don\'t need one.\n\n'
-    + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + guideBlock + ctx;
+    + (opts.light ? 'This is a short question: answer it directly in one or two sentences. Do not pad, do not add caveats, do not restate the question.\n\n' : '')
+    + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + nowLine + guideBlock + ctx;
 }
 
 function readEnv(env) {
@@ -142,18 +150,22 @@ function readEnv(env) {
     // time for conversation and app help, so it is off by default. Set
     // CAPTAIN_LLM_REASONING=on to keep it.
     reasoningOff: (env.CAPTAIN_LLM_REASONING || 'off').toLowerCase() !== 'on',
+    // A second, smaller model for short questions. Falls back to the main
+    // model if unset, so this is optional configuration, not required.
+    fastModel: env.CAPTAIN_LLM_FAST_MODEL || null,
+    fastTimeoutMs: parseInt(env.CAPTAIN_LLM_FAST_TIMEOUT_MS || String(DEFAULTS.fastTimeoutMs), 10),
   };
 }
 
-function buildRequest(cfg, system, messages) {
+function buildRequest(cfg, system, messages, light) {
   if (cfg.provider === 'openai_compat') {
     return {
       url: cfg.url + '/v1/chat/completions',
       headers: Object.assign({ 'Content-Type': 'application/json' }, cfg.apiKey ? { Authorization: 'Bearer ' + cfg.apiKey } : {}),
       body: Object.assign({
-        model: cfg.model,
+        model: (light && cfg.fastModel) ? cfg.fastModel : cfg.model,
         messages: [{ role: 'system', content: system }].concat(messages),
-        max_tokens: DEFAULTS.maxTokens,
+        max_tokens: light ? DEFAULTS.fastMaxTokens : DEFAULTS.maxTokens,
         temperature: DEFAULTS.temperature,
         stream: false,
       },
@@ -172,10 +184,10 @@ function buildRequest(cfg, system, messages) {
     url: cfg.url + '/api/chat',
     headers: { 'Content-Type': 'application/json' },
     body: {
-      model: cfg.model,
+      model: (light && cfg.fastModel) ? cfg.fastModel : cfg.model,
       messages: [{ role: 'system', content: system }].concat(messages),
       stream: false,
-      options: { temperature: DEFAULTS.temperature, num_predict: DEFAULTS.maxTokens },
+      options: { temperature: DEFAULTS.temperature, num_predict: light ? DEFAULTS.fastMaxTokens : DEFAULTS.maxTokens },
     },
     extract: function (data) {
       return data && data.message && typeof data.message.content === 'string' ? data.message.content : '';
@@ -201,19 +213,23 @@ async function converse(text, opts) {
     .map(function (h) { return { role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.text || '').slice(0, 500) }; })
     .concat([{ role: 'user', content: String(text || '').slice(0, 1000) }]);
 
-  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff });
-  const req = buildRequest(cfg, system, messages);
+  const light = !!opts.light;
+  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff, light: light, nowLabel: opts.nowLabel });
+  const req = buildRequest(cfg, system, messages, light);
   // No tools field in either request shape. That is the structural guarantee.
 
+  // A light message gets a short leash: better a fast honest fallback than a
+  // user staring at a spinner.
+  const budgetMs = light ? cfg.fastTimeoutMs : cfg.timeoutMs;
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, cfg.timeoutMs) : null;
+  const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, budgetMs) : null;
 
   let res;
   try {
     res = await fetchImpl(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: ctrl ? ctrl.signal : undefined });
   } catch (e) {
     if (timer) clearTimeout(timer);
-    return { text: UNAVAILABLE, blocked: false, error: e.name === 'AbortError' ? 'timed out after ' + cfg.timeoutMs + 'ms' : e.message, provider: cfg.provider, model: cfg.model };
+    return { text: UNAVAILABLE, blocked: false, error: e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message, provider: cfg.provider, model: cfg.model };
   }
   if (timer) clearTimeout(timer);
 

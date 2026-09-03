@@ -11,6 +11,7 @@
  *
  * Precedence, in order:
  *
+ *   0. instant facts (no DB, no model): date, time, arithmetic
  *   1. classify (no DB)
  *        help          -> the metric list, from config
  *        data / teach  -> engine.ask()        (needs DB; unchanged, deterministic)
@@ -33,6 +34,7 @@ const terms = require('./terms');
 const { matchGuide, searchGuide } = require('./guide');
 const { isBriefingRequest, buildBriefing } = require('./alerts');
 const { converse } = require('./companion');
+const { answerInstant, formatNow } = require('./instant');
 const { METRICS } = require('./config');
 
 const DB_NOT_CONFIGURED = 'My database connection is not configured yet, so I cannot read vessel records. I can still help with the app, or just chat.';
@@ -73,6 +75,13 @@ async function route(input, db, opts) {
     });
   }
 
+  // --- 0. instant facts: date, time, arithmetic — exact, local, microseconds ------
+  // The server has a clock and exact arithmetic; a language model has neither.
+  // These never go to a model or the database.
+  const tz = input.context && input.context.tz ? String(input.context.tz) : null;
+  const instant = answerInstant(text, { now: input.now, tz: tz });
+  if (instant) return { status: 'answer', source: 'instant', kind: instant.kind, text: instant.text, instant: true };
+
   // --- 1. classify without the database ---------------------------------------
   let kind = parser.classify(text, [], input.now);
 
@@ -99,13 +108,16 @@ async function route(input, db, opts) {
     });
   }
 
-  // --- 2. small talk (no database) ----------------------------------------------------
-  // A greeting or thank-you goes straight to conversation: the companion when a
-  // model is configured, a fixed friendly line when it isn't. It never goes to
-  // the guide (where the word "captain" would match the help entry) and never
-  // triggers the learned-term lookup.
+  // --- 2. small talk: answered locally, in microseconds -------------------------------
+  // A greeting, thanks or goodbye is answered from a fixed set of replies and
+  // NEVER sent to a model. Routing "hi" through a frontier reasoning model
+  // costs tens of seconds and buys nothing, so it does not happen. Set
+  // CAPTAIN_SMALLTALK_MODEL=1 if you would rather a model handle these.
+  if (isSmallTalk(text) && env.CAPTAIN_SMALLTALK_MODEL !== '1') {
+    return { status: 'answer', source: 'router', text: smallTalkReply(text), instant: true };
+  }
   if (isSmallTalk(text)) {
-    if (env.CAPTAIN_ENABLE_LLM === '0') return { status: 'answer', source: 'router', text: smallTalkReply(text) };
+    if (env.CAPTAIN_ENABLE_LLM === '0') return { status: 'answer', source: 'router', text: smallTalkReply(text), instant: true };
     return companionReply(text, input, opts, env);
   }
 
@@ -143,10 +155,29 @@ async function route(input, db, opts) {
   return companionReply(text, input, opts, env);
 }
 
+/**
+ * Short, simple messages go to the fast model; substantial ones to the strong
+ * model. A frontier reasoning model is the right tool for "explain FuelEU
+ * pooling" and the wrong tool for "what does CII stand for" — the difference
+ * is tens of seconds.
+ */
+const HEAVY_RE = /\b(explain|why|how does|how do|compare|analyse|analyze|calculate|work out|difference between|pros and cons|walk me through|step by step|write|draft|summar)/i;
+
+function isLightMessage(text) {
+  const t = String(text || '').trim();
+  if (t.length > 140) return false;              // long question, treat as substantial
+  if (/\n/.test(t)) return false;                 // multi-line, likely detailed
+  if (HEAVY_RE.test(t)) return false;             // asks for reasoning or composition
+  return t.split(/\s+/).length <= 14;
+}
+
 async function companionReply(text, input, opts, env) {
   const guideSnippets = searchGuide(text, 3).map(function (g) { return { title: g.title, answer: g.answer }; });
+  const tz = input.context && input.context.tz ? String(input.context.tz) : null;
   const convo = await converse(text, {
     env: env,
+    light: isLightMessage(text),
+    nowLabel: formatNow(input.now ? new Date(input.now) : new Date(), tz).label,
     guideSnippets: guideSnippets,
     history: input.history,
     context: input.context && input.context.vesselName ? { vesselName: String(input.context.vesselName).slice(0, 80) } : null,
@@ -214,12 +245,47 @@ function isSmallTalk(text) {
   return words.every(function (w) { return SMALL_TALK.has(w) || w.length <= 2; });
 }
 
+// A few variants per intent so repeated greetings don't feel like a recording.
+// Fixed text, so nothing here can be invented or wrong.
+const SMALL_TALK_REPLIES = {
+  thanks: [
+    "You're welcome. Ask whenever you need a figure from the records.",
+    'Any time. I\'m here when you need the numbers.',
+    'Glad to help.',
+  ],
+  bye: [
+    'Fair winds. I\'m here when you need me.',
+    'Safe watch. Come find me any time.',
+  ],
+  howareyou: [
+    'All well on the bridge, thanks. What can I get you?',
+    'Steady as she goes. What do you need?',
+  ],
+  affirm: [
+    'Right you are. What next?',
+    'Understood.',
+  ],
+  greet: [
+    'Hello. Ask me about a vessel, the app, or anything else you need.',
+    'Good to see you. What can I look up?',
+    'Morning. What do you need from the records?',
+  ],
+};
+
+function pick(list, seed) {
+  return list[Math.abs(seed) % list.length];
+}
+
 function smallTalkReply(text) {
   const t = String(text).toLowerCase();
-  if (/thank|thx|\bty\b|cheers/.test(t)) return "You're welcome. Ask whenever you need a figure from the records.";
-  if (/bye|goodbye|night/.test(t)) return 'Fair winds. I\'m here when you need me.';
-  if (/how are you|how.?s it going|doing/.test(t)) return 'All well on the bridge. Ask me about a vessel, or how to find something in the app.';
-  return 'Hello. I can answer questions about your vessels from the records, help you find your way around the app, or give you a briefing \u2014 just ask.';
+  // Seeded from the message so the same input is stable within a session but
+  // different greetings vary.
+  const seed = t.length * 31 + (t.charCodeAt(0) || 0) + Date.now() / 60000 | 0;
+  if (/thank|thx|\bty\b|cheers|appreciate/.test(t)) return pick(SMALL_TALK_REPLIES.thanks, seed);
+  if (/\bbye\b|goodbye|good night|\bnight\b|see you|later/.test(t)) return pick(SMALL_TALK_REPLIES.bye, seed);
+  if (/how are you|how.?s it going|how are things|you doing|what.?s up|sup\b/.test(t)) return pick(SMALL_TALK_REPLIES.howareyou, seed);
+  if (/^\s*(ok|okay|yes|yep|yeah|no|nope|cool|great|nice|sure|got it|alright)\b/.test(t)) return pick(SMALL_TALK_REPLIES.affirm, seed);
+  return pick(SMALL_TALK_REPLIES.greet, seed);
 }
 
 function examplePrompts() {
@@ -234,4 +300,4 @@ function tagSource(result, source) {
 /** Exposed so the learned-term cache can be cleared when vocabulary changes or in tests. */
 function clearLearnedCache() { learnedCache.clear(); }
 
-module.exports = { route: route, clearLearnedCache: clearLearnedCache };
+module.exports = { route: route, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage };
