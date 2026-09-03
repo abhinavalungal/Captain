@@ -38,7 +38,7 @@ const { answerInstant, formatNow } = require('./instant_src');
 const identity = require('./identity');
 const agent = require('./agent');
 
-const ROUTER_BUILD = '2026-09-04.5';
+const ROUTER_BUILD = '2026-09-04.6';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 

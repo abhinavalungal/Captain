@@ -4,7 +4,28 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/captain (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const CAPTAIN_BUILD = '2026-09-04.5';
+const CAPTAIN_BUILD = '2026-09-04.6';
+
+// Fingerprint every source file so /api/captain shows exactly what is
+// deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
+// means that file did not land intact.
+function fileFingerprints() {
+  const fs = require('fs'); const path = require('path'); const crypto = require('crypto');
+  const out = {};
+  const root = path.join(__dirname, '..');
+  const targets = [];
+  try { fs.readdirSync(__dirname).filter((f) => f.endsWith('.js')).forEach((f) => targets.push(['src/' + f, path.join(__dirname, f)])); } catch (_) { /* ignore */ }
+  targets.push(['public/captain-widget.js', path.join(root, 'public', 'captain-widget.js')]);
+  for (const [label, file] of targets) {
+    try {
+      const buf = fs.readFileSync(file);
+      // Normalise line endings so CRLF/LF copies of the same file agree.
+      const norm = buf.toString('utf8').replace(/\r\n/g, '\n');
+      out[label] = crypto.createHash('sha256').update(norm).digest('hex').slice(0, 10) + ' (' + norm.length + ' chars)';
+    } catch (_) { out[label] = 'MISSING'; }
+  }
+  return out;
+}
 
 // Last few server-side errors, kept in memory (this process only). Exposed in
 // the health JSON ONLY in prototype auth mode (CAPTAIN_DEV_SESSION=1), which is
@@ -80,12 +101,9 @@ function classifyDbError(err) {
   if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') {
     return { code: 'DB_NO_ROUTE', hint: 'No network route to the database. db.<ref>.supabase.co is IPv6-only; use the pooler host aws-0-<region>.pooler.supabase.com instead.' };
   }
-  if (/unsupported startup parameter/i.test(msg)) {
-
-    return { code: 'DB_POOLER_PARAM', hint: 'The pooler rejected a startup parameter. This build no longer sends one; if you still see this, use the session pooler (port 5432).' };
-
-  }
-
+  if (/unsupported startup parameter/i.test(msg)) {
+    return { code: 'DB_POOLER_PARAM', hint: 'The pooler rejected a startup parameter. This build no longer sends one; if you still see this, use the session pooler (port 5432).' };
+  }
   if (code === 'ETIMEDOUT' || /connection (terminated due to connection )?timeout|timed out/i.test(msg)) {
     return { code: 'DB_TIMEOUT', hint: 'The connection attempt timed out. Usually an IPv6-only host reached from an IPv4 network, or a firewall - use the pooler connection string.' };
   }
@@ -275,6 +293,7 @@ function health(env) {
     diagnostics: diagnosticsOn(env),
     node: process.version,
     recentErrors: env.CAPTAIN_DEV_SESSION === '1' ? RECENT_ERRORS : undefined,
+    files: env.CAPTAIN_DEV_SESSION === '1' ? fileFingerprints() : undefined,
   };
 }
 
