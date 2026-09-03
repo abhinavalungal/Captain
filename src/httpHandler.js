@@ -209,7 +209,7 @@ async function handleCaptain(req) {
     return reply(status, out);
   } catch (err) {
     console.error('captain: query failed', err);
-    return reply(500, { status: 'error', text: 'Something went wrong reading the vessel data. Nothing was changed.' });
+    return reply(500, { status: 'error', text: 'Something went wrong on my side. Nothing was changed \u2014 please try again in a moment.' });
   } finally {
     if (client) client.release();
   }

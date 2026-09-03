@@ -261,6 +261,71 @@ function tryConversion(text) {
  * @param {object} ctx  { now, tz }
  * @returns {{ text, kind } | null}
  */
+// --- comparing plain numbers -------------------------------------------------
+// "Which is bigger, 2 or 19?"  "Visualize a comparison of 3, 7 and 5."
+// Exact, local, and never claims a data question: after removing the numbers
+// and comparison/filler vocabulary, NOTHING may be left over. "Compare fuel
+// consumption 2024 vs 2025" leaves "fuel consumption" and falls through to
+// the metric parser, exactly as before.
+
+const COMPARE_CUE_RE = /\b(compare|comparison|bigger|biggest|larger|largest|greater|greatest|smaller|smallest|higher|highest|lower|lowest|max|maximum|min|minimum)\b/i;
+const CHART_CUE_RE = /\b(visuali[sz]e|visuali[sz]ation|chart|graph|plot|draw|comparison)\b/i;
+const SMALLER_CUE_RE = /\b(smaller|smallest|lower|lowest|less|least|min|minimum)\b/i;
+
+const COMPARE_FILLER = new Set([
+  'can', 'could', 'you', 'u', 'please', 'pls', 'me', 'my', 'a', 'an', 'the', 'of', 'is', 'are', 'was',
+  'which', 'what', 'whats', 'wat', 'one', 'number', 'numbers', 'value', 'values', 'figure', 'figures',
+  'out', 'these', 'those', 'this', 'that', 'two', 'three', 'following', 'and', 'or', 'vs', 'versus',
+  'between', 'than', 'tell', 'show', 'give', 'visualize', 'visualise', 'visualization', 'visualisation',
+  'chart', 'graph', 'plot', 'draw', 'as', 'in', 'a', 'bar', 'it', 'to', 'for',
+  'compare', 'comparison', 'bigger', 'biggest', 'larger', 'largest', 'greater', 'greatest',
+  'smaller', 'smallest', 'higher', 'highest', 'lower', 'lowest', 'less', 'least',
+  'big', 'small', 'large', 'max', 'maximum', 'min', 'minimum', 'so', 'hey', 'hi', 'hello',
+]);
+
+function fmtNum(n) {
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 1e6) / 1e6);
+}
+
+function tryCompare(raw) {
+  const lower = String(raw).toLowerCase();
+  if (!COMPARE_CUE_RE.test(lower)) return null;
+
+  const numTokens = lower.match(/-?\d+(?:\.\d+)?/g);
+  if (!numTokens || numTokens.length < 2 || numTokens.length > 12) return null;
+  const nums = numTokens.map(Number);
+
+  // Leftover guard: every remaining word must be comparison vocabulary.
+  const scrubbedWords = lower
+    .replace(/-?\d+(?:\.\d+)?/g, ' ')
+    .replace(/[^a-z\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w && !COMPARE_FILLER.has(w));
+  if (scrubbedWords.length) return null;
+
+  const wantSmall = SMALLER_CUE_RE.test(lower);
+  const max = Math.max.apply(null, nums);
+  const min = Math.min.apply(null, nums);
+
+  let text;
+  if (max === min) {
+    text = `They're equal — all ${fmtNum(max)}.`;
+  } else if (nums.length === 2) {
+    const diff = fmtNum(Math.abs(nums[0] - nums[1]));
+    text = wantSmall
+      ? `${fmtNum(min)} is smaller than ${fmtNum(max)} — by ${diff}.`
+      : `${fmtNum(max)} is bigger than ${fmtNum(min)} — by ${diff}.`;
+  } else {
+    text = `Largest is ${fmtNum(max)}, smallest is ${fmtNum(min)}. In order: ${nums.slice().sort((a, b) => a - b).map(fmtNum).join(', ')}.`;
+  }
+
+  const out = { text: text, kind: 'compare' };
+  if (CHART_CUE_RE.test(lower)) {
+    out.chart = { type: 'bar', labels: nums.map(fmtNum), values: nums };
+  }
+  return out;
+}
+
 function answerInstant(text, ctx = {}) {
   const raw = String(text || '').trim();
   if (!raw) return null;
@@ -313,10 +378,13 @@ function answerInstant(text, ctx = {}) {
   const conv = tryConversion(raw);
   if (conv) return conv;
 
+  const cmp = tryCompare(raw);
+  if (cmp) return cmp;
+
   const arith = tryArithmetic(raw);
   if (arith) return arith;
 
   return null;
 }
 
-module.exports = { answerInstant, formatNow, tryArithmetic, tryConversion, evaluate, validTz };
+module.exports = { answerInstant, formatNow, tryArithmetic, tryConversion, tryCompare, evaluate, validTz };

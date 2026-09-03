@@ -444,7 +444,7 @@
     getToken: null,
     ask: null,
     title: 'Captain Nav',
-    subtitle: 'Your guide to the fleet and the app',
+    subtitle: '',                              // header stays clean; set a string to show a tagline
     greeting: 'Ask about a vessel, the app, or just say hello.',
     examples: [
       'What was the S.P. yesterday?',
@@ -526,7 +526,7 @@
     this.headFace.setAttribute('data-mood', 'idle');
     var titles = el('div', 'titles');
     titles.appendChild(el('h2', null, this.opts.title));
-    titles.appendChild(el('p', null, this.opts.subtitle));
+    if (this.opts.subtitle) titles.appendChild(el('p', null, this.opts.subtitle));
     var ctxPill = el('span', 'ctx');
     titles.appendChild(ctxPill);
     this.ctxPill = ctxPill;
@@ -896,7 +896,7 @@
       if (typeof self.opts.onAnswer === 'function') self.opts.onAnswer(data);
     }, function () {
       slot.innerHTML = '';
-      slot.appendChild(self.renderAnswer({ status: 'error', text: 'I could not reach the vessel data just now. Nothing was changed. Try again in a moment.' }));
+      slot.appendChild(self.renderAnswer({ status: 'error', text: 'I could not get an answer just now. Nothing was changed \u2014 try again in a moment.' }));
       self.setMood('blocked');
     }).then(function () {
       self.busy = false;
@@ -912,7 +912,7 @@
   // answer is still correct, it just means a spinner did or didn't flash.
   var SMALL_TALK_RE = /^\s*(hi|hey|hello|hiya|yo|sup|thanks?|thank you|thx|ty|ok|okay|cheers|bye|goodbye|good (morning|afternoon|evening|night)|how are you|how's it going|what's up|yes|yep|no|nope|cool|great|nice|lol|haha)[\s!.?,]*$/i;
 
-  var INSTANT_RE = /\b(what(?:'s| is)(?: the| today'?s)? (?:date|time|year|day)|what (?:day|time) is it|days? until|from now|divided by|times|plus|minus|% of|your name|who are you|what should i call you|my name is|call me|what'?s my name|convert \d)\b|^[\d\s+\-*/^().,]+$/i;
+  var INSTANT_RE = /\b(what(?:'s| is)(?: the| today'?s)? (?:date|time|year|day)|what (?:day|time) is it|days? until|from now|divided by|times|plus|minus|% of|your name|who are you|what should i call you|my name is|call me|what'?s my name|convert \d|which (?:number |one )?is (?:bigger|larger|smaller|greater)|compare \d|what (?:can |could )?(?:you|u) (?:can )?do)\b|^[\d\s+\-*/^().,]+$/i;
 
   function waitLabelFor(text) {
     if (/\b(brief|anything i should know|status)\b/i.test(text)) return 'Checking your fleet';

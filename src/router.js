@@ -99,7 +99,7 @@ async function route(input, db, opts) {
   // These never go to a model or the database.
   const tz = input.context && input.context.tz ? String(input.context.tz) : null;
   const instant = answerInstant(text, { now: input.now, tz: tz });
-  if (instant) return { status: 'answer', source: 'instant', kind: instant.kind, text: instant.text, instant: true };
+  if (instant) return { status: 'answer', source: 'instant', kind: instant.kind, text: instant.text, chart: instant.chart || undefined, instant: true };
 
   // --- 0.5 identity: names, in both directions — exact, local, no model ---------
   // "What's your name" / "my name is Nav" / "what's my name". Captured names
@@ -128,6 +128,15 @@ async function route(input, db, opts) {
 
   if (kind === 'data' || kind === 'teach') {
     return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
+  }
+
+  // --- 1.2 capability, malformed variants --------------------------------------
+  // The exact phrases "help" / "what can you do" were claimed above and get the
+  // metric list. Everything a human actually types around them - "what you can
+  // do", "wat can u do", "how can you help me" - lands here: a fixed local
+  // answer instead of a model round-trip (or, previously, a fall-through).
+  if (identity.CAPABILITY_RE.test(text)) {
+    return { status: 'answer', source: 'guide', instant: true, text: identity.capabilityAnswer(), guide: { id: 'what-is-captain', title: 'What Captain Nav can do' } };
   }
 
   if (isBriefingRequest(text)) {

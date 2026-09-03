@@ -221,6 +221,56 @@ t('convert: reachable through answerInstant with question phrasing', () => {
     assert.deepStrictEqual(b.pending, { kind: 'name' });
   });
 
+  // --- intent robustness: the screenshot cases -------------------------------
+  // Every one of these previously fell through to the model (and in the
+  // deployment, to a 500). All must be answered locally: NO_DB throws if the
+  // database is touched, NO_MODEL throws if the model is called.
+  await ta('typo "whats you name >?" is identity, never the model', async () => {
+    const r = await route('whats you name >?');
+    assert.strictEqual(r.source, 'identity');
+    assert.ok(/Captain Nav/.test(r.text));
+  });
+  await ta('"wat is ur name" and "who r u??" are identity', async () => {
+    for (const q of ['wat is ur name', 'who r u??']) {
+      const r = await route(q);
+      assert.strictEqual(r.source, 'identity', q + ' -> ' + r.source);
+    }
+  });
+  await ta('"what you can do ?" gets the capability answer locally, instant', async () => {
+    const r = await route('what you can do ?');
+    assert.strictEqual(r.source, 'guide');
+    assert.strictEqual(r.instant, true);
+    assert.ok(/Captain Nav/.test(r.text));
+  });
+  await ta('"what can you do" still returns the metric list (help), unchanged', async () => {
+    const r = await route('what can you do');
+    assert.strictEqual(r.status, 'help');
+    assert.ok(Array.isArray(r.metrics) && r.metrics.length);
+  });
+  await ta('number comparison with visualization is instant and carries a bar chart', async () => {
+    const r = await route('Can you visualize a comparison of which number is bigger, 2 or 19?');
+    assert.strictEqual(r.source, 'instant');
+    assert.ok(/19 is bigger than 2/.test(r.text), r.text);
+    assert.ok(r.chart && r.chart.type === 'bar', 'chart missing');
+    assert.deepStrictEqual(r.chart.values, [2, 19]);
+  });
+  await ta('"which is smaller, 7 or 3?" answered instantly, no chart when none asked', async () => {
+    const r = await route('which is smaller, 7 or 3?');
+    assert.strictEqual(r.source, 'instant');
+    assert.ok(/3 is smaller than 7/.test(r.text), r.text);
+    assert.strictEqual(r.chart, undefined);
+  });
+  t('"compare fuel consumption 2024 vs 2025" is NOT claimed as a number comparison', () => {
+    assert.strictEqual(answerInstant('compare fuel consumption 2024 vs 2025'), null);
+    assert.strictEqual(answerInstant('compare speed of 2 vessels'), null);
+    assert.strictEqual(answerInstant('which vessel is bigger'), null);
+  });
+  t('http: 500 fallback text no longer blames vessel data', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'httpHandler.js'), 'utf8');
+    assert.ok(!/Something went wrong reading the vessel data/.test(src));
+    assert.ok(/Something went wrong on my side/.test(src));
+  });
+
   console.log(`\nCaptain Nav: ${passed} passed, ${fails.length} failed`);
   fails.forEach((f) => console.log('  FAIL ' + f));
   process.exit(fails.length ? 1 : 0);

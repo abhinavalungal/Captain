@@ -19,15 +19,43 @@ const CAPTAIN_NAME = 'Captain Nav';
 
 // --- what is YOUR name / who are you ---------------------------------------
 
+// Matched against a cleaned string (trailing punctuation stripped, spaces
+// collapsed), and deliberately loose about typos: "whats you name", "wats ur
+// name", "who r u" are all someone asking who Captain is, and none of them
+// should ever fall through to a model or, worse, an error.
 const CAPTAIN_NAME_RE = new RegExp(
-  "\\b(?:what(?:'?s| is| was)? (?:your|ur|thy) name|who are (?:you|u)\\b"
-  + '|what are you called|do you have a name|what should i call you'
-  + '|tell me your name|your name\\s*[?]|may i know your name'
-  + '|who am i (?:talking|speaking|chatting) (?:to|with))', 'i');
+  "\\b(?:wh?[ao]t(?:'?s| is| was| are)?|may i know|tell me|say)\\s+(?:your|you|ur|yr|yor|thy)\\s+names?\\b"
+  + "|\\bwho\\s+(?:are|r)\\s+(?:you|u)\\b"
+  + '|\\bwhat are you called\\b|\\bdo you have a name\\b|\\bwhat should i call you\\b'
+  + "|^(?:your|ur) name$"
+  + '|\\bwho am i (?:talking|speaking|chatting) (?:to|with)\\b', 'i');
+
+// --- what can you do (malformed variants) ------------------------------------
+// The exact phrases "help" / "what can you do" are claimed earlier by the
+// parser's help matcher and get the metric list. This catches everything a
+// human actually types around them — "what you can do", "wat can u do",
+// "how can you help me" — which previously fell through to the model.
+const CAPABILITY_RE = new RegExp(
+  "\\b(?:wh?[ao]t|which)\\s+(?:(?:things|stuff|else)\\s+)?(?:can|could|do|does)?\\s*(?:you|u)\\s*(?:can|could)?\\s*(?:do|help(?:\\s+(?:me\\s+)?with)?)\\b"
+  + "|\\bhow (?:can|could|do) (?:you|u) help\\b"
+  + "|\\bwhat (?:are you|r u) (?:able to do|good at|for)\\b"
+  + "|\\bwhat do (?:you|u) (?:know|offer)\\b", 'i');
+
+/** Text answered for capability questions; single source is the guide entry. */
+function capabilityAnswer() {
+  const { GUIDE } = require('./guide');
+  const g = GUIDE.find((e) => e.id === 'what-is-captain');
+  return g ? g.answer : `I'm ${CAPTAIN_NAME}. I answer questions about your vessel data, help with the app, and chat. Ask "help" for the full list of measurements I can read.`;
+}
+
+/** Trailing decoration people type — ">?", "??!", stray punctuation. */
+function scrub(text) {
+  return String(text || '').replace(/[\s>\/\\|~^*_=+.,;:!?-]+$/g, '').replace(/\s+/g, ' ').trim();
+}
 
 // --- what is MY name --------------------------------------------------------
 
-const MY_NAME_RE = /\b(?:what(?:'?s| is) my name|do you (?:know|remember) (?:my|the) name|say my name|remember me|who am i)\s*[?.!]*\s*$/i;
+const MY_NAME_RE = /\b(?:wh?[ao]t(?:'?s| is)? my name|do you (?:know|remember) (?:my|the) name|say my name|remember me|who am i)\s*$/i;
 
 // --- "my name is X" ----------------------------------------------------------
 
@@ -120,7 +148,7 @@ function greetByName(name, ctx = {}) {
  * @returns {{ text, kind, remember?, pending? } | null}
  */
 function answerIdentity(text, ctx = {}) {
-  const raw = String(text || '').trim();
+  const raw = scrub(text);
   if (!raw) return null;
 
   if (CAPTAIN_NAME_RE.test(raw)) {
@@ -152,4 +180,4 @@ function answerIdentity(text, ctx = {}) {
   return null;
 }
 
-module.exports = { answerIdentity, resolveNameReply, extractName, titleCase, CAPTAIN_NAME };
+module.exports = { answerIdentity, resolveNameReply, extractName, titleCase, CAPTAIN_NAME, CAPABILITY_RE, capabilityAnswer };
