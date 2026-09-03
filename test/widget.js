@@ -200,6 +200,41 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   t('comparison renders both periods', () => {
     if (card.querySelectorAll('table.grid tr').length !== 3) throw new Error('rows');
   });
+  t('comparison also draws a two-bar chart with the values printed', () => {
+    const bars = card.querySelectorAll('svg.bars rect.bar');
+    if (bars.length !== 2) throw new Error('bars: ' + bars.length);
+    const vals = [...card.querySelectorAll('svg.bars text.val')].map((t) => t.textContent);
+    if (vals.length !== 2 || !vals.every((v) => /\d/.test(v))) throw new Error('values not printed: ' + vals);
+  });
+
+  R.byVessel = await (async () => {
+    const engine2 = require('../src/engine');
+    const db2 = new Client({ connectionString: process.env.CAPTAIN_TEST_URL }); await db2.connect();
+    const out = await engine2.ask({ text: 'compare fuel consumption for Aurora Trader and Northern Pearl last month', session: { userId: 'u', orgId: 'o', vesselIds: ['9851701', '9234567'] }, now: NOW }, db2, {});
+    await db2.end(); return out;
+  })();
+  card = await send('compare two vessels', 'byVessel');
+  t('a multi-vessel comparison renders a labelled bar per vessel', () => {
+    const bars = card.querySelectorAll('svg.bars rect.bar');
+    if (bars.length !== 2) throw new Error('bars: ' + bars.length);
+    if (!/Aurora Trader/.test(card.querySelector('svg.bars').getAttribute('aria-label'))) throw new Error('chart not labelled');
+    if (card.querySelector('.followups')) throw new Error('no per-metric follow-ups for a multi-vessel answer');
+  });
+
+  R.rich = { status: 'answer', source: 'companion', text: '**22 / 7** is about `3.142857`.\n\n- It repeats every 6 digits\n- Pi itself is 3.14159...\n\nUse it when a rough value is fine.', chart: { type: 'bar', title: '22 vs 7', labels: ['22', '7'], values: [22, 7], unit: '' } };
+  card = await send('divide 22/7', 'rich');
+  t('companion text renders bold, code and bullets as real elements, not raw markdown', () => {
+    if (!card.querySelector('strong')) throw new Error('no <strong>');
+    if (!card.querySelector('code')) throw new Error('no <code>');
+    if (card.querySelectorAll('ul.rich li').length !== 2) throw new Error('bullets');
+    if (/\*\*/.test(card.textContent)) throw new Error('raw ** leaked');
+  });
+  t('a companion chart renders as bars', () => {
+    if (card.querySelectorAll('svg.bars rect.bar').length !== 2) throw new Error('no bars');
+  });
+  t('rich rendering is still XSS-safe', () => {
+    if (card.querySelector('img, script')) throw new Error('markup parsed');
+  });
 
   // --- transport failure ------------------------------------------------------
   {
@@ -338,6 +373,95 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     window.Captain.setTheme('dark');
     if (q('.root').getAttribute('data-theme') !== 'dark') throw new Error('theme not applied');
     window.Captain.setTheme('light');
+  });
+
+  // --- personality: classification, fatigue, mood-driven expressions --------
+  {
+    const inst = window.Captain._instance();
+    const classify = (t) => inst.classifyOutgoing.call({ isFatigued: () => false, _lastNorm: null }, t);
+
+    t('personality: a compliment gets a bashful reaction', () => {
+      if (classify("you're so smart, great job!") !== 'shy') throw new Error('compliment not detected');
+    });
+    t('personality: positive feedback (not about Captain) gets excited, not shy', () => {
+      if (classify('perfect, exactly what I needed') !== 'excited') throw new Error('positive feedback misclassified');
+    });
+    t('personality: pointing out a mistake gets an apologetic reaction', () => {
+      if (classify("that's wrong, try again") !== 'sorry') throw new Error('mistake not detected');
+    });
+    t('personality: shouty or double-punctuated text reads as surprise', () => {
+      if (classify('wait, seriously??') !== 'surprised') throw new Error('surprise not detected');
+    });
+    t('personality: an ordinary question classifies as thinking (no false positive)', () => {
+      if (classify('fuel consumption last month') !== 'thinking') throw new Error('over-triggered: ' + classify('fuel consumption last month'));
+    });
+
+    t('personality: repeating the same question back to back reads as confused', () => {
+      const ctx = { isFatigued: () => false, _lastNorm: null };
+      const first = inst.classifyOutgoing.call(ctx, 'how do I export a report?');
+      const second = inst.classifyOutgoing.call(ctx, 'How do I export a report?!');
+      if (first === 'confused') throw new Error('first ask should not be confused');
+      if (second !== 'confused') throw new Error('repeat not detected: ' + second);
+    });
+
+    t('personality: a burst of rapid questions is detected as fatigue', () => {
+      const now = Date.now();
+      const ctx = { submitTimes: [now - 1000, now - 2000, now - 3000, now - 4000], turnCount: 4 };
+      if (!inst.isFatigued.call(ctx)) throw new Error('4 questions inside a minute should read as fatigued');
+    });
+    t('personality: a long conversation is fatigue even without rapid-fire', () => {
+      if (!inst.isFatigued.call({ submitTimes: [], turnCount: 15 })) throw new Error('15 total turns should read as fatigued');
+    });
+    t('personality: normal pacing is not fatigue', () => {
+      if (inst.isFatigued.call({ submitTimes: [Date.now() - 90000], turnCount: 2 })) throw new Error('one old message should not be fatigue');
+    });
+  }
+
+  {
+    const inst = window.Captain._instance();
+    const seen = [];
+    const origSetMood = inst.setMood.bind(inst);
+    inst.setMood = (m) => { seen.push(m); origSetMood(m); };
+    next = R.scalar;
+    q('textarea').value = 'you are amazing, thank you!';
+    q('form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(30);
+    inst.setMood = origSetMood;
+    t('personality: the waiting expression for a compliment is shy, even though the eventual answer is unrelated data', () => {
+      if (seen[0] !== 'shy') throw new Error('first mood set was ' + seen[0] + ', expected shy — full sequence: ' + JSON.stringify(seen));
+    });
+  }
+
+  t('personality: setMood records the current mood on the instance', () => {
+    const inst = window.Captain._instance();
+    inst.setMood('curious');
+    if (inst.currentMood !== 'curious') throw new Error('currentMood not tracked');
+    if (q('.head svg').getAttribute('data-mood') !== 'curious') throw new Error('head svg not updated');
+    if (q('.badge svg').getAttribute('data-mood') !== 'curious') throw new Error('badge svg not updated');
+  });
+
+  t('personality: every new mood has a real, visible mouth in the markup', () => {
+    for (const mood of ['shy', 'excited', 'tired', 'confused', 'curious', 'surprised', 'sorry']) {
+      const svg = q('.badge svg');
+      svg.setAttribute('data-mood', mood);
+      const visible = [...svg.querySelectorAll('.c-mouth')].filter((m) => window.getComputedStyle(m).display !== 'none');
+      if (visible.length < 1) throw new Error('no mouth visible for mood ' + mood);
+    }
+    svg_reset: { q('.badge svg').setAttribute('data-mood', 'idle'); }
+  });
+
+  t('personality: teardown removes the document-level listeners setupLife added', () => {
+    const inst = window.Captain._instance();
+    const before = { move: !!inst._onMove, vis: !!inst._visHandler, key: !!inst._onKeydown };
+    if (!before.move || !before.vis || !before.key) throw new Error('life listeners were never attached: ' + JSON.stringify(before));
+    const removeSpy = [];
+    const origRemove = doc.removeEventListener.bind(doc);
+    doc.removeEventListener = (type, fn, opts) => { removeSpy.push(type); origRemove(type, fn, opts); };
+    inst.teardown();
+    doc.removeEventListener = origRemove;
+    for (const type of ['mousemove', 'visibilitychange', 'keydown']) {
+      if (!removeSpy.includes(type)) throw new Error('teardown did not remove ' + type + ' listener');
+    }
   });
 
   t('Captain.destroy() removes the widget from the page', () => {

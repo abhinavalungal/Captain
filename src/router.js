@@ -156,6 +156,7 @@ async function companionReply(text, input, opts, env) {
     status: 'answer',
     text: convo.text,
     source: 'companion',
+    chart: convo.chart || undefined,
     blocked: convo.blocked || undefined,
     options: convo.blocked ? examplePrompts() : undefined,
   };

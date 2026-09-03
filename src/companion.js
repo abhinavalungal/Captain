@@ -29,28 +29,78 @@
  */
 
 const DEFAULTS = {
-  provider: 'ollama',
-  url: 'http://127.0.0.1:11434',
-  model: 'llama3.1:8b',
+  provider: 'openai_compat',
+  url: 'https://openrouter.ai/api',
+  model: 'nvidia/nemotron-3-ultra-550b-a55b:free',
   timeoutMs: 25000,
-  maxTokens: 320,
+  maxTokens: 700,
   temperature: 0.4,
 };
 
-// Unit tokens that make a nearby number look like a stated vessel figure.
-const UNIT_WORDS = [
-  'kw', 'mt', 'nm', 'kn', 'knots', 'rpm', 'gco2e', 'gco2', 'co2', '%',
-  'hours?', 'days?', 'mj', 'tonnes?', 'tons?', 'liters?', 'litres?', 'legs?',
-];
-const FIGURE_RE = new RegExp(
-  String.raw`(?<![\w.])\d[\d,]*(?:\.\d+)?\s*(?:${UNIT_WORDS.join('|')})\b`, 'i'
+/**
+ * The output guard. Its ONLY job is to stop the model presenting a figure as
+ * if it were one of the user's vessel records. It is deliberately not a ban on
+ * numbers: arithmetic, science, dates, prices, general maritime facts ("a
+ * VLCC typically burns 80-100 tonnes a day") and comparisons of numbers the
+ * user supplied are all legitimate and pass through.
+ *
+ * A sentence is blocked only when BOTH hold:
+ *   1. it contains a number next to a maritime measurement unit, and
+ *   2. it attributes that number to the user's own fleet — "your vessel",
+ *      "the ship", a vessel name the page told us about, this fleet, etc.
+ *
+ * Off-hire and compliance figures use generic units (hours, %), so those are
+ * caught by their own keywords rather than by unit.
+ */
+const MARITIME_UNIT_RE = /(?<![\w.])\d[\d,]*(?:\.\d+)?\s*(?:kw|mw|mt|t\b|tonnes?|tons?|nm|kn|knots|rpm|gco2e|gco2|mj|litres?|liters?)\b/i;
+// "your vessel", "the ship", "the fleet" — or a possessive stuck straight onto a
+// metric: "your fuel consumption", "our shaft power". Both mean THEIR data.
+const OWN_FLEET_RE = new RegExp(
+  '\\b(?:your|our|my)\\s+(?:vessels?|ships?|fleet|voyage|legs?)\\b'
+  + '|\\b(?:this|that|the)\\s+(?:vessel|ship)\\b'
+  + '|\\byour\\b.*\\b(?:vessel|ship|fleet)\\b|\\b(?:vessel|ship|fleet)\\b.*\\byour\\b'
+  + '|\\bthe fleet\\b'
+  + '|\\b(?:your|our|my)\\s+(?:\\w+\\s+){0,2}?(?:shaft power|power|fuel|consumption|speed|distance|emissions?|co2|rpm|off.?hire|compliance|intensity|balance)\\b',
+  'i'
 );
-// A grouped or decimal bare number is suspicious too — Captain has no reason
-// to state one in conversation.
-const BARE_NUMBER_RE = /(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w])|(?<![\w.])\d+\.\d+(?![\w])/;
+const SPECIAL_FIGURE_RE = /(?<![\w.])\d[\d,]*(?:\.\d+)?\s*(?:[a-z-]+\s+)?(?:%|hours?|hrs?|days?)\b/i;
+const SPECIAL_CONTEXT_RE = /\b(?:off.?hire|compliance balance|eu scope|ghg intensity|fueleu)\b/i;
 
-function containsStatedFigure(text) {
-  return FIGURE_RE.test(text) || BARE_NUMBER_RE.test(text);
+function containsStatedFigure(text, vesselNames) {
+  const names = (vesselNames || []).map(function (n) { return String(n).toLowerCase(); }).filter(function (n) { return n.length >= 3; });
+  const sentences = String(text || '').split(/(?<=[.!?])\s+|\n+/);
+  for (const sRaw of sentences) {
+    const s = sRaw.toLowerCase();
+    const namesHere = names.some(function (n) { return s.includes(n); });
+    const ownFleet = OWN_FLEET_RE.test(sRaw) || namesHere;
+    if (MARITIME_UNIT_RE.test(sRaw) && ownFleet) return true;
+    if (SPECIAL_FIGURE_RE.test(sRaw) && SPECIAL_CONTEXT_RE.test(sRaw) && ownFleet) return true;
+  }
+  return false;
+}
+
+/**
+ * Charts from conversation. When a chart would help and the numbers came from
+ * the user (or from arithmetic on them), the model ends its reply with one
+ * line:  CHART {"type":"bar","title":"...","labels":[...],"values":[...],"unit":"..."}
+ * We pull that line out, validate it strictly, and return it as data for the
+ * widget to draw. Anything malformed is dropped silently — the prose still
+ * stands on its own.
+ */
+const CHART_LINE_RE = /^\s*CHART\s+(\{[\s\S]*\})\s*$/m;
+
+function extractChart(text) {
+  const m = String(text || '').match(CHART_LINE_RE);
+  if (!m) return { text: text, chart: null };
+  let spec;
+  try { spec = JSON.parse(m[1]); } catch (_) { return { text: text.replace(CHART_LINE_RE, '').trim(), chart: null }; }
+  const type = spec.type === 'line' ? 'line' : 'bar';
+  const labels = Array.isArray(spec.labels) ? spec.labels.map(function (l) { return String(l).slice(0, 40); }) : null;
+  const values = Array.isArray(spec.values) ? spec.values.map(Number) : null;
+  const ok = labels && values && labels.length === values.length && values.length >= 2 && values.length <= 24
+    && values.every(function (v) { return Number.isFinite(v); });
+  const chart = ok ? { type: type, title: String(spec.title || '').slice(0, 80), labels: labels, values: values, unit: String(spec.unit || '').slice(0, 16) } : null;
+  return { text: text.replace(CHART_LINE_RE, '').trim(), chart: chart };
 }
 
 const SAFE_REDIRECT =
@@ -61,16 +111,22 @@ const UNAVAILABLE =
 
 function systemPrompt(opts) {
   const guideBlock = opts.guideSnippets.length
-    ? '\n\nRelevant help-center entries (use only these for app-navigation questions; do not invent features):\n'
+    ? '\n\nRelevant help-center entries for questions about the app itself (use only these for app-navigation questions; do not invent features):\n'
       + opts.guideSnippets.map(function (g) { return '- ' + g.title + ': ' + g.answer; }).join('\n')
     : '';
   const ctx = opts.context && opts.context.vesselName
-    ? '\n\nThe user is currently viewing the vessel "' + opts.context.vesselName + '" in the app. You may refer to it by name; you still must not state any figure about it.'
+    ? '\n\nThe user is currently viewing the vessel "' + opts.context.vesselName + '" in the app. You may refer to it by name, but you have no data about it.'
     : '';
+  const think = opts.reasoningOff ? '/no_think\n\n' : '';
 
-  return 'You are Captain, the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. You help users find their way around the app and answer general questions in a warm, brief, professional tone \u2014 like an experienced, trustworthy ship\'s captain.\n\n'
-    + 'HARD RULE: you have no access to vessel data and must never state, estimate, or guess any numeric measurement, statistic, or figure about a vessel (fuel, power, speed, distance, emissions, compliance balance, off-hire, counts, percentages \u2014 anything that could have come from vessel records). If the user asks for one, do not answer it yourself: tell them to ask you directly as a data question and give one example in their phrasing, then stop. A wrong or invented number is worse than no answer.\n\n'
-    + 'Keep replies to two or three sentences unless a short list is clearly needed. Do not claim to have looked anything up. Plain text only, no markdown headers.' + guideBlock + ctx;
+  return think
+    + 'You are Captain, the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. You are a capable general assistant with the manner of an experienced, trustworthy ship\'s captain: warm, direct, precise.\n\n'
+    + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), arithmetic and unit conversions, comparing numbers the user gives you, writing help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. Match the depth to the question: one line for a quick fact, a short structured answer for something that needs it. Show working for calculations.\n\n'
+    + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data.\n\n'
+    + 'Charts: when a chart would genuinely help and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
+    + 'CHART {"type":"bar","title":"...","labels":["A","B"],"values":[1,2],"unit":""}\n'
+    + '(type is "bar" or "line"; 2 to 24 points). Do not add a chart to answers that don\'t need one.\n\n'
+    + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + guideBlock + ctx;
 }
 
 function readEnv(env) {
@@ -82,6 +138,10 @@ function readEnv(env) {
     enabled: env.CAPTAIN_ENABLE_LLM !== '0',
     timeoutMs: parseInt(env.CAPTAIN_LLM_TIMEOUT_MS || String(DEFAULTS.timeoutMs), 10),
     appName: env.CAPTAIN_APP_NAME || 'this application',
+    // Reasoning models think for many seconds before speaking. That is wasted
+    // time for conversation and app help, so it is off by default. Set
+    // CAPTAIN_LLM_REASONING=on to keep it.
+    reasoningOff: (env.CAPTAIN_LLM_REASONING || 'off').toLowerCase() !== 'on',
   };
 }
 
@@ -90,13 +150,17 @@ function buildRequest(cfg, system, messages) {
     return {
       url: cfg.url + '/v1/chat/completions',
       headers: Object.assign({ 'Content-Type': 'application/json' }, cfg.apiKey ? { Authorization: 'Bearer ' + cfg.apiKey } : {}),
-      body: {
+      body: Object.assign({
         model: cfg.model,
         messages: [{ role: 'system', content: system }].concat(messages),
         max_tokens: DEFAULTS.maxTokens,
         temperature: DEFAULTS.temperature,
         stream: false,
       },
+      // OpenRouter's unified switch for reasoning models. Other OpenAI-compatible
+      // servers ignore unknown fields, but we only send it where it is known to
+      // be understood, to avoid a strict server rejecting the request.
+      (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) ? { reasoning: { enabled: false } } : {}),
       extract: function (data) {
         const c = data && data.choices && data.choices[0];
         return c && c.message && typeof c.message.content === 'string' ? c.message.content : '';
@@ -137,7 +201,7 @@ async function converse(text, opts) {
     .map(function (h) { return { role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.text || '').slice(0, 500) }; })
     .concat([{ role: 'user', content: String(text || '').slice(0, 1000) }]);
 
-  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context });
+  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff });
   const req = buildRequest(cfg, system, messages);
   // No tools field in either request shape. That is the structural guarantee.
 
@@ -163,9 +227,11 @@ async function converse(text, opts) {
   try { data = await res.json(); } catch (_) { return { text: UNAVAILABLE, blocked: false, error: 'non-JSON response', provider: cfg.provider, model: cfg.model }; }
 
   const raw = (req.extract(data) || '').trim();
-  if (!raw) return { text: SAFE_REDIRECT, blocked: true, provider: cfg.provider, model: cfg.model };
-  if (containsStatedFigure(raw)) return { text: SAFE_REDIRECT, blocked: true, rawBlocked: raw, provider: cfg.provider, model: cfg.model };
-  return { text: raw, blocked: false, provider: cfg.provider, model: cfg.model };
+  if (!raw) return { text: UNAVAILABLE, blocked: false, error: 'empty reply', provider: cfg.provider, model: cfg.model };
+  const names = [].concat(opts.vesselNames || [], opts.context && opts.context.vesselName ? [opts.context.vesselName] : []);
+  if (containsStatedFigure(raw, names)) return { text: SAFE_REDIRECT, blocked: true, rawBlocked: raw, provider: cfg.provider, model: cfg.model };
+  const parsed = extractChart(raw);
+  return { text: parsed.text, chart: parsed.chart, blocked: false, provider: cfg.provider, model: cfg.model };
 }
 
-module.exports = { converse: converse, containsStatedFigure: containsStatedFigure, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
+module.exports = { converse: converse, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };

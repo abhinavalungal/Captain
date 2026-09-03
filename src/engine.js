@@ -73,7 +73,9 @@ async function execute(plan, scope, db, ctx = {}) {
     .map((id) => (scope.vessels.find((v) => String(v.id) === String(id)) || {}).name)
     .filter(Boolean);
 
+  const nameById = new Map(scope.vessels.map((v) => [String(v.id), v.name]));
   const provenance = {
+    vesselNameFor: (id) => nameById.get(String(id)) || String(id),
     metric: metric.label,
     unit: metric.unit,
     source: source.description,
@@ -90,6 +92,7 @@ async function execute(plan, scope, db, ctx = {}) {
   };
 
   const answer = formatAnswer(statement.shape, result.rows, plan, metric, provenance);
+  delete provenance.vesselNameFor;
   return Object.assign({ status: 'answer', provenance }, answer);
 }
 
@@ -251,6 +254,27 @@ function formatAnswer(shape, rows, plan, metric, provenance) {
     };
   }
 
+  if (shape === 'by_vessel') {
+    const named = rows.map((r) => ({
+      vesselId: r.vessel_id,
+      vessel: provenance.vesselNameFor ? provenance.vesselNameFor(r.vessel_id) : String(r.vessel_id),
+      value: r.value == null ? null : Number(r.value),
+      rowsUsed: Number(r.n_rows || 0),
+    })).filter((x) => x.rowsUsed > 0);
+    if (!named.length) return noData(plan, metric, provenance);
+    const word = AGG_WORD[plan.aggregation] || 'Value';
+    const parts = named.map((x) => `${x.vessel} ${withUnit(x.value, metric)} (${x.rowsUsed} report${x.rowsUsed === 1 ? '' : 's'})`);
+    const missing = provenance.vessels.filter((n) => !named.some((x) => x.vessel === n));
+    return {
+      text: `${word} ${metric.label.toLowerCase()}, ${provenance.period}: ${parts.join('; ')}.` + (missing.length ? ` No records for ${missing.join(', ')} in that period.` : ''),
+      unit: metric.unit,
+      rowsUsed: named.reduce((a, x) => a + x.rowsUsed, 0),
+      byVessel: named,
+      chart: { type: 'bar', title: `${word} ${metric.label.toLowerCase()} — ${provenance.period}`, labels: named.map((x) => x.vessel), values: named.map((x) => x.value), unit: metric.unit, decimals: metric.decimals },
+      note: assumptionNote(plan, metric, named.reduce((a, x) => a + x.rowsUsed, 0)),
+    };
+  }
+
   if (shape === 'compare') {
     const r = rows[0] || {};
     const aRows = Number(r.a_rows || 0);
@@ -279,6 +303,7 @@ function formatAnswer(shape, rows, plan, metric, provenance) {
         difference: diff,
         percentChange: pct,
       },
+      chart: { type: 'bar', title: `${word} ${metric.label.toLowerCase()}`, labels: [ra.label, rb.label], values: [a, b], unit: metric.unit, decimals: metric.decimals },
       rowsUsed: aRows + bRows,
       note: aRows !== bRows ? `The two periods do not have the same number of reports (${aRows} vs ${bRows}), so the comparison is not like-for-like.` : null,
     };

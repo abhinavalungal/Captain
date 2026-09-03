@@ -283,6 +283,12 @@ function parse(text, ctx = {}) {
 
   // --- comparison: two ranges ----------------------------------------------
   let aggregation = detectAggregation(effLower);
+  const byVessel = !!resolvedVessels.byVessel && vesselIds.length > 1;
+
+  // "compare A and B last month" is a vessel comparison over ONE period, not a
+  // comparison of two periods — so with several vessels named, 'compare' means
+  // side-by-side and the two-range branch below is skipped.
+  if (byVessel && aggregation === 'compare') aggregation = null;
 
   if (aggregation === 'compare') {
     const pair = extractComparisonRanges(effectiveText, now, ctx.dateOrder);
@@ -401,6 +407,26 @@ function parse(text, ctx = {}) {
     ? (detectGroup(effLower) || autoGroup(range))
     : null;
 
+  if (byVessel && aggregation !== 'trend' && aggregation !== 'summary') {
+    // One figure per vessel over the same period. Sum for quantities, average
+    // for rates, unless the user asked for min/max/count explicitly.
+    const perVesselAgg = ['min', 'max', 'count', 'avg', 'sum'].includes(aggregation)
+      ? aggregation
+      : (metric.kind === 'quantity' ? 'sum' : 'avg');
+    return {
+      status: 'plan',
+      plan: {
+        intent: 'by_vessel',
+        metricKey: metric.key,
+        vesselIds,
+        range,
+        aggregation: perVesselAgg,
+        aggregationWasAssumed: !['min', 'max', 'count', 'avg', 'sum'].includes(aggregation),
+        originalText: raw,
+      },
+    };
+  }
+
   return {
     status: 'plan',
     plan: {
@@ -437,17 +463,14 @@ function resolveVesselIds(text, lower, vessels, pending, extra = {}) {
       // an in-scope id can get here — the check above drops anything else.
       vesselIds = [extra.defaultVesselId];
     } else if (mentioned.length > 1) {
-      return {
-        clarify: {
-          status: 'clarify',
-          reason: 'ambiguous_vessel',
-          question: 'Which vessel?',
-          options: mentioned.map((v) => ({ value: v.id, label: v.name })),
-          pending: { originalText: extra.raw, field: 'vesselIds', metricKey: extra.metricKey },
-        },
-      };
+      // Naming several vessels is a request to see them side by side.
+      return { vesselIds: mentioned.map((v) => v.id), byVessel: true };
     } else if (fleetWide) {
       vesselIds = vessels.map((v) => v.id);
+      // "fuel consumption across the fleet, by vessel" wants one figure per ship.
+      if (/\b(by|per|each|compare|comparison|versus|vs|breakdown|split)\b/.test(lower)) {
+        return { vesselIds: vesselIds, byVessel: true };
+      }
     } else if (vessels.length === 1) {
       vesselIds = [vessels[0].id];
     } else if (vessels.length === 0) {

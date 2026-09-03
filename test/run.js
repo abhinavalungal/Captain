@@ -272,6 +272,27 @@ t('parser: clock window with no date asks which date', () => {
   assert.strictEqual(r.reason, 'clock_without_date');
 });
 
+t('parser: naming two vessels compares them side by side instead of asking which', () => {
+  const r = ask('compare fuel consumption for Aurora Trader and Northern Pearl last month');
+  assert.strictEqual(r.status, 'plan');
+  assert.strictEqual(r.plan.intent, 'by_vessel');
+  assert.strictEqual(r.plan.aggregation, 'sum');
+  assert.deepStrictEqual(r.plan.vesselIds.sort(), ['9234567', '9851701']);
+});
+
+t('parser: "by vessel" across the fleet is a per-vessel plan', () => {
+  const r = ask('shaft power across the fleet by vessel in August');
+  assert.strictEqual(r.plan.intent, 'by_vessel');
+  assert.strictEqual(r.plan.aggregation, 'avg', 'rates average, they do not sum');
+});
+
+t('sql: by_vessel groups by the vessel column and carries the scope predicate', () => {
+  const r = ask('compare fuel consumption for Aurora Trader and Northern Pearl last month');
+  const st = sqlBuilder.build(r.plan, r.plan.vesselIds);
+  assert.ok(/GROUP BY 1/.test(st.text));
+  assert.ok(/imo" = ANY/.test(st.text));
+});
+
 t('parser: missing vessel asks when the user has several', () => {
   const r = ask('shaft power yesterday');
   assert.strictEqual(r.status, 'clarify');

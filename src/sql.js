@@ -58,6 +58,7 @@ function build(plan, vesselIds) {
   if (!Array.isArray(vesselIds) || !vesselIds.length) throw new Error('Refusing to build a query with an empty vessel scope');
 
   switch (plan.intent) {
+    case 'by_vessel': return buildByVessel(plan, metric, vesselIds);
     case 'value':   return buildRaw(plan, metric, vesselIds);
     case 'trend':   return buildTrend(plan, metric, vesselIds);
     case 'summary': return buildSummary(plan, metric, vesselIds);
@@ -80,6 +81,25 @@ ${where}
 ORDER BY t.${q(source.timeColumn)} ASC, t.${q(source.vesselColumn)} ASC
 LIMIT $${params.length}`.trim();
   return { text, values: params, shape: 'rows' };
+}
+
+/** One aggregated figure per vessel over the same period — the shape a comparison chart needs. */
+function buildByVessel(plan, metric, vesselIds) {
+  const params = [];
+  const source = SOURCES[metric.source];
+  const { from, where } = baseFrom(metric, plan.range, vesselIds, params);
+  const col = `t.${q(metric.column)}`;
+  const fn = { sum: 'SUM', avg: 'AVG', min: 'MIN', max: 'MAX', count: 'COUNT' }[plan.aggregation];
+  if (!fn) throw new Error(`Unsupported aggregation ${plan.aggregation}`);
+  const text = `
+SELECT t.${q(source.vesselColumn)}  AS vessel_id,
+       ${fn}(${col})::double precision AS value,
+       COUNT(${col})                   AS n_rows
+${from}
+${where}
+GROUP BY 1
+ORDER BY 1`.trim();
+  return { text, values: params, shape: 'by_vessel' };
 }
 
 function buildScalar(plan, metric, vesselIds) {

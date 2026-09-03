@@ -123,6 +123,8 @@
       '<path class="c-mouth m-blocked"  d="M45.5 60.6 L54.5 60.6"/>' +
       '<path class="c-mouth m-nothing"  d="M45.5 61.5 Q50 59.2 54.5 61.5"/>' +
       '<path class="c-mouth m-thinking" d="M46.5 60.6 Q50 59.8 53 60.6"/>' +
+      '<path class="c-mouth m-shy"       d="M46.3 60.2 Q50 61.7 53.6 59.9"/>' +
+      '<path class="c-mouth m-surprised" d="M47.4 61 Q47.4 57.7 50 57.7 Q52.6 57.7 52.6 61 Q52.6 64.3 50 64.3 Q47.4 64.3 47.4 61 Z"/>' +
       // eyes
       '<g class="c-eye c-eye-l"><ellipse fill="#FDFDFD" cx="41.5" cy="43.5" rx="4.2" ry="3.9"/><circle class="c-iris" fill="url(#cp-iris)" cx="42" cy="43.9" r="2.5"/><circle class="c-pupil" fill="#111820" cx="42" cy="43.9" r="1.35"/><circle class="c-glint" fill="#FFF" cx="43" cy="42.9" r=".7"/><path stroke="#5B4636" stroke-width=".9" fill="none" stroke-linecap="round" d="M37.3 42.2 Q41.5 38.6 45.7 42.2"/></g>' +
       '<g class="c-eye c-eye-r"><ellipse fill="#FDFDFD" cx="58.5" cy="43.5" rx="4.2" ry="3.9"/><circle class="c-iris" fill="url(#cp-iris)" cx="59" cy="43.9" r="2.5"/><circle class="c-pupil" fill="#111820" cx="59" cy="43.9" r="1.35"/><circle class="c-glint" fill="#FFF" cx="60" cy="42.9" r=".7"/><path stroke="#5B4636" stroke-width=".9" fill="none" stroke-linecap="round" d="M54.3 42.2 Q58.5 38.6 62.7 42.2"/></g>' +
@@ -217,7 +219,14 @@
     '}' +
     '.badge:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(18,35,43,.2),0 14px 30px rgba(18,35,43,.18)}' +
     '.badge:focus-visible{outline:3px solid var(--magenta);outline-offset:3px}' +
-    '.badge svg{width:100%;height:100%;display:block;transform:translateY(9%) scale(1.22)}' +
+    '.badge svg{width:100%;height:100%;display:block;transform:translateY(9%) scale(1.22);animation:breathe 4.6s ease-in-out infinite}' +
+    '@keyframes breathe{0%,100%{transform:translateY(9%) scale(1.22)}50%{transform:translateY(9%) scale(1.233)}}' +
+    // idle eye-drift: a small, slow look-around, only while the mouse hasn't
+    // moved recently (JS toggles this class so it never fights live tracking)
+    '@keyframes eyeDrift{0%,100%{transform:translate(0,0)}20%{transform:translate(1.1px,-.6px)}55%{transform:translate(-1px,.5px)}80%{transform:translate(.6px,.7px)}}' +
+    '.idle-drift .c-iris,.idle-drift .c-pupil,.idle-drift .c-glint{animation:eyeDrift 9s ease-in-out infinite}' +
+    '@keyframes moodPop{0%{transform:scale(1)}40%{transform:scale(1.1)}100%{transform:scale(1)}}' +
+    '.mood-pop{animation:moodPop .4s ease-out}' +
     '.badge .hint{' +
       'position:absolute;right:0;bottom:0;width:20px;height:20px;border-radius:50%;' +
       'background:#C9A43E;color:#16293D;font-size:12px;line-height:20px;text-align:center;font-weight:700;' +
@@ -236,12 +245,13 @@
     '.nudge button:focus-visible{outline:2px solid var(--magenta);outline-offset:1px}' +
     '.root.open .nudge,.nudge.gone{display:none}' +
     '@keyframes nudgeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}' +
-    '@media (prefers-reduced-motion:reduce){.nudge{animation:none}}' +
+    '@media (prefers-reduced-motion:reduce){.nudge{animation:none}.badge svg,.head .face svg{animation:none}.idle-drift .c-iris,.idle-drift .c-pupil,.idle-drift .c-glint{animation:none}.mood-pop{animation:none}}' +
 
     // --- character parts (colours are painted in the SVG; CSS only drives expression) ---
     '.c-brow{fill:none;stroke:#9FA6AD;stroke-width:2;stroke-linecap:round;transition:transform .25s ease;transform-box:fill-box;transform-origin:center}' +
     '.c-mouth{fill:none;stroke:#7A4A3C;stroke-width:1.4;stroke-linecap:round;display:none}' +
     '.c-mouth.m-asking{fill:#5A2E26}' +
+    '.c-mouth.m-surprised{fill:#5A2E26}' +
     '.c-eye{transform-box:fill-box;transform-origin:center;transition:transform .25s ease}' +
     '.c-iris,.c-pupil,.c-glint{transition:transform .25s ease}' +
 
@@ -252,6 +262,13 @@
     'svg[data-mood="blocked"] .m-blocked{display:block}' +
     'svg[data-mood="nothing"] .m-nothing{display:block}' +
     'svg[data-mood="thinking"] .m-thinking{display:block}' +
+    'svg[data-mood="shy"] .m-shy{display:block}' +
+    'svg[data-mood="excited"] .m-answered{display:block}' +
+    'svg[data-mood="tired"] .m-idle{display:block}' +
+    'svg[data-mood="confused"] .m-thinking{display:block}' +
+    'svg[data-mood="curious"] .m-asking{display:block}' +
+    'svg[data-mood="surprised"] .m-surprised{display:block}' +
+    'svg[data-mood="sorry"] .m-nothing{display:block}' +
     'svg[data-mood="thinking"] .c-brow{transform:translateY(-1.6px)}' +
     'svg[data-mood="thinking"] .c-iris,svg[data-mood="thinking"] .c-pupil,svg[data-mood="thinking"] .c-glint{transform:translate(1.1px,-1.4px)}' +
     'svg[data-mood="asking"] .c-brow-r{transform:translateY(-2.2px) rotate(-6deg)}' +
@@ -260,6 +277,30 @@
     'svg[data-mood="blocked"] .c-brow-r{transform:translateY(1.4px) rotate(-8deg)}' +
     'svg[data-mood="nothing"] .c-brow-l{transform:translateY(.8px) rotate(-6deg)}' +
     'svg[data-mood="nothing"] .c-brow-r{transform:translateY(.8px) rotate(6deg)}' +
+
+    // --- personality moods: bashful, delighted, weary, puzzled, wide-eyed, surprised, apologetic ---
+    'svg[data-mood="shy"] .c-brow{transform:translateY(1px)}' +
+    'svg[data-mood="shy"] .c-cheek{opacity:.92}' +
+    'svg[data-mood="shy"] .c-iris,svg[data-mood="shy"] .c-pupil,svg[data-mood="shy"] .c-glint{transform:translate(1.3px,1.1px)}' +
+
+    'svg[data-mood="excited"] .c-brow{transform:translateY(-1.8px)}' +
+    'svg[data-mood="excited"] .c-eye{transform:scale(1.05)}' +
+
+    'svg[data-mood="tired"] .c-eye{transform:scaleY(.55)}' +
+    'svg[data-mood="tired"] .c-brow{transform:translateY(1.6px) rotate(2deg)}' +
+
+    'svg[data-mood="confused"] .c-brow-l{transform:translateY(-2px) rotate(-8deg)}' +
+    'svg[data-mood="confused"] .c-brow-r{transform:translateY(1.4px) rotate(9deg)}' +
+
+    'svg[data-mood="curious"] .c-brow{transform:translateY(-2px)}' +
+    'svg[data-mood="curious"] .c-eye{transform:scale(1.06)}' +
+
+    'svg[data-mood="surprised"] .c-brow{transform:translateY(-2.6px)}' +
+    'svg[data-mood="surprised"] .c-eye{transform:scale(1.16)}' +
+
+    'svg[data-mood="sorry"] .c-brow-l{transform:translateY(-1.6px) rotate(6deg)}' +
+    'svg[data-mood="sorry"] .c-brow-r{transform:translateY(-1.6px) rotate(-6deg)}' +
+    'svg[data-mood="sorry"] .c-iris,svg[data-mood="sorry"] .c-pupil,svg[data-mood="sorry"] .c-glint{transform:translate(0,1.4px)}' +
 
     // blink: brief, infrequent, and off when motion is reduced
     '@keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.08)}}' +
@@ -281,7 +322,7 @@
 
     '.head{display:flex;align-items:center;gap:12px;padding:12px 14px;background:linear-gradient(180deg,var(--accent-2) 0%,var(--accent) 100%);color:var(--on-accent);border-bottom:2px solid var(--gold)}' +
     '.head .face{width:40px;height:40px;border-radius:50%;background:radial-gradient(circle at 50% 30%,#2B4A68,#0F1E2E);border:1.5px solid rgba(255,255,255,.85);overflow:hidden;flex:none}' +
-    '.head .face svg{width:100%;height:100%;transform:translateY(9%) scale(1.22)}' +
+    '.head .face svg{width:100%;height:100%;transform:translateY(9%) scale(1.22);animation:breathe 4.6s ease-in-out infinite}' +
     '.head .titles{min-width:0;flex:1}' +
     '.head h2{margin:0;font:600 15px/1.2 var(--font);color:var(--on-accent);letter-spacing:.01em}' +
     '.head p{margin:1px 0 0;font-size:12px;color:rgba(255,255,255,.72);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
@@ -346,6 +387,18 @@
     'table.grid td.num{font-family:var(--serif);font-size:14px;text-align:right;padding-right:0;white-space:nowrap}' +
     'table.grid td.none{color:var(--ink-faint);font-style:italic}' +
 
+    '.bars{margin-top:10px;width:100%;display:block}' +
+    '.bars rect.bar{fill:var(--sea)}' +
+    '.bars rect.bar:nth-of-type(even){fill:var(--shallow-deep)}' +
+    '.bars text{font:400 10.5px var(--sans);fill:var(--ink-soft)}' +
+    '.bars text.val{font-family:var(--serif);font-size:12px;fill:var(--ink)}' +
+    '.bars line.axis{stroke:var(--rule);stroke-width:1}' +
+    '.chart-title{margin-top:8px;font-size:12.5px;color:var(--ink-soft)}' +
+    // rich text from the companion: bullets, bold, inline code — built with DOM nodes, never innerHTML
+    '.card ul.rich{margin:6px 0 0;padding-left:18px}' +
+    '.card ul.rich li{margin:2px 0}' +
+    '.card code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--shallow);padding:1px 5px;border-radius:3px}' +
+    '.card pre.rich{margin:8px 0 0;padding:8px 10px;background:var(--paper);border:1px solid var(--rule);border-radius:4px;overflow-x:auto;font-size:12px;line-height:1.5;white-space:pre-wrap}' +
     '.spark{margin-top:10px;width:100%;height:90px;display:block}' +
     '.spark path.line{fill:none;stroke:var(--sea);stroke-width:1.6}' +
     '.spark path.fill{fill:var(--shallow);opacity:.55}' +
@@ -420,6 +473,11 @@
     this.busy = false;
     this.open = false;
     this.inline = false;
+    this.currentMood = 'idle';
+    this.submitTimes = [];
+    this.turnCount = 0;
+    this._lastNorm = null;
+    this._reducedMotion = !!(global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches);
     this.mount();
   }
 
@@ -460,6 +518,7 @@
     var face = el('div', 'face');
     face.innerHTML = captainSvg('h');
     this.headFace = face.querySelector('svg');
+    this.headFaceWrap = face;
     this.headFace.setAttribute('data-mood', 'idle');
     var titles = el('div', 'titles');
     titles.appendChild(el('h2', null, this.opts.title));
@@ -570,12 +629,99 @@
     root.appendChild(badge);
     shadow.appendChild(root);
 
-    document.addEventListener('keydown', function (e) {
+    this._onKeydown = function (e) {
       if (e.key === 'Escape' && self.open && !self.inline) self.close();
-    });
+    };
+    document.addEventListener('keydown', this._onKeydown);
 
     (mountEl || document.body || document.documentElement).appendChild(host);
     if (this.inline || this.opts.openOnLoad) this.openPanel();
+
+    this.setupLife();
+  };
+
+  /**
+   * Ambient "alive" behaviour, entirely local: eyes follow the cursor, a slow
+   * idle look-around when the mouse has been still, a subtle breathing loop
+   * (pure CSS, always on). None of this touches the network or the request
+   * pipeline — it is cosmetic only, throttled to one recompute per animation
+   * frame, and skipped entirely under prefers-reduced-motion.
+   */
+  Widget.prototype.setupLife = function () {
+    if (this._reducedMotion) return;
+    var self = this;
+    var raf = global.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
+    var caf = global.cancelAnimationFrame || global.clearTimeout;
+    var rafId = null;
+    var mx = null, my = null;
+
+    function apply() {
+      rafId = null;
+      if (self.currentMood === 'thinking') return; // let him look away in thought instead of tracking
+      if (mx == null) return;
+      [self.badgeFace, self.headFace].forEach(function (svg) {
+        if (!svg) return;
+        var rect = svg.getBoundingClientRect();
+        if (!rect || !rect.width) return; // hidden (panel closed, or off mobile view) — nothing to move
+        var cx = rect.left + rect.width * 0.5, cy = rect.top + rect.height * 0.42;
+        var dx = mx - cx, dy = my - cy;
+        var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        var cap = 1.6; // px — small and natural, never lets the iris leave the socket
+        var ox = (dx / dist) * Math.min(cap, dist / 40);
+        var oy = (dy / dist) * Math.min(cap, dist / 40);
+        var t = 'translate(' + ox.toFixed(2) + 'px,' + oy.toFixed(2) + 'px)';
+        var parts = svg.querySelectorAll('.c-iris, .c-pupil, .c-glint');
+        for (var i = 0; i < parts.length; i++) parts[i].style.transform = t;
+      });
+    }
+
+    this._onMove = function (e) {
+      mx = e.clientX; my = e.clientY;
+      self.root.classList.remove('idle-drift');
+      clearTimeout(self._idleT);
+      self._idleT = setTimeout(function () {
+        self.root.classList.add('idle-drift');
+        self.clearEyeOffset();
+      }, 6000);
+      if (rafId == null) rafId = raf(apply);
+    };
+    document.addEventListener('mousemove', this._onMove, { passive: true });
+
+    this._visHandler = function () {
+      if (document.hidden) document.removeEventListener('mousemove', self._onMove);
+      else document.addEventListener('mousemove', self._onMove, { passive: true });
+    };
+    document.addEventListener('visibilitychange', this._visHandler);
+
+    this._rafCancel = function () { if (rafId != null) caf(rafId); };
+  };
+
+  Widget.prototype.clearEyeOffset = function () {
+    [this.badgeFace, this.headFace].forEach(function (svg) {
+      if (!svg) return;
+      var parts = svg.querySelectorAll('.c-iris, .c-pupil, .c-glint');
+      for (var i = 0; i < parts.length; i++) parts[i].style.transform = '';
+    });
+  };
+
+  /** A brief, one-shot bounce — used for excited/surprised, never looping. */
+  Widget.prototype.pulse = function () {
+    if (this._reducedMotion) return;
+    [this.badge, this.headFaceWrap].forEach(function (elx) {
+      if (!elx) return;
+      elx.classList.remove('mood-pop');
+      void elx.offsetWidth; // restart the animation even if it's still playing
+      elx.classList.add('mood-pop');
+    });
+  };
+
+  /** Removes everything setupLife() attached. Called from Captain.destroy(). */
+  Widget.prototype.teardown = function () {
+    if (this._onMove) document.removeEventListener('mousemove', this._onMove);
+    if (this._visHandler) document.removeEventListener('visibilitychange', this._visHandler);
+    if (this._onKeydown) document.removeEventListener('keydown', this._onKeydown);
+    if (this._idleT) clearTimeout(this._idleT);
+    if (this._rafCancel) this._rafCancel();
   };
 
   /** Tell Captain what the user is looking at. Pass null to clear. */
@@ -597,6 +743,41 @@
   Widget.prototype.setMood = function (mood) {
     this.badgeFace.setAttribute('data-mood', mood);
     this.headFace.setAttribute('data-mood', mood);
+    this.currentMood = mood;
+    if (mood === 'excited' || mood === 'surprised') this.pulse();
+  };
+
+  /**
+   * Reads the message the user is about to send — nothing else, no network,
+   * microseconds of work — and picks the expression to show while Captain is
+   * "thinking" about it. The actual reply, once it arrives, still sets the
+   * real mood via moodFor(); this only governs the waiting expression, so it
+   * can never contradict what Captain ends up saying.
+   */
+  var COMPLIMENT_RE = /\b(good (job|bot|work)|well done|nice job|(?:you'?re|you are) (so |really )?(smart|great|awesome|amazing|helpful|the best|brilliant)|love (you|this bot)|amazing (job|work)|impressive|brilliant work|you rock)\b/i;
+  var POSITIVE_RE = /\b(perfect|exactly|that'?s it|awesome|great|nice one|excellent|fantastic|love it|woohoo)\b/i;
+  var SORRY_TRIGGER_RE = /\b(that'?s wrong|you'?re wrong|incorrect|not right|that'?s not right|wrong answer|mistake|error in that)\b/i;
+  var SURPRISE_RE = /\?{2,}|!{2,}|\b(wow|whoa|no way|insane|crazy|wild|omg)\b/i;
+
+  Widget.prototype.classifyOutgoing = function (text) {
+    var t = String(text || '').trim();
+    var norm = t.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+    var isRepeat = !!norm && norm.length > 3 && norm === this._lastNorm;
+    this._lastNorm = norm;
+    if (isRepeat) return 'confused';
+    if (SORRY_TRIGGER_RE.test(t)) return 'sorry';
+    if (COMPLIMENT_RE.test(t)) return 'shy';
+    if (SURPRISE_RE.test(t)) return 'surprised';
+    if (POSITIVE_RE.test(t)) return 'excited';
+    if (this.isFatigued()) return 'tired';
+    return 'thinking';
+  };
+
+  /** True after a burst of rapid-fire questions, or a long-running conversation. */
+  Widget.prototype.isFatigued = function () {
+    var now = Date.now();
+    var recent = this.submitTimes.filter(function (ts) { return now - ts < 60000; });
+    return recent.length >= 4 || this.turnCount >= 15;
   };
 
   Widget.prototype.toggle = function () { this.open ? this.close() : this.openPanel(); };
@@ -655,7 +836,16 @@
     this.busy = true;
     this.sendBtn.disabled = true;
     this.showQuestion(displayText);
-    this.setMood('thinking');
+
+    // Read the outgoing text locally (no network) to pick the waiting
+    // expression — a compliment gets a bashful look, a repeated question a
+    // puzzled one, a burst of rapid questions a tired one, and so on. This
+    // never delays the actual request below.
+    var reactiveMood = this.classifyOutgoing(body);
+    this.submitTimes.push(Date.now());
+    this.submitTimes = this.submitTimes.slice(-12);
+    this.turnCount++;
+    this.setMood(reactiveMood);
 
     var slot = this.showWaiting();
     var carried = this.pending;
@@ -674,7 +864,12 @@
         self.history.push({ role: 'assistant', text: data.text });
         self.history = self.history.slice(-6);
       }
-      self.setMood(moodFor(data));
+      // A real, successful answer still yields to visible tiredness after a
+      // burst of rapid-fire questions — the content itself is unaffected,
+      // only the expression that accompanies it.
+      var mood = moodFor(data);
+      if (mood === 'answered' && self.isFatigued()) mood = 'tired';
+      self.setMood(mood);
       if (typeof self.opts.onAnswer === 'function') self.opts.onAnswer(data);
     }, function () {
       slot.innerHTML = '';
@@ -738,12 +933,19 @@
     } else {
       // Briefings send multiple bullet lines separated by \n; render each as
       // its own paragraph rather than collapsing them into one run of text.
-      var lines = String(data.text || '').split('\n').filter(Boolean);
-      lines.forEach(function (line) { card.appendChild(el('p', null, line)); });
-      if (!lines.length) card.appendChild(el('p', null, ''));
+      renderRich(card, String(data.text || ''));
     }
 
     if (data.series) card.appendChild(renderSeries(data));
+    // Only chart specs that actually carry data. (Trend answers describe their
+    // chart differently and are already drawn from `series` above.)
+    var hasChartData = data.chart && Array.isArray(data.chart.labels) && Array.isArray(data.chart.values)
+      && data.chart.labels.length === data.chart.values.length && data.chart.values.length >= 2;
+    if (hasChartData && data.chart.type === 'bar') card.appendChild(renderBars(data.chart));
+    if (hasChartData && data.chart.type === 'line' && !data.series) card.appendChild(renderSeries({
+      series: data.chart.labels.map(function (l, i) { return { bucket: l, value: data.chart.values[i] }; }),
+      unit: data.chart.unit,
+    }));
     if (data.rows && data.rows.length > 1) card.appendChild(renderRows(data));
     if (data.overview) card.appendChild(renderOverview(data));
     if (data.comparison) card.appendChild(renderComparison(data));
@@ -871,6 +1073,102 @@
     d.appendChild(el('summary', null, 'Show the query behind this figure'));
     d.appendChild(el('pre', null, p.sql + '\n\n-- values: ' + JSON.stringify(p.sqlValues)));
     frag.appendChild(d);
+    return frag;
+  }
+
+  /**
+   * Plain text with a little structure: paragraphs, "- " bullets, ```code```
+   * fences, **bold** and `code` spans. Everything is created as DOM nodes with
+   * textContent, so nothing the server sends can ever be parsed as HTML.
+   */
+  function renderRich(container, text) {
+    var blocks = text.replace(/\r/g, '').split(/\n{2,}/);
+    if (!text.trim()) { container.appendChild(el('p', null, '')); return; }
+    blocks.forEach(function (block) {
+      var lines = block.split('\n').filter(function (l) { return l.trim().length; });
+      if (!lines.length) return;
+      if (/^```/.test(lines[0])) {
+        var code = lines.slice(1).filter(function (l) { return !/^```/.test(l); }).join('\n');
+        container.appendChild(el('pre', 'rich', code));
+        return;
+      }
+      var bullets = lines.every(function (l) { return /^\s*(?:[-*\u2022]|\d+[.)])\s+/.test(l); });
+      if (bullets && lines.length >= 1) {
+        var ul = el('ul', 'rich');
+        lines.forEach(function (l) {
+          var li = el('li');
+          appendInline(li, l.replace(/^\s*(?:[-*\u2022]|\d+[.)])\s+/, ''));
+          ul.appendChild(li);
+        });
+        container.appendChild(ul);
+        return;
+      }
+      lines.forEach(function (l) {
+        var p = el('p');
+        appendInline(p, l);
+        container.appendChild(p);
+      });
+    });
+  }
+
+  /** **bold** and `code` inside a line, as nodes. Anything else is literal text. */
+  function appendInline(parent, line) {
+    var re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+    var last = 0, m;
+    while ((m = re.exec(line)) !== null) {
+      if (m.index > last) parent.appendChild(document.createTextNode(line.slice(last, m.index)));
+      var tok = m[0];
+      if (tok.charAt(0) === '`') parent.appendChild(el('code', null, tok.slice(1, -1)));
+      else parent.appendChild(el('strong', null, tok.slice(2, -2)));
+      last = m.index + tok.length;
+    }
+    if (last < line.length) parent.appendChild(document.createTextNode(line.slice(last)));
+  }
+
+  /** A labelled bar chart from real values. Values are printed above each bar so nothing is left to eyeballing. */
+  function renderBars(chart) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var n = chart.values.length;
+    var w = 640, barH = 26, gap = 10, padL = 6, padR = 130, padT = 6;
+    var fmtV = function (v) {
+      var d = chart.decimals != null ? chart.decimals : (Math.abs(v) >= 1000 ? 1 : 3);
+      return Number(v).toLocaleString('en-GB', { maximumFractionDigits: d }) + (chart.unit ? ' ' + chart.unit : '');
+    };
+    var h = padT + n * (barH + gap) + 12;
+    var max = Math.max.apply(null, chart.values.map(function (v) { return Math.abs(v); })) || 1;
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'bars');
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', (chart.title || 'Comparison') + ': ' + chart.labels.map(function (l, i) { return l + ' ' + fmtV(chart.values[i]); }).join(', '));
+    var labelW = 150;
+    var plotW = w - padL - labelW - padR;
+    chart.values.forEach(function (v, i) {
+      var y = padT + i * (barH + gap);
+      var len = Math.max(2, Math.round((Math.abs(v) / max) * plotW));
+      var lab = document.createElementNS(ns, 'text');
+      lab.setAttribute('x', padL); lab.setAttribute('y', y + barH * 0.68);
+      lab.textContent = String(chart.labels[i]).length > 22 ? String(chart.labels[i]).slice(0, 21) + '\u2026' : chart.labels[i];
+      svg.appendChild(lab);
+      var r = document.createElementNS(ns, 'rect');
+      r.setAttribute('class', 'bar');
+      r.setAttribute('x', padL + labelW); r.setAttribute('y', y);
+      r.setAttribute('width', len); r.setAttribute('height', barH); r.setAttribute('rx', 3);
+      svg.appendChild(r);
+      var val = document.createElementNS(ns, 'text');
+      val.setAttribute('class', 'val');
+      val.setAttribute('x', padL + labelW + len + 8); val.setAttribute('y', y + barH * 0.68);
+      val.textContent = fmtV(v);
+      svg.appendChild(val);
+    });
+    var axis = document.createElementNS(ns, 'line');
+    axis.setAttribute('class', 'axis');
+    axis.setAttribute('x1', padL + labelW); axis.setAttribute('x2', padL + labelW);
+    axis.setAttribute('y1', padT); axis.setAttribute('y2', h - 10);
+    svg.appendChild(axis);
+    var frag = document.createDocumentFragment();
+    if (chart.title) frag.appendChild(el('p', 'chart-title', chart.title));
+    frag.appendChild(svg);
     return frag;
   }
 
@@ -1019,7 +1317,10 @@
     clearContext: function () { if (instance) instance.setContext(null); },
     setTheme: function (theme) { if (instance && ['light', 'dark', 'auto'].indexOf(theme) >= 0) instance.root.setAttribute('data-theme', theme); },
     destroy: function () {
-      if (instance && instance.host.parentNode) instance.host.parentNode.removeChild(instance.host);
+      if (instance) {
+        if (typeof instance.teardown === 'function') instance.teardown();
+        if (instance.host.parentNode) instance.host.parentNode.removeChild(instance.host);
+      }
       instance = null;
     },
     _instance: function () { return instance; },
