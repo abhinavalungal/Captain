@@ -226,6 +226,65 @@ t('briefing trigger phrases are recognised', () => {
     assert.ok(/Nothing flagged/.test(b.text));
   });
 
+  // --- lazy database: only data-shaped messages may touch it --------------------
+  await ta('router: a greeting never opens a database connection, even when one is available', async () => {
+    let opened = 0;
+    const spyDb = async () => { opened++; return db; };
+    const out = await router.route({ text: 'hi there', session, now: NOW }, spyDb, { orgId: 'test-org', env: LLM_ENV, fetchImpl: ollamaStub('Hello!') });
+    assert.strictEqual(out.source, 'companion');
+    assert.strictEqual(opened, 0, 'greeting must not call getDb');
+  });
+  await ta('router: an app-guide question never opens a database connection', async () => {
+    let opened = 0;
+    const spyDb = async () => { opened++; return db; };
+    const out = await router.route({ text: 'how do I export a report', session, now: NOW }, spyDb, { orgId: 'test-org', env: LLM_ENV });
+    assert.strictEqual(out.source, 'guide');
+    assert.strictEqual(opened, 0);
+  });
+  await ta('router: a data question does open the database, exactly once', async () => {
+    let opened = 0;
+    const spyDb = async () => { opened++; return db; };
+    const out = await router.route({ text: 'shaft power for Aurora Trader on 15 August 2026', session, now: NOW }, spyDb, { orgId: 'test-org', env: LLM_ENV });
+    assert.strictEqual(out.source, 'data');
+    assert.strictEqual(out.status, 'answer');
+    assert.strictEqual(opened, 1);
+  });
+  await ta('router: with the database DOWN, a greeting still gets a normal reply', async () => {
+    const downDb = async () => { const e = new Error('connect ECONNREFUSED'); throw e; };
+    const out = await router.route({ text: 'hello captain', session, now: NOW }, downDb, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } });
+    assert.strictEqual(out.status, 'answer');
+    assert.ok(!/database/.test(out.text));
+  });
+  await ta('router: with the database DOWN, a data question gets a plain, actionable error', async () => {
+    const downDb = async () => { throw new Error('connect ECONNREFUSED'); };
+    const out = await router.route({ text: 'fuel consumption for Aurora Trader last month', session, now: NOW }, downDb, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } });
+    assert.strictEqual(out.status, 'error');
+    assert.strictEqual(out.reason, 'db_unreachable');
+    assert.ok(!/\d{3,}/.test(out.text), 'error text must not contain a figure');
+  });
+  await ta('router: with the database NOT CONFIGURED, the message says so specifically', async () => {
+    const noDb = async () => { const e = new Error('no url'); e.code = 'DB_NOT_CONFIGURED'; throw e; };
+    const out = await router.route({ text: 'anything I should know?', session, now: NOW }, noDb, { orgId: 'test-org', env: {} });
+    assert.strictEqual(out.reason, 'db_not_configured');
+    assert.ok(/not configured/.test(out.text));
+  });
+  await ta('router: a learned-only term is still routed to data when the DB is reachable', async () => {
+    const termsMod = require('../src/terms');
+    router.clearLearnedCache();
+    await termsMod.saveMapping(db, { orgId: 'test-org', term: 'juice', metricKey: 'fuel_consumption' });
+    const out = await router.route({ text: 'juice for Aurora Trader last month', session, now: NOW }, async () => db, { orgId: 'test-org', env: LLM_ENV, fetchImpl: ollamaStub('should not be called') });
+    assert.strictEqual(out.source, 'data', 'a taught word must reach the engine, not the companion');
+    await termsMod.forgetMapping(db, { orgId: 'test-org', term: 'juice' });
+    router.clearLearnedCache();
+  });
+  await ta('router: "help" is answered from config with no database', async () => {
+    let opened = 0;
+    const out = await router.route({ text: 'help', session, now: NOW }, async () => { opened++; return db; }, { orgId: 'test-org', env: {} });
+    assert.strictEqual(out.status, 'help');
+    assert.ok(Array.isArray(out.metrics) && out.metrics.length > 5);
+    assert.strictEqual(opened, 0);
+  });
+
   await ta('context: an unqualified question defaults to the vessel on screen', async () => {
     const out = await router.route(
       { text: 'shaft power on 15 August 2026', session: wideSession, now: NOW, context: { vesselId: '9234567', vesselName: 'Northern Pearl' } },

@@ -1,246 +1,236 @@
 'use strict';
 
-const { Pool } = require('pg');
-const router = require('./router');
-const { LIMITS, METRICS, SOURCES } = require('./config');
-const { readEnv: llmConfig } = require('./companion');
-const { sync } = require('./integrations/sync');
-
 /**
- * The whole HTTP surface of Captain, written against plain objects instead
- * of any platform's request/response shape. This is the ONE place the logic
- * lives — server.js (plain Node, runs anywhere) and netlify/functions/*.js
- * (kept only for anyone who still wants Netlify) are both thin adapters over
- * this file. There is exactly one implementation to keep correct.
+ * Entry point for a widget message.
  *
- * Every function here takes and returns plain data:
- *   handleCaptain({ method, headers, body, env })  -> { statusCode, headers, body }
- *   handleSync({ method, headers, env })           -> { statusCode, headers, body }
- * `headers` in is a plain lowercase-keyed object; `body` in is a raw string;
- * `body` out is always a JSON string.
+ * The first decision is made WITHOUT the database: does this message need
+ * vessel records at all? Greetings, app-navigation questions and small talk
+ * never touch Postgres — they are answered even when the database is down
+ * or not yet configured. A connection is opened only for messages that are
+ * actually asking about data.
+ *
+ * Precedence, in order:
+ *
+ *   1. classify (no DB)
+ *        help          -> the metric list, from config
+ *        data / teach  -> engine.ask()        (needs DB; unchanged, deterministic)
+ *        briefing      -> alerts.js           (needs DB; deterministic SQL)
+ *        small talk    -> companion.js, or a fixed line with no model (no DB)
+ *        other         -> guide.js            (no DB; a warm learned-term cache may veto)
+ *                      -> learned-term check  (DB, cached 60s, only if reachable)
+ *                      -> companion.js        (no DB access; LLM, output-guarded)
+ *
+ * The safety property is unchanged: a data-shaped question never reaches the
+ * companion. The classifier recognises data shape from the same metric
+ * aliases the parser uses, so anything the parser would have handled is
+ * still routed to it first.
  */
 
-let readPool;
-let writePool;
-let poolEnvKey = null; // detects a changed connection string (tests swap env)
+const engine = require('./engine');
+const rbac = require('./rbac');
+const parser = require('./parser');
+const terms = require('./terms');
+const { matchGuide, searchGuide } = require('./guide');
+const { isBriefingRequest, buildBriefing } = require('./alerts');
+const { converse } = require('./companion');
+const { METRICS } = require('./config');
 
-function sslFor(env) {
-  return env.CAPTAIN_PG_SSL === 'false' ? false : { rejectUnauthorized: false };
-}
+const DB_NOT_CONFIGURED = 'My database connection is not configured yet, so I cannot read vessel records. I can still help with the app, or just chat.';
+const DB_UNREACHABLE = 'I cannot reach the vessel database right now, so I cannot look that up. Nothing was changed \u2014 try again in a moment. I can still help with the app in the meantime.';
 
-function pools(env) {
-  const key = env.CAPTAIN_READ_URL + '|' + (env.CAPTAIN_WRITE_URL || '');
-  if (key !== poolEnvKey) { readPool = null; writePool = null; poolEnvKey = key; }
-  if (!readPool) {
-    if (!env.CAPTAIN_READ_URL) {
-      const e = new Error('CAPTAIN_READ_URL is not set');
-      e.code = 'DB_NOT_CONFIGURED';
-      throw e;
-    }
-    readPool = new Pool({
-      connectionString: env.CAPTAIN_READ_URL,
-      max: 3,
-      idleTimeoutMillis: 10000,
-      statement_timeout: LIMITS.statementTimeoutMs,
-      ssl: sslFor(env),
-    });
-  }
-  if (!writePool && env.CAPTAIN_WRITE_URL) {
-    writePool = new Pool({
-      connectionString: env.CAPTAIN_WRITE_URL,
-      max: 2,
-      idleTimeoutMillis: 10000,
-      statement_timeout: 5000,
-      ssl: sslFor(env),
-    });
-  }
-  return { readPool, writePool };
-}
+// Learned vocabulary per organisation, cached briefly so that classifying a
+// greeting does not cost a query every time. One indexed SELECT per org per
+// minute at most; nothing else here reads the database for non-data messages.
+const learnedCache = new Map();
+const LEARNED_TTL_MS = 60000;
 
 /**
- * Replace this with your real session check. Must return
- *   { userId, orgId, departments?, vesselIds? }   or   null.
- *
- * PROTOTYPE MODE — CAPTAIN_DEV_SESSION=1
- *   Accepts an UNSIGNED token: base64 JSON like
- *     { "sub": "demo", "org": "geoserves", "departments": ["Emission"] }
- *   Convenient for demos. Trusts whatever the browser claims, so it must
- *   never be enabled on a site real users can reach.
+ * @param {object} input   { text, session, pending, now, history, context }
+ * @param {object|Function} db
+ *   Either a connected pg client (tests) or an async function that returns
+ *   one on first call — and throws if it cannot. The function form is what
+ *   the HTTP layer passes, so no connection is opened until it's needed.
+ * @param {object} opts    { orgId, writeDb, dateOrder, env, fetchImpl }
  */
-async function verifyToken(token, env) {
-  if (env.CAPTAIN_DEV_SESSION === '1') {
-    try {
-      const raw = token.includes('.') ? token.split('.')[1] : token;
-      const claims = JSON.parse(Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
-      if (!claims || typeof claims !== 'object') return null;
-      return {
-        userId: String(claims.sub || 'demo'),
-        orgId: String(claims.org || 'default'),
-        departments: Array.isArray(claims.departments) ? claims.departments.map(String) : null,
-        vesselIds: Array.isArray(claims.vessel_ids) ? claims.vessel_ids.map(String) : null,
-      };
-    } catch (_) { return null; }
+async function route(input, db, opts) {
+  opts = opts || {};
+  const env = opts.env || process.env;
+  const getDb = typeof db === 'function' ? db : async function () { return db; };
+
+  const text = String(input.text || '').trim();
+  if (!text) return { status: 'unparsed', text: 'Ask me about a vessel, the app, or say hello.', source: 'router' };
+
+  // A pending clarification or teach-confirmation is a data conversation in
+  // flight — it belongs to the engine, which needs the records.
+  if (input.pending) {
+    const isTeach = input.pending.kind === 'teach';
+    return withDb(getDb, function (client) {
+      return engine.ask(input, client, opts).then(function (r) {
+        // Vocabulary may just have changed; make the new word count right away.
+        if (isTeach && opts.orgId) learnedCache.delete(opts.orgId);
+        return tagSource(r, 'data');
+      });
+    });
   }
-  return null;
-}
 
-async function resolveSession(headers, env) {
-  const auth = headers.authorization || headers.Authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null;
-  if (!token) return null;
-  return verifyToken(token, env);
-}
+  // --- 1. classify without the database ---------------------------------------
+  let kind = parser.classify(text, [], input.now);
 
-// --- CORS: works the same regardless of host --------------------------------
-// CAPTAIN_ALLOW_ORIGIN may be one origin, a comma-separated list, or "*".
-function allowedOriginsList(env) {
-  return String(env.CAPTAIN_ALLOW_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-function corsHeaders(requestOrigin, env) {
-  const allowed = allowedOriginsList(env);
-  let allow = '';
-  if (allowed.includes('*')) allow = '*';
-  else if (requestOrigin && allowed.includes(requestOrigin)) allow = requestOrigin;
-
-  const h = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Vary': 'Origin' };
-  if (allow) {
-    h['Access-Control-Allow-Origin'] = allow;
-    h['Access-Control-Allow-Headers'] = 'Content-Type, Authorization';
-    h['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
-    h['Access-Control-Max-Age'] = '600';
+  if (kind === 'help') {
+    return {
+      status: 'help',
+      source: 'router',
+      text: 'I answer from your vessel records only. Here is what I can read.',
+      metrics: METRICS.filter(function (m) { return !m.finerVersionOf; }).map(function (m) { return { key: m.key, label: m.label, unit: m.unit, aliases: (m.aliases || []).slice(0, 4) }; }),
+    };
   }
-  return h;
+
+  if (kind === 'data' || kind === 'teach') {
+    return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
+  }
+
+  if (isBriefingRequest(text)) {
+    return withDb(getDb, async function (client) {
+      const scope = await rbac.resolveScope(input.session, client);
+      if (!scope.authenticated) return { status: 'unauthenticated', text: 'Sign in and I can check your vessels.', source: 'router' };
+      if (!scope.vessels.length) return { status: 'no_scope', text: 'Your account is not linked to any vessel, so there is nothing to brief.', source: 'router' };
+      const briefing = await buildBriefing(scope.vesselIds, scope.vessels.map(function (v) { return v.name; }), client);
+      return { status: 'answer', text: briefing.text, findings: briefing.findings, source: 'briefing' };
+    });
+  }
+
+  // --- 2. small talk (no database) ----------------------------------------------------
+  // A greeting or thank-you goes straight to conversation: the companion when a
+  // model is configured, a fixed friendly line when it isn't. It never goes to
+  // the guide (where the word "captain" would match the help entry) and never
+  // triggers the learned-term lookup.
+  if (isSmallTalk(text)) {
+    if (env.CAPTAIN_ENABLE_LLM === '0') return { status: 'answer', source: 'router', text: smallTalkReply(text) };
+    return companionReply(text, input, opts, env);
+  }
+
+  // --- 3. app guide (no database) ------------------------------------------------------
+  // A learned term inside an app question would be data, not guidance. If the
+  // org's vocabulary is already cached we honour that without a query; if the
+  // cache is cold we take the guide match — an app question must not cost a
+  // database round-trip.
+  const cachedLearned = peekLearned(opts.orgId);
+  const guideHit = matchGuide(text);
+  if (guideHit && !(cachedLearned.length && parser.classify(text, cachedLearned, input.now) === 'data')) {
+    return { status: 'answer', text: guideHit.answer, guide: { id: guideHit.id, title: guideHit.title }, source: 'guide' };
+  }
+
+  // --- 4. learned vocabulary: an org's own word for a metric is still data ---------
+  // Reached only for text the guide did not claim. Consulted when the database
+  // is reachable (cached for a minute); if it isn't, the message simply goes on
+  // to the companion, which cannot state a figure anyway.
+  const learned = await loadLearnedIfAvailable(getDb, opts.orgId);
+  if (learned.length && parser.classify(text, learned, input.now) === 'data') {
+    return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
+  }
+
+  // --- 5. companion (no database access) ------------------------------------------
+  if (env.CAPTAIN_ENABLE_LLM === '0') {
+    const parsed = parser.parse(text, { now: input.now, vessels: [], learned: learned });
+    const suggestions = (parsed.suggestions || METRICS.filter(function (m) { return !m.finerVersionOf; }).slice(0, 6).map(function (m) { return m.label; }));
+    return {
+      status: 'unparsed',
+      source: 'data',
+      text: (parsed.message || 'I could not tell which measurement you mean.') + ' I can read: ' + suggestions.join(', ') + '. Ask me "help" for the full list.',
+    };
+  }
+
+  return companionReply(text, input, opts, env);
 }
 
-function health(env) {
-  const llm = llmConfig(env);
+async function companionReply(text, input, opts, env) {
+  const guideSnippets = searchGuide(text, 3).map(function (g) { return { title: g.title, answer: g.answer }; });
+  const convo = await converse(text, {
+    env: env,
+    guideSnippets: guideSnippets,
+    history: input.history,
+    context: input.context && input.context.vesselName ? { vesselName: String(input.context.vesselName).slice(0, 80) } : null,
+    fetchImpl: opts.fetchImpl,
+  });
   return {
-    status: 'ok',
-    service: 'captain',
-    database: !!env.CAPTAIN_READ_URL,
-    writer: !!env.CAPTAIN_WRITE_URL,
-    auth: env.CAPTAIN_DEV_SESSION === '1' ? 'prototype' : 'production',
-    companion: llm.enabled ? { provider: llm.provider, model: llm.model, url: llm.url ? '(configured)' : null } : { enabled: false },
-    sources: Object.values(SOURCES).map((s) => s.description),
-    metrics: METRICS.filter((m) => !m.finerVersionOf).length,
-    allowedOrigins: allowedOriginsList(env),
+    status: 'answer',
+    text: convo.text,
+    source: 'companion',
+    blocked: convo.blocked || undefined,
+    options: convo.blocked ? examplePrompts() : undefined,
   };
 }
 
 /**
- * Handle one request to the question endpoint.
- * @param {object} req  { method, headers (lowercase keys), body (raw string), env }
+ * Run `fn` with a database client, converting a failed connection into a
+ * plain answer instead of an exception. The failure text names the cause
+ * the user can act on (not configured vs. unreachable) and nothing else.
  */
-async function handleCaptain(req) {
-  const env = req.env || process.env;
-  const headers = lowercaseKeys(req.headers || {});
-  const origin = headers.origin || '';
-  const cors = corsHeaders(origin, env);
-  const reply = (statusCode, obj) => ({ statusCode, headers: cors, body: JSON.stringify(obj) });
-
-  if (req.method === 'OPTIONS') return { statusCode: 204, headers: cors, body: '' };
-  if (req.method === 'GET') return reply(200, health(env));
-  if (req.method !== 'POST') return reply(405, { error: 'Use POST.' });
-
-  let payload;
-  try { payload = JSON.parse(req.body || '{}'); }
-  catch (_) { return reply(400, { error: 'Body must be JSON.' }); }
-
-  const text = String(payload.text || '').slice(0, 1000);
-  if (!text.trim()) return reply(400, { error: 'Ask a question.' });
-
-  let session;
-  try {
-    session = await resolveSession(headers, env);
-  } catch (err) {
-    console.error('captain: auth error', err);
-    return reply(500, { status: 'error', text: 'Authentication is misconfigured.' });
-  }
-  if (!session) return reply(401, { status: 'unauthenticated', text: 'Sign in and I can look at your vessel data.' });
-
+async function withDb(getDb, fn) {
   let client;
-  let wp;
   try {
-    const p = pools(env);
-    wp = p.writePool;
-    client = await p.readPool.connect();
+    client = await getDb();
   } catch (err) {
-    if (err.code === 'DB_NOT_CONFIGURED') {
-      return reply(503, { status: 'error', text: 'My database connection is not configured yet, so I cannot read vessel records. The app team needs to set CAPTAIN_READ_URL.' });
-    }
-    console.error('captain: database connect failed', err);
-    return reply(503, { status: 'error', text: 'I cannot reach the vessel database right now. Nothing was changed — try again in a moment.' });
+    const notConfigured = err && err.code === 'DB_NOT_CONFIGURED';
+    return { status: 'error', source: 'router', reason: notConfigured ? 'db_not_configured' : 'db_unreachable', text: notConfigured ? DB_NOT_CONFIGURED : DB_UNREACHABLE };
   }
+  if (!client) {
+    return { status: 'error', source: 'router', reason: 'db_not_configured', text: DB_NOT_CONFIGURED };
+  }
+  return fn(client);
+}
 
+/** Cached learned terms if fresh, without touching the database. */
+function peekLearned(orgId) {
+  const hit = orgId ? learnedCache.get(orgId) : null;
+  return hit && Date.now() - hit.at < LEARNED_TTL_MS ? hit.rows : [];
+}
+
+async function loadLearnedIfAvailable(getDb, orgId) {
+  if (!orgId) return [];
+  const hit = learnedCache.get(orgId);
+  if (hit && Date.now() - hit.at < LEARNED_TTL_MS) return hit.rows;
+  let client;
+  try { client = await getDb(); } catch (_) { return hit ? hit.rows : []; }
+  if (!client) return hit ? hit.rows : [];
   try {
-    const out = await router.route(
-      {
-        text,
-        session,
-        pending: payload.pending || null,
-        now: new Date(),
-        history: Array.isArray(payload.history) ? payload.history.slice(-6) : null,
-        context: payload.context && typeof payload.context === 'object'
-          ? { vesselId: payload.context.vesselId != null ? String(payload.context.vesselId).slice(0, 40) : null,
-              vesselName: payload.context.vesselName != null ? String(payload.context.vesselName).slice(0, 80) : null,
-              page: payload.context.page != null ? String(payload.context.page).slice(0, 80) : null }
-          : null,
-      },
-      client,
-      { orgId: session.orgId, writeDb: wp, dateOrder: env.CAPTAIN_DATE_ORDER || 'DMY', env }
-    );
-
-    if (out.provenance && env.CAPTAIN_EXPOSE_SQL !== '1') {
-      delete out.provenance.sql;
-      delete out.provenance.sqlValues;
-      delete out.provenance.table;
-      delete out.provenance.column;
-    }
-    return reply(200, out);
-  } catch (err) {
-    console.error('captain: query failed', err);
-    return reply(500, { status: 'error', text: 'Something went wrong reading the vessel data. Nothing was changed.' });
-  } finally {
-    client.release();
+    const rows = await terms.loadMappings(client, orgId);
+    learnedCache.set(orgId, { rows: rows, at: Date.now() });
+    return rows;
+  } catch (_) {
+    return hit ? hit.rows : [];
   }
 }
 
-/**
- * Handle a sync trigger over HTTP. Optional — running `node scripts/sync.js`
- * on a schedule (cron, pm2) needs no network exposure at all and is the
- * simpler default; this exists for hosts where only inbound HTTP is
- * reachable (a serverless platform, a scheduler that can only call a URL).
- */
-async function handleSync(req) {
-  const env = req.env || process.env;
-  const headers = lowercaseKeys(req.headers || {});
-  const reply = (statusCode, obj) => ({ statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
+const SMALL_TALK = new Set(['hi', 'hello', 'hey', 'hiya', 'yo', 'sup', 'thanks', 'thank', 'you', 'thx', 'ty', 'ok', 'okay',
+  'good', 'morning', 'afternoon', 'evening', 'night', 'bye', 'goodbye', 'cheers', 'please', 'cool', 'great', 'nice',
+  'captain', 'there', 'how', 'are', 'doing', 'whats', 'up', 'yes', 'no', 'yep', 'nope', 'lol', 'haha']);
 
-  const key = headers['x-captain-sync-key'];
-  if (!env.CAPTAIN_SYNC_KEY || key !== env.CAPTAIN_SYNC_KEY) {
-    return reply(401, { error: 'sync key required' });
-  }
-  if (!env.CAPTAIN_WRITE_URL) return reply(400, { error: 'CAPTAIN_WRITE_URL is not set' });
-
-  const { Client } = require('pg');
-  const db = new Client({ connectionString: env.CAPTAIN_WRITE_URL, ssl: sslFor(env) });
-  await db.connect();
-  try {
-    const stats = await sync({ db, env, log: (m) => console.log('captain-sync:', m) });
-    return reply(200, stats);
-  } catch (err) {
-    console.error('captain-sync failed', err);
-    return reply(500, { error: err.message });
-  } finally {
-    await db.end();
-  }
+/** True when every word is conversational filler — nothing that could name a metric. */
+function isSmallTalk(text) {
+  const words = String(text).toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  return words.every(function (w) { return SMALL_TALK.has(w) || w.length <= 2; });
 }
 
-function lowercaseKeys(obj) {
-  const out = {};
-  for (const k of Object.keys(obj)) out[k.toLowerCase()] = obj[k];
-  return out;
+function smallTalkReply(text) {
+  const t = String(text).toLowerCase();
+  if (/thank|thx|\bty\b|cheers/.test(t)) return "You're welcome. Ask whenever you need a figure from the records.";
+  if (/bye|goodbye|night/.test(t)) return 'Fair winds. I\'m here when you need me.';
+  if (/how are you|how.?s it going|doing/.test(t)) return 'All well on the bridge. Ask me about a vessel, or how to find something in the app.';
+  return 'Hello. I can answer questions about your vessels from the records, help you find your way around the app, or give you a briefing \u2014 just ask.';
 }
 
-module.exports = { handleCaptain, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList };
+function examplePrompts() {
+  return ['Fuel consumption last month', 'Compliance balance this quarter', 'Off hire hours this year'];
+}
+
+function tagSource(result, source) {
+  result.source = result.source || source;
+  return result;
+}
+
+/** Exposed so the learned-term cache can be cleared when vocabulary changes or in tests. */
+function clearLearnedCache() { learnedCache.clear(); }
+
+module.exports = { route: route, clearLearnedCache: clearLearnedCache };

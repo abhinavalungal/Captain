@@ -53,12 +53,30 @@ const handler = require('../src/httpHandler');
     assert.strictEqual(r.statusCode, 401);
   });
 
-  await ta('handleCaptain: with a session but no database, a plain 503', async () => {
+  await ta('handleCaptain: a DATA question with no database is a plain 503', async () => {
     const env = { CAPTAIN_DEV_SESSION: '1' };
     const token = Buffer.from(JSON.stringify({ sub: 'x', departments: ['Emission'] })).toString('base64');
-    const r = await handler.handleCaptain({ method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ text: 'hi' }), env });
+    const r = await handler.handleCaptain({ method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ text: 'shaft power yesterday' }), env });
     assert.strictEqual(r.statusCode, 503);
     assert.ok(/not configured/.test(JSON.parse(r.body).text));
+  });
+
+  await ta('handleCaptain: a GREETING with no database is answered normally (200)', async () => {
+    const env = { CAPTAIN_DEV_SESSION: '1', CAPTAIN_ENABLE_LLM: '0' };
+    const token = Buffer.from(JSON.stringify({ sub: 'x', departments: ['Emission'] })).toString('base64');
+    const r = await handler.handleCaptain({ method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ text: 'hi' }), env });
+    assert.strictEqual(r.statusCode, 200);
+    const b = JSON.parse(r.body);
+    assert.strictEqual(b.status, 'answer');
+    assert.ok(!/database/.test(b.text), 'a greeting must not mention the database at all: ' + b.text);
+  });
+
+  await ta('handleCaptain: an APP question with no database is answered from the guide (200)', async () => {
+    const env = { CAPTAIN_DEV_SESSION: '1', CAPTAIN_ENABLE_LLM: '0' };
+    const token = Buffer.from(JSON.stringify({ sub: 'x', departments: ['Emission'] })).toString('base64');
+    const r = await handler.handleCaptain({ method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ text: 'how do I export a report?' }), env });
+    assert.strictEqual(r.statusCode, 200);
+    assert.strictEqual(JSON.parse(r.body).source, 'guide');
   });
 
   await ta('handleSync: wrong or missing key is 401, no partial run', async () => {

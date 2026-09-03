@@ -526,4 +526,36 @@ function priorPeriod(range) {
   return dates.makeRange(start, end, { label: `${dates.humanDate(start)} to ${dates.humanDate(end)}` });
 }
 
-module.exports = { parse, buildMetricIndex, detectAggregation, defaultAggregation, priorPeriod, extractComparisonRanges };
+/**
+ * Decide, WITHOUT touching the database, whether a message is asking for
+ * vessel data. The router uses this to avoid opening a connection for
+ * greetings, app-navigation questions and small talk.
+ *
+ *   'help'  — asks what Captain can do
+ *   'teach' — "X means Y" vocabulary
+ *   'data'  — names a metric (or is an "analyse my vessel over <period>"
+ *             overview), so it needs the records
+ *   'other' — none of the above; guide or companion territory
+ *
+ * `learned` is optional. When the router has learned mappings available it
+ * passes them in so an organisation's own vocabulary is recognised as data;
+ * without them the check still works on the built-in aliases.
+ */
+function classify(text, learned = [], now) {
+  const raw = String(text || '').trim();
+  if (!raw) return 'other';
+  if (HELP_RE.test(raw)) return 'help';
+  for (const re of TEACH_PATTERNS) if (re.test(raw)) return 'teach';
+
+  const index = buildMetricIndex(learned || []);
+  if (findAliasMatches(raw, index).length) return 'data';
+
+  const lower = ` ${raw.toLowerCase().replace(/\s+/g, ' ')} `;
+  if (detectAggregation(lower) === 'summary') {
+    const r = dates.resolveTimeRange(raw, now ? new Date(now) : new Date());
+    if (r && !r.needsDate) return 'data';
+  }
+  return 'other';
+}
+
+module.exports = { parse, classify, buildMetricIndex, detectAggregation, defaultAggregation, priorPeriod, extractComparisonRanges };

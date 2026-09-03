@@ -123,8 +123,14 @@ function scoreAll(text) {
  */
 function matchGuide(text) {
   const ranked = scoreAll(text);
-  if (!ranked.length || ranked[0].score < 1) return null;
+  if (!ranked.length) return null;
+  // A short question can match on one solid word ("export report"). A long
+  // one needs more than one overlapping word, or a single generic word like
+  // "last" would claim sentences that have nothing to do with the app.
+  const contentWords = tokenize(text).length;
+  const need = contentWords >= 4 ? 2 : 1;
   const [top, second] = ranked;
+  if (top.score < need) return null;
   if (second && second.score >= top.score - 0.4) return null;
   return top.g;
 }
