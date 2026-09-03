@@ -42,6 +42,7 @@ const { METRICS } = require('./config');
 
 const DB_NOT_CONFIGURED = 'My database connection is not configured yet, so I cannot read vessel records. I can still help with the app, or just chat.';
 const DB_UNREACHABLE = 'I cannot reach the vessel database right now, so I cannot look that up. Nothing was changed \u2014 try again in a moment. I can still help with the app in the meantime.';
+const QUERY_FAILED = 'That lookup did not go through \u2014 nothing was changed. It might be a schema mismatch on my side rather than your question; try rephrasing, or ask me to check a different vessel or period.';
 
 // Learned vocabulary per organisation, cached briefly so that classifying a
 // greeting does not cost a query every time. One indexed SELECT per org per
@@ -307,7 +308,16 @@ async function withDb(getDb, fn) {
   if (!client) {
     return { status: 'error', source: 'router', reason: 'db_not_configured', text: DB_NOT_CONFIGURED };
   }
-  return fn(client);
+  // A successful CONNECTION does not mean the QUERY will succeed - a missing
+  // view, a renamed column, a statement timeout, or a genuine Postgres error
+  // all throw from here. Previously this was unguarded and escaped all the way
+  // to httpHandler's generic 500, which is exactly the failure this catches.
+  try {
+    return await fn(client);
+  } catch (err) {
+    console.error('captain: query failed', err);
+    return { status: 'error', source: 'router', reason: 'query_failed', text: QUERY_FAILED, error: String((err && err.message) || err).slice(0, 300) };
+  }
 }
 
 /** Cached learned terms if fresh, without touching the database. */

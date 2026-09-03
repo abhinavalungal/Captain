@@ -183,7 +183,11 @@ async function handleCaptain(req) {
         session,
         pending: payload.pending || null,
         now: new Date(),
-        history: Array.isArray(payload.history) ? payload.history.slice(-6) : null,
+        // History arrives from the browser; trust nothing about its shape.
+        history: Array.isArray(payload.history)
+          ? payload.history.filter((h) => h && typeof h === 'object').slice(-6)
+              .map((h) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', text: String(h.text || '').slice(0, 500) }))
+          : null,
         context: payload.context && typeof payload.context === 'object'
           ? { vesselId: payload.context.vesselId != null ? String(payload.context.vesselId).slice(0, 40) : null,
               vesselName: payload.context.vesselName != null ? String(payload.context.vesselName).slice(0, 80) : null,
@@ -203,9 +207,18 @@ async function handleCaptain(req) {
       delete out.provenance.table;
       delete out.provenance.column;
     }
+    // Diagnostic detail (raw Postgres/provider error text) is for the server
+    // log, never the browser - it can name real table/column names or provider
+    // internals. Every code path that attaches `.error` already logs its own
+    // context; this is the one place all of them funnel through before the
+    // response leaves the server, so it is caught here regardless of source.
+    if (out.error) {
+      console.error('captain: error surfaced to user -', out.source || 'unknown', out.reason || '', '-', out.error);
+      delete out.error;
+    }
     // A database problem is reported as 503 so monitoring can see it, but only
     // for the message that actually needed the database.
-    const status = out.status === 'error' && /^db_/.test(out.reason || '') ? 503 : 200;
+    const status = out.status === 'error' && /^db_|^query_failed$/.test(out.reason || '') ? 503 : 200;
     return reply(status, out);
   } catch (err) {
     console.error('captain: query failed', err);
