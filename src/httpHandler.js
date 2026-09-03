@@ -4,7 +4,34 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/captain (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const CAPTAIN_BUILD = '2026-09-04.4';
+const CAPTAIN_BUILD = '2026-09-04.5';
+
+// Last few server-side errors, kept in memory (this process only). Exposed in
+// the health JSON ONLY in prototype auth mode (CAPTAIN_DEV_SESSION=1), which is
+// already a dev-only configuration. Secrets are stripped before storing.
+const RECENT_ERRORS = [];
+function scrubSecrets(text) {
+  return String(text || '')
+    .replace(/postgres(?:ql)?:\/\/[^\s'"]+/gi, 'postgresql://<redacted>')
+    .replace(/https?:\/\/[^\s'"]+/gi, '<url>')
+    .replace(/(password|api[_-]?key|authorization|bearer)\s*[:=]?\s*\S+/gi, '$1 <redacted>')
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-<redacted>')
+    .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '<jwt>');
+}
+function recordError(where, err, extra) {
+  try {
+    const e = err || {};
+    RECENT_ERRORS.unshift(Object.assign({
+      at: new Date().toISOString(),
+      where: where,
+      name: String(e.name || 'Error'),
+      code: e.code != null ? String(e.code) : undefined,
+      message: scrubSecrets(e.message || e).slice(0, 300),
+      stack: scrubSecrets(String(e.stack || '')).split('\n').slice(0, 8).map((l) => l.trim()).join(' | ').slice(0, 900),
+    }, extra || {}));
+    if (RECENT_ERRORS.length > 10) RECENT_ERRORS.length = 10;
+  } catch (_) { /* never let diagnostics break a request */ }
+}
 const router = require('./router');
 const { LIMITS, METRICS, SOURCES } = require('./config');
 const { readEnv: llmConfig } = require('./companion_src');
@@ -244,6 +271,10 @@ function health(env) {
     sources: Object.values(SOURCES).map((s) => s.description),
     metrics: METRICS.filter((m) => !m.finerVersionOf).length,
     allowedOrigins: allowedOriginsList(env),
+    mode: String(env.CAPTAIN_MODE || 'router'),
+    diagnostics: diagnosticsOn(env),
+    node: process.version,
+    recentErrors: env.CAPTAIN_DEV_SESSION === '1' ? RECENT_ERRORS : undefined,
   };
 }
 
@@ -291,6 +322,7 @@ async function handleCaptain(req) {
     } catch (err) {
       if (!(err && err.code === 'DB_NOT_CONFIGURED')) {
         console.error('captain: database connect failed', err);
+        recordError('database connect', err);
         const d = classifyDbError(err);
         const e = (err && typeof err === 'object') ? err : new Error(String(err));
         e.captainCode = d.code;     // never carries secrets
@@ -342,6 +374,7 @@ async function handleCaptain(req) {
     // response leaves the server, so it is caught here regardless of source.
     if (out.error) {
       console.error('captain: error surfaced to user -', out.source || 'unknown', out.reason || '', '-', out.error);
+      recordError('router:' + (out.reason || out.source || ''), { name: 'Error', message: out.error });
       delete out.error;
     }
     if (out.status === 'error') {
@@ -366,6 +399,7 @@ async function handleCaptain(req) {
     return reply(status, out);
   } catch (err) {
     console.error('captain: query failed', err);
+    recordError('handleCaptain catch-all', err, { text: String(text || '').slice(0, 80) });
     // The error's class/code is safe to expose and is often all that is needed
     // to diagnose from a screenshot; the message itself stays in the log.
     return reply(500, {

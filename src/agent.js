@@ -43,7 +43,7 @@ const { containsStatedFigure } = require('./companion_src');
 const { formatNow } = require('./instant_src');
 const { METRICS } = require('./config');
 
-const AGENT_BUILD = '2026-09-04.4';
+const AGENT_BUILD = '2026-09-04.5';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
