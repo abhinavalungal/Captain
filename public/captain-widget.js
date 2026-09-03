@@ -991,6 +991,11 @@
     if (data.metrics) card.appendChild(renderCatalogue(data));
 
     if (data.interpreted) card.appendChild(el('p', 'subject', 'Read as: \u201c' + data.interpreted + '\u201d'));
+    // Server-side failures carry a build stamp and an error class. Showing them
+    // small under the card means a screenshot is enough to diagnose.
+    if (data.status === 'error' && (data.code || data.build)) {
+      card.appendChild(el('p', 'subject', [data.code, data.build ? 'build ' + data.build : null].filter(Boolean).join(' \u00b7 ')));
+    }
     if (data.footnote) card.appendChild(el('p', 'subject', data.footnote));
     if (data.note) card.appendChild(el('div', 'caution', data.note));
     if (data.truncated) card.appendChild(el('div', 'caution hard', 'Only the first ' + data.rows.length + ' readings are shown. Narrow the period to see the rest.'));

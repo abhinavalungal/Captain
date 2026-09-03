@@ -1,6 +1,10 @@
 'use strict';
 
 const { Pool } = require('pg');
+
+// Bump on every delivery. Shows up in GET /api/captain (health) and in every
+// error body, so a screenshot alone tells us which build is actually running.
+const CAPTAIN_BUILD = '2026-09-04.1';
 const router = require('./router');
 const { LIMITS, METRICS, SOURCES } = require('./config');
 const { readEnv: llmConfig } = require('./companion_src');
@@ -28,6 +32,12 @@ function sslFor(env) {
   return env.CAPTAIN_PG_SSL === 'false' ? false : { rejectUnauthorized: false };
 }
 
+/** How long to wait for a TCP+TLS connection before giving up (default 8s). */
+function connectTimeoutMs(env) {
+  const n = parseInt(env.CAPTAIN_PG_CONNECT_TIMEOUT_MS || '8000', 10);
+  return Number.isFinite(n) && n > 0 ? n : 8000;
+}
+
 function pools(env) {
   const key = (env.CAPTAIN_READ_URL || '') + '|' + (env.CAPTAIN_WRITE_URL || '');
   if (key !== poolEnvKey) { readPool = null; writePool = null; poolEnvKey = key; }
@@ -36,6 +46,7 @@ function pools(env) {
       connectionString: env.CAPTAIN_WRITE_URL,
       max: 2,
       idleTimeoutMillis: 10000,
+      connectionTimeoutMillis: connectTimeoutMs(env),
       statement_timeout: 5000,
       ssl: sslFor(env),
     });
@@ -50,6 +61,10 @@ function pools(env) {
       connectionString: env.CAPTAIN_READ_URL,
       max: 3,
       idleTimeoutMillis: 10000,
+      // pg's default is 0 = wait forever. Against a host that silently drops
+      // packets (an IPv6-only endpoint from an IPv4 network, a firewall, a
+      // wrong region) the request would hang until the platform killed it.
+      connectionTimeoutMillis: connectTimeoutMs(env),
       statement_timeout: LIMITS.statementTimeoutMs,
       ssl: sslFor(env),
     });
@@ -150,6 +165,7 @@ function health(env) {
   return {
     status: 'ok',
     service: 'captain',
+    build: CAPTAIN_BUILD,
     database: !!env.CAPTAIN_READ_URL,
     writer: !!env.CAPTAIN_WRITE_URL,
     auth: env.CAPTAIN_DEV_SESSION === '1' ? 'prototype' : 'production',
@@ -254,7 +270,14 @@ async function handleCaptain(req) {
     return reply(status, out);
   } catch (err) {
     console.error('captain: query failed', err);
-    return reply(500, { status: 'error', text: 'Something went wrong on my side. Nothing was changed \u2014 please try again in a moment.' });
+    // The error's class/code is safe to expose and is often all that is needed
+    // to diagnose from a screenshot; the message itself stays in the log.
+    return reply(500, {
+      status: 'error',
+      text: 'Something went wrong on my side. Nothing was changed \u2014 please try again in a moment.',
+      build: CAPTAIN_BUILD,
+      code: String((err && (err.code || err.name)) || 'Error').slice(0, 40),
+    });
   } finally {
     if (client) client.release();
   }
@@ -303,4 +326,4 @@ function lowercaseKeys(obj) {
   return out;
 }
 
-module.exports = { handleCaptain, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList };
+module.exports = { handleCaptain, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList, CAPTAIN_BUILD };
