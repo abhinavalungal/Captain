@@ -822,14 +822,21 @@
     if (typeof this.opts.ask === 'function') return Promise.resolve(this.opts.ask(text, pending, history, context));
 
     var headers = { 'Content-Type': 'application/json' };
-    var token = typeof this.opts.getToken === 'function' ? this.opts.getToken() : null;
-    if (token) headers.Authorization = 'Bearer ' + token;
+    var self = this;
+    // getToken may be synchronous or return a Promise (e.g. an async call to
+    // the host app's auth). Either way the resolved string is what we send.
+    var tokenP;
+    try { tokenP = Promise.resolve(typeof this.opts.getToken === 'function' ? this.opts.getToken() : null); }
+    catch (e) { tokenP = Promise.resolve(null); }
 
-    return fetch(this.opts.endpoint, {
-      method: 'POST',
-      headers: headers,
-      credentials: 'omit',
-      body: JSON.stringify({ text: text, pending: pending, history: history, context: context })
+    return tokenP.then(function (token) {
+      if (token && typeof token === 'string') headers.Authorization = 'Bearer ' + token;
+      return fetch(self.opts.endpoint, {
+        method: 'POST',
+        headers: headers,
+        credentials: 'omit',
+        body: JSON.stringify({ text: text, pending: pending, history: history, context: context })
+      });
     }).then(function (res) {
       return res.json().then(function (data) {
         if (res.status === 401) return { status: 'error', text: 'Your session has expired. Sign in again and ask me once more.' };
