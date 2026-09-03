@@ -3,7 +3,7 @@
 const { Pool } = require('pg');
 const router = require('./router');
 const { LIMITS, METRICS, SOURCES } = require('./config');
-const { readEnv: llmConfig } = require('./companion');
+const { readEnv: llmConfig } = require('./companion_src');
 const { sync } = require('./integrations/sync');
 
 /**
