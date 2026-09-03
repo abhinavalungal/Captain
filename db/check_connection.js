@@ -19,7 +19,10 @@ if (!url) {
 }
 
 (async () => {
-  const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: true } });
+  // Supabase's pooler presents a certificate chain from its own CA, which is
+  // not in every OS trust store (Windows especially). Captain's server accepts
+  // it the same way (see sslFor() in src/httpHandler.js).
+  const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
   try {
     await client.connect();
     const now = await client.query('select now()');
