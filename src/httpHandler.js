@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/captain (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const CAPTAIN_BUILD = '2026-09-04.2';
+const CAPTAIN_BUILD = '2026-09-04.3';
 const router = require('./router');
 const { LIMITS, METRICS, SOURCES } = require('./config');
 const { readEnv: llmConfig } = require('./companion_src');
@@ -33,6 +33,58 @@ function sslFor(env) {
 }
 
 /** How long to wait for a TCP+TLS connection before giving up (default 8s). */
+/**
+ * Turn a raw pg/network error into a short operator-facing cause. Each hint
+ * names what to change; none includes the connection string, password, or
+ * the raw message. Shown in the widget while CAPTAIN_DIAGNOSTICS is not '0'.
+ */
+function classifyDbError(err) {
+  const msg = String((err && err.message) || '');
+  const code = String((err && err.code) || '');
+  if (code === '28P01' || /password authentication failed/i.test(msg)) {
+    return { code: 'DB_AUTH', hint: 'The database rejected the password. CAPTAIN_READ_URL still has a wrong or placeholder password - replace [YOUR-PASSWORD] with the real one and URL-encode special characters (@ becomes %40).' };
+  }
+  if (/tenant or user not found/i.test(msg)) {
+    return { code: 'DB_TENANT', hint: 'The pooler could not find the project. With the pooler host the username must be postgres.<project-ref>, not plain postgres.' };
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return { code: 'DB_DNS', hint: 'The database hostname could not be resolved - check the host part of CAPTAIN_READ_URL for typos.' };
+  }
+  if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') {
+    return { code: 'DB_NO_ROUTE', hint: 'No network route to the database. db.<ref>.supabase.co is IPv6-only; use the pooler host aws-0-<region>.pooler.supabase.com instead.' };
+  }
+  if (/unsupported startup parameter/i.test(msg)) {
+
+    return { code: 'DB_POOLER_PARAM', hint: 'The pooler rejected a startup parameter. This build no longer sends one; if you still see this, use the session pooler (port 5432).' };
+
+  }
+
+  if (code === 'ETIMEDOUT' || /connection (terminated due to connection )?timeout|timed out/i.test(msg)) {
+    return { code: 'DB_TIMEOUT', hint: 'The connection attempt timed out. Usually an IPv6-only host reached from an IPv4 network, or a firewall - use the pooler connection string.' };
+  }
+  if (code === 'ECONNREFUSED') {
+    return { code: 'DB_REFUSED', hint: 'Connection refused - check the port. Pooler: 6543 (transaction) or 5432 (session).' };
+  }
+  if (/max client connections/i.test(msg)) {
+    return { code: 'DB_POOL_FULL', hint: 'The pooler has no free client slots right now. Retry shortly; if persistent, raise the pool size in Supabase.' };
+  }
+  if (/certificate|ssl|tls/i.test(msg)) {
+    return { code: 'DB_TLS', hint: 'TLS problem talking to the database. Leave CAPTAIN_PG_SSL unset (the default accepts Supabase certificates).' };
+  }
+  if (code === '3D000') {
+    return { code: 'DB_NAME', hint: 'The database name in CAPTAIN_READ_URL does not exist (Supabase projects use "postgres").' };
+  }
+  if (code === '28000') {
+    return { code: 'DB_ROLE', hint: 'That database role is not allowed to connect - check the username in CAPTAIN_READ_URL.' };
+  }
+  const safe = msg.replace(/https?:\/\/\S+/g, '<url>').replace(/password.*/i, 'password ...').slice(0, 120);
+  return { code: code || 'DB_ERROR', hint: safe || 'Unclassified database error - see server log.' };
+}
+
+function diagnosticsOn(env) {
+  return String(env.CAPTAIN_DIAGNOSTICS || '1') !== '0';
+}
+
 function typeErrorDetail(err) {
   const msg = String(err.message || '').replace(/https?:\/\/\S+/g, '<url>').slice(0, 160);
   const frame = String(err.stack || '').split('\n').map((l) => l.trim()).find((l) => /^at /.test(l)) || '';
@@ -54,7 +106,7 @@ function pools(env) {
       max: 2,
       idleTimeoutMillis: 10000,
       connectionTimeoutMillis: connectTimeoutMs(env),
-      statement_timeout: 5000,
+      query_timeout: 5000,
       ssl: sslFor(env),
     });
   }
@@ -72,7 +124,11 @@ function pools(env) {
       // packets (an IPv6-only endpoint from an IPv4 network, a firewall, a
       // wrong region) the request would hang until the platform killed it.
       connectionTimeoutMillis: connectTimeoutMs(env),
-      statement_timeout: LIMITS.statementTimeoutMs,
+      // query_timeout is enforced CLIENT-side by node-postgres. statement_timeout
+      // would be sent as a server startup parameter, which connection poolers
+      // (Supavisor transaction mode, PgBouncer) can reject with
+      // "unsupported startup parameter" - breaking every connection.
+      query_timeout: LIMITS.statementTimeoutMs,
       ssl: sslFor(env),
     });
   }
@@ -233,6 +289,9 @@ async function handleCaptain(req) {
       client = await p.readPool.connect();
     } catch (err) {
       console.error('captain: database connect failed', err);
+      const d = classifyDbError(err);
+      err.captainCode = d.code;     // router surfaces these; they never carry secrets
+      err.captainHint = d.hint;
       throw err;                    // router turns this into a plain answer
     }
     return client;
@@ -279,6 +338,10 @@ async function handleCaptain(req) {
       console.error('captain: error surfaced to user -', out.source || 'unknown', out.reason || '', '-', out.error);
       delete out.error;
     }
+    if (out.status === 'error') {
+      out.build = CAPTAIN_BUILD;
+      if (!diagnosticsOn(env)) { delete out.detail; delete out.code; }
+    }
     // A database problem is reported as 503 so monitoring can see it, but only
     // for the message that actually needed the database.
     const status = out.status === 'error' && /^db_|^query_failed$/.test(out.reason || '') ? 503 : 200;
@@ -296,7 +359,7 @@ async function handleCaptain(req) {
       // ("x is not a function", "cannot read properties of undefined") never
       // carries user data or credentials, and the top stack frame (file:line,
       // basename only) is exactly what is needed to fix it from a screenshot.
-      detail: err instanceof TypeError ? typeErrorDetail(err) : undefined,
+      detail: (err instanceof TypeError && diagnosticsOn(env)) ? typeErrorDetail(err) : undefined,
     });
   } finally {
     if (client) client.release();
@@ -346,4 +409,4 @@ function lowercaseKeys(obj) {
   return out;
 }
 
-module.exports = { handleCaptain, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList, CAPTAIN_BUILD };
+module.exports = { handleCaptain, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList, classifyDbError, CAPTAIN_BUILD };

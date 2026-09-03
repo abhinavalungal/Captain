@@ -38,7 +38,7 @@ const { answerInstant, formatNow } = require('./instant_src');
 const identity = require('./identity');
 const agent = require('./agent');
 
-const ROUTER_BUILD = '2026-09-04.2';
+const ROUTER_BUILD = '2026-09-04.3';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -305,7 +305,14 @@ async function withDb(getDb, fn) {
     client = await getDb();
   } catch (err) {
     const notConfigured = err && err.code === 'DB_NOT_CONFIGURED';
-    return { status: 'error', source: 'router', reason: notConfigured ? 'db_not_configured' : 'db_unreachable', text: notConfigured ? DB_NOT_CONFIGURED : DB_UNREACHABLE };
+    return {
+      status: 'error', source: 'router',
+      reason: notConfigured ? 'db_not_configured' : 'db_unreachable',
+      text: notConfigured ? DB_NOT_CONFIGURED : DB_UNREACHABLE,
+      // Cause classification from the HTTP layer (never the raw message).
+      code: notConfigured ? undefined : (err && err.captainCode) || undefined,
+      detail: notConfigured ? undefined : (err && err.captainHint) || undefined,
+    };
   }
   if (!client) {
     return { status: 'error', source: 'router', reason: 'db_not_configured', text: DB_NOT_CONFIGURED };
@@ -318,7 +325,13 @@ async function withDb(getDb, fn) {
     return await fn(client);
   } catch (err) {
     console.error('captain: query failed', err);
-    return { status: 'error', source: 'router', reason: 'query_failed', text: QUERY_FAILED, error: String((err && err.message) || err).slice(0, 300) };
+    const missing = err && err.code === '42P01' ? String(err.message || '').match(/relation "([^"]+)" does not exist/) : null;
+    return {
+      status: 'error', source: 'router', reason: 'query_failed', text: QUERY_FAILED,
+      code: err && err.code ? 'PG_' + err.code : undefined,
+      detail: missing ? 'Table or view "' + missing[1] + '" does not exist - run the matching db/*.sql migration.' : undefined,
+      error: String((err && err.message) || err).slice(0, 300),
+    };
   }
 }
 
