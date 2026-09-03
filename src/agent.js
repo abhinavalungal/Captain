@@ -43,7 +43,7 @@ const { containsStatedFigure } = require('./companion_src');
 const { formatNow } = require('./instant_src');
 const { METRICS } = require('./config');
 
-const AGENT_BUILD = '2026-09-04.6';
+const AGENT_BUILD = '2026-09-04.7';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -328,6 +328,7 @@ function readEnv(env) {
       ? parseFloat(env.CAPTAIN_AGENT_TEMPERATURE) : DEFAULTS.temperature,
     // Reasoning models burn seconds before speaking. Off unless asked for.
     reasoningOff: (env.CAPTAIN_LLM_REASONING || 'off').toLowerCase() !== 'on',
+    reasoningEffort: (env.CAPTAIN_LLM_REASONING_EFFORT || 'low').toLowerCase(),
     referer: env.CAPTAIN_LLM_REFERER || null,
     title: env.CAPTAIN_LLM_TITLE || 'Captain Nav',
   };
@@ -349,7 +350,7 @@ function buildBody(cfg, messages) {
     temperature: cfg.temperature,
     stream: false,
   };
-  if (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) body.reasoning = { enabled: false };
+  if (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) body.reasoning = { effort: cfg.reasoningEffort || 'low', exclude: true };
   return body;
 }
 
@@ -374,9 +375,17 @@ async function callModel(cfg, messages, fetchImpl, signal) {
   if (!res.ok) {
     let detail = '';
     try { detail = await res.text(); } catch (_) { /* ignore */ }
-    const err = new Error('HTTP ' + res.status + ': ' + String(detail).slice(0, 200));
-    err.httpStatus = res.status;
-    throw err;
+    // Provider rejects the reasoning field -> retry once without it.
+    if (res.status === 400 && /reasoning/i.test(String(detail))) {
+      const body2 = buildBody(cfg, messages); delete body2.reasoning;
+      res = await fetchImpl(cfg.url + '/v1/chat/completions', { method: 'POST', headers: headersFor(cfg), body: JSON.stringify(body2), signal: signal });
+      if (!res.ok) { try { detail = await res.text(); } catch (_) { /* ignore */ } }
+    }
+    if (!res.ok) {
+      const err = new Error('HTTP ' + res.status + ': ' + String(detail).slice(0, 200));
+      err.httpStatus = res.status;
+      throw err;
+    }
   }
   const data = await res.json();
   const choice = data && data.choices && data.choices[0];

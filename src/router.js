@@ -38,7 +38,7 @@ const { answerInstant, formatNow } = require('./instant_src');
 const identity = require('./identity');
 const agent = require('./agent');
 
-const ROUTER_BUILD = '2026-09-04.6';
+const ROUTER_BUILD = '2026-09-04.7';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -278,6 +278,9 @@ async function companionReply(text, input, opts, env) {
     chart: convo.chart || undefined,
     blocked: convo.blocked || undefined,
     options: convo.blocked ? examplePrompts() : undefined,
+    // Provider failure detail (HTTP status, timeout). The HTTP layer logs it,
+    // records it for /api/captain diagnostics, and strips it before replying.
+    error: convo.error ? 'companion: ' + String(convo.error).slice(0, 200) : undefined,
   };
 }
 

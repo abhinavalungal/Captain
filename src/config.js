@@ -198,6 +198,10 @@ const METRIC_GROUPS = [
   { term: 'emissions', metrics: ['co2', 'leg_co2'] },
   { term: 'co2', metrics: ['co2', 'leg_co2'] },
   { term: 'distance', metrics: ['distance', 'leg_distance'] },
+  // Three tables carry a compliance balance. "CB" alone is ambiguous between
+  // them, so Captain asks which one rather than picking.
+  { term: 'cb', metrics: ['gross_cb', 'dnv_compliance_balance', 'compliance_balance'] },
+  { term: 'penalty', metrics: ['fueleu_penalty', 'dnv_compliance_balance'] },
 ];
 
 /** Runtime limits. */

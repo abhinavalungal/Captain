@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/captain (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const CAPTAIN_BUILD = '2026-09-04.6';
+const CAPTAIN_BUILD = '2026-09-04.7';
 
 // Fingerprint every source file so /api/captain shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
@@ -101,9 +101,12 @@ function classifyDbError(err) {
   if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') {
     return { code: 'DB_NO_ROUTE', hint: 'No network route to the database. db.<ref>.supabase.co is IPv6-only; use the pooler host aws-0-<region>.pooler.supabase.com instead.' };
   }
-  if (/unsupported startup parameter/i.test(msg)) {
-    return { code: 'DB_POOLER_PARAM', hint: 'The pooler rejected a startup parameter. This build no longer sends one; if you still see this, use the session pooler (port 5432).' };
-  }
+  if (/unsupported startup parameter/i.test(msg)) {
+
+    return { code: 'DB_POOLER_PARAM', hint: 'The pooler rejected a startup parameter. This build no longer sends one; if you still see this, use the session pooler (port 5432).' };
+
+  }
+
   if (code === 'ETIMEDOUT' || /connection (terminated due to connection )?timeout|timed out/i.test(msg)) {
     return { code: 'DB_TIMEOUT', hint: 'The connection attempt timed out. Usually an IPv6-only host reached from an IPv4 network, or a firewall - use the pooler connection string.' };
   }

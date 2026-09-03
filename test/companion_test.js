@@ -250,10 +250,10 @@ t('speed: light messages are told to answer briefly', () => {
   assert.ok(!/answer it directly in one or two sentences/.test(systemPrompt({ appName: 'X', guideSnippets: [], light: false })));
 });
 
-t('speed: reasoning is off by default and OpenRouter is told so; other servers are not sent unknown fields', () => {
+t('speed: OpenRouter is asked for LOW-effort reasoning (not "off", which mandatory-reasoning models reject); other servers are not sent unknown fields', () => {
   const cfgOR = readEnv(Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat', CAPTAIN_LLM_URL: 'https://openrouter.ai/api' }));
   const reqOR = buildRequest(cfgOR, 'SYS', [{ role: 'user', content: 'hi' }]);
-  assert.deepStrictEqual(reqOR.body.reasoning, { enabled: false });
+  assert.deepStrictEqual(reqOR.body.reasoning, { effort: 'low', exclude: true });
   const cfgV = readEnv(Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat', CAPTAIN_LLM_URL: 'http://vllm.test:8000' }));
   assert.strictEqual(buildRequest(cfgV, 'SYS', []).body.reasoning, undefined);
   const cfgOn = readEnv(Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat', CAPTAIN_LLM_URL: 'https://openrouter.ai/api', CAPTAIN_LLM_REASONING: 'on' }));

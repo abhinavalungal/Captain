@@ -32,13 +32,19 @@ const DEFAULTS = {
   provider: 'ollama',
   url: 'http://127.0.0.1:11434',
   model: 'llama3.1:8b',
-  timeoutMs: 25000,
+  timeoutMs: 30000,
   maxTokens: 700,
   temperature: 0.4,
   // Light messages get a small, fast model, a tight token budget and a short
   // timeout — a quick question should never wait on a frontier model.
-  fastTimeoutMs: 8000,
+  fastTimeoutMs: 12000,
   fastMaxTokens: 220,
+  // Reasoning models: ask for the LOWEST effort rather than "off". Some models
+  // (e.g. GLM-5.3-flash on OpenRouter) have reasoning marked mandatory and
+  // default to MAX effort; "enabled: false" is rejected or ignored there and
+  // every reply then thinks for tens of seconds. "low" + "exclude" is honoured
+  // by both mandatory and optional reasoning models.
+  reasoningEffort: 'low',
 };
 
 /**
@@ -154,6 +160,7 @@ function readEnv(env) {
     // time for conversation and app help, so it is off by default. Set
     // CAPTAIN_LLM_REASONING=on to keep it.
     reasoningOff: (env.CAPTAIN_LLM_REASONING || 'off').toLowerCase() !== 'on',
+    reasoningEffort: (env.CAPTAIN_LLM_REASONING_EFFORT || DEFAULTS.reasoningEffort).toLowerCase(),
     // A second, smaller model for short questions. Falls back to the main
     // model if unset, so this is optional configuration, not required.
     fastModel: env.CAPTAIN_LLM_FAST_MODEL || null,
@@ -163,6 +170,20 @@ function readEnv(env) {
     // single biggest latency fix for a self-hosted setup.
     keepAlive: env.CAPTAIN_LLM_KEEP_ALIVE || '30m',
   };
+}
+
+/**
+ * OpenRouter's unified reasoning control. Low effort with the reasoning text
+ * excluded from the reply is the fastest setting that every reasoning model
+ * accepts — including ones where reasoning cannot be disabled at all.
+ */
+function reasoningDirective(cfg) {
+  return { effort: cfg.reasoningEffort || 'low', exclude: true };
+}
+
+/** True if a provider's 400 is complaining about the reasoning field itself. */
+function rejectsReasoning(status, detail) {
+  return status === 400 && /reasoning/i.test(String(detail || ''));
 }
 
 function buildRequest(cfg, system, messages, light) {
@@ -180,7 +201,7 @@ function buildRequest(cfg, system, messages, light) {
       // OpenRouter's unified switch for reasoning models. Other OpenAI-compatible
       // servers ignore unknown fields, but we only send it where it is known to
       // be understood, to avoid a strict server rejecting the request.
-      (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) ? { reasoning: { enabled: false } } : {}),
+      (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) ? { reasoning: reasoningDirective(cfg) } : {}),
       extract: function (data) {
         const c = data && data.choices && data.choices[0];
         return c && c.message && typeof c.message.content === 'string' ? c.message.content : '';
@@ -240,13 +261,28 @@ async function converse(text, opts) {
     if (timer) clearTimeout(timer);
     return { text: UNAVAILABLE, blocked: false, error: e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message, provider: cfg.provider, model: cfg.model };
   }
-  if (timer) clearTimeout(timer);
 
   if (!res.ok) {
     let detail = '';
     try { detail = await res.text(); } catch (_) { /* ignore */ }
-    return { text: UNAVAILABLE, blocked: false, error: 'HTTP ' + res.status + ': ' + detail.slice(0, 150), provider: cfg.provider, model: cfg.model };
+    // A provider that does not understand the reasoning field says so with a
+    // 400. Send the same request once more without it.
+    if (rejectsReasoning(res.status, detail) && req.body.reasoning) {
+      const body2 = Object.assign({}, req.body); delete body2.reasoning;
+      try {
+        res = await fetchImpl(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(body2), signal: ctrl ? ctrl.signal : undefined });
+      } catch (e) {
+        if (timer) clearTimeout(timer);
+        return { text: UNAVAILABLE, blocked: false, error: e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message, provider: cfg.provider, model: cfg.model };
+      }
+      if (!res.ok) { try { detail = await res.text(); } catch (_) { /* ignore */ } }
+    }
+    if (!res.ok) {
+      if (timer) clearTimeout(timer);
+      return { text: UNAVAILABLE, blocked: false, error: 'HTTP ' + res.status + ': ' + detail.slice(0, 150), provider: cfg.provider, model: cfg.model };
+    }
   }
+  if (timer) clearTimeout(timer);
 
   let data;
   try { data = await res.json(); } catch (_) { return { text: UNAVAILABLE, blocked: false, error: 'non-JSON response', provider: cfg.provider, model: cfg.model }; }
@@ -259,4 +295,4 @@ async function converse(text, opts) {
   return { text: parsed.text, chart: parsed.chart, blocked: false, provider: cfg.provider, model: cfg.model };
 }
 
-module.exports = { converse: converse, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
+module.exports = { converse: converse, reasoningDirective: reasoningDirective, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
