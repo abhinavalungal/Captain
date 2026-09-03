@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geo Monitor — Captain prototype</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%2316293D'/%3E%3Cpath d='M16 7v13M11 15q5 7 10 0M12 10h8' fill='none' stroke='%23C9A43E' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='5.5' r='1.6' fill='none' stroke='%23C9A43E' stroke-width='1.6'/%3E%3C/svg%3E">
+<style>
+/* ---------------------------------------------------------------------------
+   Prototype host page. Stands in for perform.geoserves.com/pages/ while
+   Captain is a prototype. Shares the widget's palette on purpose so the
+   two read as one product. No external assets; works offline.
+--------------------------------------------------------------------------- */
+:root{
+  --paper:#F3F6F6;--paper-2:#FFFFFF;--shallow:#D3E4E7;--shallow-deep:#B4D2D7;
+  --ink:#12232B;--ink-soft:#4A6069;--ink-faint:#8AA0A7;--rule:#C2D3D6;
+  --accent:#16293D;--accent-2:#1B3550;--gold:#C9A43E;--sea:#26697A;--magenta:#A81F73;
+  --ok:#2E7D5B;--warn:#B8860B;--off:#8AA0A7;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 var(--sans)}
+a{color:var(--sea)}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+/* app bar: the shape of a real fleet dashboard, so the corner widget has a home */
+.bar{background:linear-gradient(180deg,var(--accent-2),var(--accent));color:#fff;border-bottom:2px solid var(--gold)}
+.bar .in{max-width:1100px;margin:0 auto;padding:0 20px;height:56px;display:flex;align-items:center;gap:26px}
+.brand{font:600 17px/1 var(--sans);letter-spacing:.01em;color:#fff;text-decoration:none}
+.bar nav{display:flex;gap:18px;font-size:14px}
+.bar nav span{color:rgba(255,255,255,.7);padding:6px 0;border-bottom:2px solid transparent}
+.bar nav span.on{color:#fff;border-bottom-color:var(--gold)}
+.proto{margin-left:auto;font-size:12px;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.14);color:#fff}
+.who{display:flex;align-items:center;gap:8px;font-size:13px;color:rgba(255,255,255,.85)}
+.who select{font:inherit;font-size:13px;padding:5px 8px;border-radius:5px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);color:#fff}
+.who select option{color:var(--ink)}
+
+main{max-width:1100px;margin:0 auto;padding:36px 20px 96px}
+h1{font:400 34px/1.15 var(--serif);letter-spacing:-.01em;margin:0 0 10px;max-width:30ch}
+.lede{max-width:62ch;color:var(--ink-soft);margin:0 0 30px;font-size:16px}
+h2{font:600 16px/1.3 var(--sans);margin:44px 0 10px}
+p{max-width:66ch}
+
+/* the one bold element: a live connection readout */
+.readout{
+  display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--rule);
+  background:var(--paper-2);border-radius:8px;overflow:hidden;
+}
+.readout > div{padding:16px 18px;border-right:1px solid var(--rule)}
+.readout > div:last-child{border-right:0}
+.lamp{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink-soft)}
+.lamp i{width:10px;height:10px;border-radius:50%;background:var(--off);flex:none}
+.lamp.ok i{background:var(--ok);box-shadow:0 0 0 3px rgba(46,125,91,.18)}
+.lamp.warn i{background:var(--warn);box-shadow:0 0 0 3px rgba(184,134,11,.18)}
+.readout b{display:block;font:400 22px/1.2 var(--serif);margin-top:6px;color:var(--ink)}
+.readout small{display:block;color:var(--ink-faint);font-size:12px;margin-top:2px}
+.readout .checking b{color:var(--ink-faint)}
+
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px}
+button.act{font:inherit;font-size:14px;font-weight:600;padding:8px 14px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+button.act:hover{background:var(--accent-2)}
+button.quiet{font:inherit;font-size:13.5px;padding:7px 12px;border-radius:14px;border:1px solid var(--rule);background:var(--paper-2);color:var(--ink-soft);cursor:pointer}
+button.quiet:hover{border-color:var(--shallow-deep);color:var(--ink);background:var(--shallow)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
+input.txt{font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--rule);border-radius:6px;background:var(--paper-2);color:var(--ink);min-width:200px}
+
+.note{border-left:3px solid var(--gold);background:var(--paper-2);padding:10px 14px;border-radius:0 6px 6px 0;max-width:66ch;font-size:14px}
+.note.hard{border-left-color:var(--magenta)}
+
+pre.embed{
+  margin:12px 0 0;padding:16px 18px;background:#0F1E2E;color:#E6EDF1;border-radius:8px;
+  font-size:13px;line-height:1.55;overflow-x:auto;position:relative;white-space:pre;
+}
+pre.embed .c{color:#8FB4C7}
+pre.embed .s{color:#F1D58A}
+.copy{position:absolute;top:10px;right:10px;font:inherit;font-size:12px;padding:4px 9px;border-radius:5px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.08);color:#fff;cursor:pointer}
+.copy:hover{background:rgba(255,255,255,.16)}
+
+ol.steps{padding-left:22px;max-width:66ch}
+ol.steps li{margin:8px 0}
+ol.steps code{background:var(--shallow);padding:1px 5px;border-radius:3px;font-size:13px}
+
+@media (max-width:760px){
+  .readout{grid-template-columns:1fr 1fr}
+  .readout > div:nth-child(2){border-right:0}
+  .readout > div:nth-child(1),.readout > div:nth-child(2){border-bottom:1px solid var(--rule)}
+  .bar nav{display:none}
+  h1{font-size:28px}
+}
+@media (max-width:480px){.readout{grid-template-columns:1fr}.readout > div{border-right:0;border-bottom:1px solid var(--rule)}.readout > div:last-child{border-bottom:0}}
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="in">
+    <a class="brand" href="#">Geo Monitor</a>
+    <nav aria-label="Dashboard sections (placeholder)">
+      <span class="on">Fleet</span><span>Compliance</span><span>Voyages</span><span>Reports</span>
+    </nav>
+    <span class="proto">Captain prototype</span>
+    <label class="who">Department
+      <select id="dept" aria-label="Sign in as department">
+        <option>Emission</option><option>Performance</option><option>Pool</option><option>Unassigned</option>
+      </select>
+    </label>
+  </div>
+</header>
+
+<main>
+  <h1>Captain is live on this site. Your page is next.</h1>
+  <p class="lede">This page stands in for <code>perform.geoserves.com/pages/</code> while Captain is a prototype. The captain in the bottom-right corner is the real widget, served from this server, talking to the real backend. Moving him to your page later is one script tag, shown at the bottom.</p>
+
+  <div class="readout" id="readout" aria-live="polite">
+    <div class="checking"><span class="lamp"><i></i>Backend</span><b>Checking</b><small>&nbsp;</small></div>
+    <div class="checking"><span class="lamp"><i></i>Database</span><b>Checking</b><small>&nbsp;</small></div>
+    <div class="checking"><span class="lamp"><i></i>Companion model</span><b>Checking</b><small>&nbsp;</small></div>
+    <div class="checking"><span class="lamp"><i></i>Sign-in mode</span><b>Checking</b><small>&nbsp;</small></div>
+  </div>
+
+  <h2>Try it</h2>
+  <p>You are signed in as the <strong id="deptName">Emission</strong> department (change it in the top bar). Captain will only see that department's vessels, exactly as it will on your page.</p>
+  <div class="row">
+    <button class="act" id="open">Open Captain</button>
+    <button class="quiet" data-ask="Anything I should know?">Anything I should know?</button>
+    <button class="quiet" data-ask="Fuel consumption last month">Fuel consumption last month</button>
+    <button class="quiet" data-ask="How do I export a report?">How do I export a report?</button>
+  </div>
+  <div class="note" id="authNote" style="margin-top:16px;display:none"></div>
+
+  <h2>Following the page</h2>
+  <p>On a vessel's page your app will tell Captain which vessel is on screen, so "fuel consumption last month" needs no vessel name. Simulate that here:</p>
+  <div class="row">
+    <input class="txt" id="ctxImo" placeholder="IMO number, e.g. 9851701" inputmode="numeric" aria-label="Vessel IMO">
+    <input class="txt" id="ctxName" placeholder="Vessel name" aria-label="Vessel name">
+    <button class="act" id="ctxSet">Set as current vessel</button>
+    <button class="quiet" id="ctxClear">Leave vessel page</button>
+  </div>
+
+  <h2>Add Captain to perform.geoserves.com</h2>
+  <p>Paste this before <code>&lt;/body&gt;</code> on the page. The widget works out its own API address from where the script was loaded, so nothing else on your page needs configuring — it works the same regardless of what this is hosted on.</p>
+  <pre class="embed" id="embed"><button class="copy" id="copyEmbed" type="button">Copy</button></pre>
+
+  <p style="margin-top:22px">Then, on wherever this is deployed (its environment variables):</p>
+  <ol class="steps">
+    <li>Set <code>CAPTAIN_ALLOW_ORIGIN</code> to <code>https://perform.geoserves.com</code> so the browser is allowed to call Captain from your domain.</li>
+    <li>Replace <code>verifyToken()</code> in <code>src/httpHandler.js</code> with your real session check, and remove <code>CAPTAIN_DEV_SESSION</code>. The department dropdown on this page only works because prototype sign-in is on; on your page, <code>getToken</code> should return the user's real session token.</li>
+    <li>On vessel pages, call <code>Captain.setContext({ vesselId, vesselName })</code> when the page loads.</li>
+  </ol>
+  <div class="note hard" style="margin-top:14px">Prototype sign-in trusts whatever department the browser claims. It exists so this page can be demonstrated before real authentication is wired. It must be off on any site real users can reach.</div>
+</main>
+
+<script src="/captain-widget.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var origin = (window.Captain && window.Captain.scriptOrigin) || window.location.origin;
+  var api = origin + '/api/captain';
+
+  // --- prototype sign-in: an unsigned claims token, honoured only when the
+  //     backend runs with CAPTAIN_DEV_SESSION=1. Nothing is stored.
+  var dept = document.getElementById('dept');
+  function token() {
+    var claims = { sub: 'prototype-user', org: 'geoserves', departments: [dept.value] };
+    return btoa(unescape(encodeURIComponent(JSON.stringify(claims))));
+  }
+  dept.addEventListener('change', function () {
+    document.getElementById('deptName').textContent = dept.value;
+  });
+
+  Captain.init({
+    getToken: token,
+    theme: 'light',
+    nudgeText: 'Ask me about your fleet'
+  });
+
+  document.getElementById('open').addEventListener('click', function () { Captain.open(); });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ask]'), function (b) {
+    b.addEventListener('click', function () { Captain.ask(b.getAttribute('data-ask')); });
+  });
+
+  // --- page context demo
+  document.getElementById('ctxSet').addEventListener('click', function () {
+    var imo = document.getElementById('ctxImo').value.trim();
+    var name = document.getElementById('ctxName').value.trim();
+    if (!imo && !name) return;
+    Captain.setContext({ vesselId: imo || null, vesselName: name || imo, page: 'vessel' });
+    Captain.open();
+  });
+  document.getElementById('ctxClear').addEventListener('click', function () { Captain.clearContext(); });
+
+  // --- embed snippet for the real page, with this site's origin filled in
+  var pre = document.getElementById('embed');
+  var segs = [
+    ['c', '<!-- Captain -->\n'],
+    ['t', '<script src="'], ['s', origin + '/captain-widget.js'], ['t', '"><\/script>\n'],
+    ['t', '<script>\n  Captain.init({\n    getToken: function () { return window.SESSION_TOKEN; },  '],
+    ['c', '// your real session token\n'],
+    ['t', '    theme: '], ['s', "'auto'"], ['t', ',\n    brand: { accent: '], ['s', "'#16293D'"], ['t', ' }\n  });\n<\/script>']
+  ];
+  var plain = '';
+  segs.forEach(function (seg) {
+    var n = seg[0] === 't'
+      ? document.createTextNode(seg[1])
+      : Object.assign(document.createElement('span'), { className: seg[0], textContent: seg[1] });
+    pre.appendChild(n);
+    plain += seg[1];
+  });
+  document.getElementById('copyEmbed').addEventListener('click', function () {
+    var b = this;
+    var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1400); };
+    if (navigator.clipboard) navigator.clipboard.writeText(plain).then(done, done); else done();
+  });
+
+  // --- live readout from the health endpoint
+  var cells = document.querySelectorAll('#readout > div');
+  function set(i, state, big, small) {
+    var c = cells[i];
+    c.className = '';
+    c.querySelector('.lamp').className = 'lamp ' + state;
+    c.querySelector('b').textContent = big;
+    c.querySelector('small').textContent = small || '\u00a0';
+  }
+  fetch(api, { method: 'GET' }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); }).then(function (h) {
+    set(0, 'ok', 'Connected', origin.replace(/^https?:\/\//, ''));
+    set(1, h.database ? 'ok' : 'warn', h.database ? 'Configured' : 'Not configured', h.database ? (h.writer ? 'read + sync' : 'read only') : 'set CAPTAIN_READ_URL');
+    if (h.companion && h.companion.provider) set(2, 'ok', h.companion.model, h.companion.provider + ', self-hosted');
+    else set(2, 'off', 'Off', 'data and guide still work');
+    var proto = h.auth === 'prototype';
+    set(3, proto ? 'warn' : 'ok', proto ? 'Prototype' : 'Production', proto ? 'department dropdown is trusted' : 'real session required');
+    var note = document.getElementById('authNote');
+    if (!proto) {
+      note.style.display = '';
+      note.textContent = 'Prototype sign-in is off on this backend, so the department dropdown has no effect and Captain will ask you to sign in. That is the correct state once your page supplies a real token.';
+    }
+    if (h.allowedOrigins && h.allowedOrigins.indexOf('https://perform.geoserves.com') === -1 && h.allowedOrigins.indexOf('*') === -1) {
+      var s = document.createElement('div');
+      s.className = 'note'; s.style.marginTop = '12px';
+      s.textContent = 'CAPTAIN_ALLOW_ORIGIN does not include https://perform.geoserves.com yet. Captain works on this page, but your page will be blocked by the browser until that is set.';
+      pre.parentNode.insertBefore(s, pre.nextSibling);
+    }
+  }).catch(function () {
+    set(0, 'warn', 'Unreachable', 'is the function deployed?');
+    set(1, 'off', 'Unknown', ''); set(2, 'off', 'Unknown', ''); set(3, 'off', 'Unknown', '');
+  });
+})();
+</script>
+</body>
+</html>

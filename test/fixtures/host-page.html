@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- TEST FIXTURE. A deliberately ugly host page with aggressive global CSS,
+     to prove the widget is unaffected by (and does not affect) its host. -->
+<html lang="en"><head><meta charset="utf-8"><title>Host app</title>
+<style>
+  * { font-family: "Comic Sans MS", cursive !important; color: red !important; }
+  button { background: lime !important; border: 4px dashed purple !important; font-size: 30px !important; }
+  table { border: 6px solid orange; }
+  body { margin: 0; background: #223; }
+  .app { padding: 40px; color: #ccc !important; }
+</style></head>
+<body>
+  <div class="app"><h1>Geo Monitor (host)</h1><p>Fleet dashboard content sits here.</p><button>Host button</button></div>
+  <script src="../../public/captain-widget.js"></script>
+</body></html>
