@@ -443,7 +443,7 @@
     endpoint: SCRIPT_ORIGIN + '/api/captain',
     getToken: null,
     ask: null,
-    title: 'Captain Nav',
+    title: 'Captain',
     subtitle: '',                              // header stays clean; set a string to show a tagline
     greeting: 'Ask about a vessel, the app, or just say hello.',
     examples: [
@@ -470,7 +470,7 @@
     this.pending = null;
     this.history = [];
     this.context = null;
-    // Who Captain Nav is talking to. Lives in memory only (no storage, by
+    // Who Captain is talking to. Lives in memory only (no storage, by
     // design); the server sends it back via `remember` when a name is given,
     // and it rides along in context.userName on every later message.
     this.profile = { userName: null };
@@ -575,12 +575,12 @@
     var ta = el('textarea');
     ta.rows = 1;
     ta.placeholder = 'Ask about your vessel\u2026';
-    ta.setAttribute('aria-label', 'Ask Captain Nav about your vessel data');
+    ta.setAttribute('aria-label', 'Ask Captain about your vessel data');
     var send = el('button', null, 'Ask');
     send.type = 'submit';
     form.appendChild(ta); form.appendChild(send);
     composer.appendChild(form);
-    composer.appendChild(el('p', 'foot', 'Captain Nav reads your vessel data. He cannot change it.'));
+    composer.appendChild(el('p', 'foot', 'Captain reads your vessel data. He cannot change it.'));
     this.input = ta;
     this.sendBtn = send;
 
@@ -883,7 +883,7 @@
       // Conversational turns build history for continuity; data lookups and
       // clarifications do not — there is nothing about a fuel figure the
       // companion needs to remember for small talk later.
-      // Captain Nav asked for, or was told, the user's name.
+      // Captain asked for, or was told, the user's name.
       if (data.remember && data.remember.userName) self.profile.userName = String(data.remember.userName).slice(0, 60);
       // Every USER turn goes into history: that is what lets the server turn
       // "and last week?" into the previous question over a new period.
