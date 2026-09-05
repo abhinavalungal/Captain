@@ -9,7 +9,6 @@ RUN npm install --omit=dev
 COPY src ./src
 COPY public ./public
 COPY server.js ./server.js
-COPY scripts ./scripts
 COPY db ./db
 
 ENV PORT=8787
