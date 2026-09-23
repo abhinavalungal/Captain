@@ -64,6 +64,11 @@ never proposed and are refused if asked for.
 **Talking to memory.** "Remember that I report to the fleet director
 weekly", "forget my role", "forget that", "forget everything" (asks first)
 and "what do you remember about me?" are answered in the browser, instantly.
+So are questions about the user — "where do I work?", "what's my company
+name?", "tell me about me", typos included: they come from the profile and
+this chat, never from the app guide. If the chat knows details that aren't
+saved, the answer says so and offers **Remember these** (with Undo). The
+server answers the same questions from `context.profile` for other clients.
 "S.P. means shaft power" is still vocabulary teaching and still goes to the
 server.
 
@@ -120,11 +125,21 @@ can be added on these seams without rebuilding the widget.
 ### Upgrading to this release
 
 - Deploy **every** changed server file together — `src/profile.js` (new),
-  `src/httpHandler.js`, `src/router.js`, `src/companion_src.js`,
-  `src/agent.js` — plus `public/kris-widget.js`. The build stamps are all
-  `2026-09-23.kris-3`; a mixed deploy is reported on error cards as "FILES
-  OUT OF SYNC".
-- No database migration and no new environment variables.
+  `src/identity.js`, `src/httpHandler.js`, `src/router.js`,
+  `src/companion_src.js`, `src/agent.js` — plus `public/kris-widget.js`. The
+  build stamps are all `2026-09-23.kris-4`; a mixed deploy is reported on
+  error cards as "FILES OUT OF SYNC". `GET /api/kris` shows the build.
+- No database migration and no new environment variables. The conversation
+  layer still needs `KRIS_LLM_PROVIDER`, `KRIS_LLM_URL` and `KRIS_LLM_MODEL`
+  (and `KRIS_LLM_API_KEY` for a hosted model) — see "Running the model".
+- A model that can't be reached is now an error card that names the cause —
+  `LLM_NOT_CONFIGURED`, `LLM_HTTP_401` (key), `LLM_HTTP_402` (credit),
+  `LLM_HTTP_404` (model), `LLM_HTTP_429`, `LLM_TIMEOUT`, `LLM_UNREACHABLE` —
+  instead of a chatty apology, and About shows "Conversation model: Not
+  configured" when no model URL is set. Introductions, questions about the
+  user, greetings and app questions are still answered without a model.
+- A bare "what?" after an answer gets "Sorry — I didn't get that right…"
+  instead of a model call.
 - A first-person introduction ("I'm Alex and I work as a marine emissions
   analyst.") is now treated as conversation in both modes. Before, the word
   "emissions" made it a data request, so it got a database answer or a

@@ -853,6 +853,105 @@ const ALEX = "I'm Alex and I work as a marine emissions analyst.";
     assert(w.window.KRIS.settings.get().followups === true && w.inst().opts.followups === true);
   });
 
+  await ta('the reported chat: questions about the user are answered locally, typos and all, never by the app guide', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    const last = () => w.q('.turn.assistant.last .msg').textContent;
+    await w.type('where do i work ?');
+    await w.idle();
+    assert(/haven’t told me where you work/.test(last()), last());
+    assert(!/department/i.test(last()), 'answered from the app guide');
+    await w.type('what ?');
+    await w.idle();
+    assert(/didn’t get that right/.test(last()), 'a bare "what?" should not go to the model: ' + last());
+    await w.type(ALEX);
+    await w.idle();
+    const sentBefore = w.posts().length;
+    await w.type('i wask were do i work ?');
+    await w.idle();
+    assert(/haven’t told me which company/.test(last()) && /marine emissions analyst/.test(last()), last());
+    await w.type('I work at GeoServe');
+    await w.idle();
+    const afterIntro = w.posts().length;
+    await w.type('whats my comp name ?');
+    await w.idle();
+    assert(/You work at GeoServe/.test(last()), last());
+    await w.type('tell about me');
+    await w.idle();
+    assert(/Alex/.test(last()) && /Marine emissions analyst/.test(last()) && /GeoServe/.test(last()) && !/I’m K\.R\.1\.S/.test(last()), last());
+    await w.type('i didnt said about you i said about me');
+    await w.idle();
+    assert(/Marine emissions analyst/.test(last()) && !/calm guide/.test(last()), last());
+    assert(w.posts().length === afterIntro, 'questions about the user went to the server');
+    assert(sentBefore >= 1);
+    await w.type('who am i talking to');
+    await w.idle();
+    assert(w.posts().length === afterIntro + 1, '"who am i talking to" is about K.R.1.S and belongs to the server');
+  });
+
+  await ta('recall with only this chat’s details lists them, says they aren’t saved, and “Remember these” saves them with Undo', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    await w.type(ALEX);
+    await w.idle();
+    w.q('.memo .btn.ghost, .memo button:not(.primary)').click();   // "Not now"
+    await w.type('tell about me');
+    await w.idle();
+    const msg = w.q('.turn.assistant.last .msg').textContent;
+    assert(/from this conversation/.test(msg) && /Alex/.test(msg) && /Marine emissions analyst/.test(msg), msg);
+    assert(/None of this is saved/.test(msg) && !/Only for this conversation/.test(msg), msg);
+    const keep = [...w.qa('.turn.assistant.last button')].find((b) => /Remember these/.test(b.textContent));
+    assert(keep, 'no "Remember these" action');
+    keep.click();
+    const snap = w.window.KRIS.memory.get();
+    assert(snap.fields.name.value === 'Alex' && snap.fields.role.source === 'chat', JSON.stringify(snap.fields));
+    assert(keep.disabled, 'the action stays clickable after saving');
+    const undo = [...w.qa('.toast button')].find((b) => /Undo/.test(b.textContent));
+    assert(undo && /Saved 2 details/.test(w.q('.toast').textContent), w.q('.toast') && w.q('.toast').textContent);
+    undo.click();
+    assert(!w.window.KRIS.memory.get().fields.name, 'undo left the name saved');
+    await w.type('what do you know about me');
+    await w.idle();
+    assert(/Alex/.test(w.q('.turn.assistant.last .msg').textContent), 'undo also dropped it from this chat');
+  });
+
+  await ta('a server error still offers to remember what the user said; a message that never arrived does not', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({ status: 'error', source: 'companion', reason: 'model_unavailable', code: 'LLM_NOT_CONFIGURED', text: 'I couldn’t reach the conversation service just now.' }));
+    await w.type(ALEX);
+    await w.idle();
+    assert(w.q('.turn.assistant.last .memo'), 'no memory card under a server error');
+    const w2 = boot();
+    await wait(20);
+    w2.window.KRIS.open();
+    w2.respond(async () => { throw new TypeError('Failed to fetch'); });
+    await w2.type(ALEX);
+    await w2.idle();
+    assert(!w2.q('.turn.assistant.last .memo'), 'offered for a message that was never delivered');
+    w2.respond(async () => jsonResponse({ status: 'answer', source: 'companion', text: 'Good to meet you, Alex.' }));
+    w2.q('.notice .retry').click();
+    await w2.idle();
+    assert(w2.q('.turn.assistant.last .memo'), 'the retried message was not offered');
+  });
+
+  await ta('regenerating an answer whose memory card went unanswered asks again', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({ status: 'answer', source: 'companion', text: 'Good to meet you.' }));
+    await w.type(ALEX);
+    await w.idle();
+    assert(w.q('.turn.assistant.last .memo'));
+    w.inst().retry();
+    await w.idle();
+    assert(w.q('.turn.assistant.last .memo'), 'the card vanished with the replaced answer');
+    assert(w.qa('.memo').length === 1, 'two cards');
+  });
+
   console.log(`\nWidget memory: ${pass} passed, ${fails.length} failed`);
   fails.forEach((f) => console.log('  FAIL ' + f));
   process.exit(fails.length ? 1 : 0);

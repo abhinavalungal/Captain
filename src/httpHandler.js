@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const KRIS_BUILD = '2026-09-23.kris-3';
+const KRIS_BUILD = '2026-09-23.kris-4';
 
 // Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
@@ -388,7 +388,7 @@ function health(env) {
     database: !!env.KRIS_READ_URL,
     writer: !!env.KRIS_WRITE_URL,
     auth: env.KRIS_DEV_SESSION === '1' ? 'prototype' : 'production',
-    companion: llm.enabled ? { provider: llm.provider, model: llm.model, url: llm.url ? '(configured)' : null } : { enabled: false },
+    companion: llm.enabled ? { provider: llm.provider, model: llm.model, url: llm.url ? '(configured)' : null, configured: !!env.KRIS_LLM_URL } : { enabled: false },
     sources: Object.values(SOURCES).map((s) => s.description),
     metrics: METRICS.filter((m) => !m.finerVersionOf).length,
     allowedOrigins: allowedOriginsList(env),

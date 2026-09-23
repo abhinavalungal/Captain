@@ -45,7 +45,7 @@ const { formatNow } = require('./instant_src');
 const { profilePrompt } = require('./profile');
 const { METRICS } = require('./config');
 
-const AGENT_BUILD = '2026-09-23.kris-3';
+const AGENT_BUILD = '2026-09-23.kris-4';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer

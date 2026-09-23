@@ -154,12 +154,120 @@ function greetByName(name, ctx = {}) {
   };
 }
 
+// --- questions about the USER: "where do I work?", "tell me about me" ---------
+//
+// Answered from what the widget sends in context.profile (what the user has
+// allowed K.R.1.S to remember, plus what they said in this chat) — never
+// from the app guide, never from a model. Typing is forgiving: "i wask were
+// do i work", "whats my comp name" are the same questions.
+
+/** Lower-case, common typos folded, padded with spaces for whole-word tests. */
+function normaliseQuestion(text) {
+  return ' ' + String(text || '').toLowerCase()
+    .replace(/[‘’`]/g, "'")
+    .replace(/[^a-z0-9'\s]/g, ' ')
+    .replace(/\b(?:were|wher|whre|wehre)\b/g, 'where')
+    .replace(/\b(?:wat|wht|whta|waht)\b/g, 'what')
+    .replace(/\bwhat'?s\b/g, 'what is')
+    .replace(/\bwho'?s\b/g, 'who is')
+    .replace(/\b(?:comp|compny|companey|compnay|cmpany|campany|co)\b/g, 'company')
+    .replace(/\b(?:ur|yr)\b/g, 'your')
+    .replace(/\bu\b/g, 'you')
+    .replace(/\b(?:i'?m|im)\b/g, 'i am')
+    .replace(/\b(?:wrk|wok|werk)\b/g, 'work')
+    .replace(/\b(?:dept)\b/g, 'department')
+    .replace(/\s+/g, ' ') + ' ';
+}
+
+const ABOUT_TOPICS = [
+  ['work', / where (?:do|did) i work | who do i work for | (?:what|which) (?:is|was) (?:my|the) company(?: name)? | (?:what|which) company (?:do|am|did) i | my company(?: name)? $| what is my (?:employer|organi[sz]ation|firm|office) /],
+  ['role', / what (?:is|was) my (?:role|job|job title|title|position|designation|work) | what do i do(?: for (?:work|a living))? $/],
+  ['department', / (?:which|what) (?:department|team|division) (?:am i|do i)| what is my (?:department|team|division) /],
+  ['location', / where am i (?:based|located|working from) | where do i live | what is my (?:location|city|base) /],
+  ['timezone', / what is my time ?zone | which time ?zone am i /],
+  ['interests', / what (?:am i interested in|are my interests|do i focus on) /],
+  ['all', / (?:tell|say|talk|share)(?: me)? (?:something )?about me | who am i $| what (?:do|did) you know about me | (?:said|asked|meant|mean|talking) (?:about )?me $| describe me | about me $| my profile $/],
+];
+
+/** Which question about the user this is, or null. */
+function aboutTopic(text) {
+  const raw = String(text || '');
+  if (raw.length > 160 || /\n/.test(raw)) return null;
+  // "forget my company name" is a request about memory, not a question.
+  if (/^\s*(?:(?:hey |ok )?kris[,:]?\s+)?(?:please\s+)?(?:forget|remember|don'?t forget|stop remembering|erase|keep in mind)\b/i.test(raw)) return null;
+  const n = normaliseQuestion(raw);
+  if (/ who am i (?:talking|speaking|chatting)/.test(n)) return null;
+  for (let i = 0; i < ABOUT_TOPICS.length; i++) if (ABOUT_TOPICS[i][1].test(n)) return ABOUT_TOPICS[i][0];
+  return null;
+}
+
+function anArticle(s) { return /^[aeiou]/i.test(s) && !/^(?:uni|use|eu)/i.test(s) ? 'an' : 'a'; }
+function lowerRole(s) { return /^[A-Z]{2,}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1); }
+
+/**
+ * Answer a question about the user from their profile, or null if this is
+ * not one. Never guesses: what it does not know, it says it does not know.
+ */
+function answerAboutUser(text, ctx = {}) {
+  const topic = aboutTopic(text);
+  if (!topic) return null;
+  const p = Object.assign({}, ctx.profile || {});
+  if (!p.name && ctx.userName) p.preferredName = p.preferredName || ctx.userName;
+  const role = p.role ? anArticle(p.role) + ' ' + lowerRole(p.role) : null;
+  const tell = (what, example) => `You haven't told me ${what} yet. Tell me — for example “${example}” — and I'll keep it in mind.`;
+  const out = (t) => ({ text: t, kind: 'about_user', topic: topic, actions: [{ label: 'Open profile', run: 'view:profile', icon: 'user' }] });
+
+  if (topic === 'work') {
+    if (p.company) return out(`You work at ${p.company}${p.department ? ', in ' + p.department : ''}${role ? ', as ' + role : ''}.`);
+    if (role || p.department) return out(`You haven't told me which company you work for — I do know you're ${role || 'in ' + p.department}.`);
+    return out(tell('where you work', 'I work at …'));
+  }
+  if (topic === 'role') {
+    if (role) return out(`You're ${role}${p.company ? ' at ' + p.company : ''}.`);
+    return out(tell('your role', 'I work as a marine emissions analyst'));
+  }
+  if (topic === 'department') {
+    if (p.department) return out(`You're in ${p.department}${p.company ? ' at ' + p.company : ''}.`);
+    return out(tell('your department', 'I’m in the emissions team'));
+  }
+  if (topic === 'location') {
+    if (p.location) return out(`You're based in ${p.location}.`);
+    return out(tell('where you are based', 'I’m based in …'));
+  }
+  if (topic === 'timezone') {
+    if (p.timezone) return out(`Your time zone is ${p.timezone}.`);
+    return out(tell('your time zone', 'my time zone is Asia/Kolkata'));
+  }
+  if (topic === 'interests') {
+    if (p.interests && p.interests.length) return out(`You're interested in ${p.interests.join(', ')}.`);
+    return out(tell('what you focus on', 'I’m interested in FuelEU Maritime'));
+  }
+  // everything
+  const lines = [];
+  const name = p.name || p.preferredName;
+  if (name) lines.push('- **Name:** ' + name + (p.preferredName && p.name && p.preferredName !== p.name ? ' (you like to be called ' + p.preferredName + ')' : ''));
+  if (p.role) lines.push('- **Role:** ' + p.role);
+  if (p.company) lines.push('- **Company:** ' + p.company);
+  if (p.department) lines.push('- **Department:** ' + p.department);
+  if (p.location) lines.push('- **Based in:** ' + p.location);
+  if (p.timezone) lines.push('- **Time zone:** ' + p.timezone);
+  if (p.interests && p.interests.length) lines.push('- **Interests:** ' + p.interests.join(', '));
+  if (p.notes && p.notes.length) p.notes.forEach((n) => lines.push('- ' + n));
+  // Nothing known: fall through to the name question ("who am i" asks for a
+  // name and waits for it), or say so plainly.
+  if (!lines.length) {
+    if (MY_NAME_RE.test(scrub(text))) return null;
+    return Object.assign(out("I don't know anything about you yet. What's your name? You can tell me your role or where you work too."), { pending: { kind: 'name' } });
+  }
+  return out('Here’s what I know about you:\n\n' + lines.join('\n'));
+}
+
 /**
  * Answer an identity message, or return null if this isn't one.
  *
  * @param {string} text
- * @param {object} ctx  { userName, vesselName }
- * @returns {{ text, kind, remember?, pending? } | null}
+ * @param {object} ctx  { userName, vesselName, profile }
+ * @returns {{ text, kind, remember?, pending?, actions? } | null}
  */
 function answerIdentity(text, ctx = {}) {
   const raw = scrub(text);
@@ -183,6 +291,10 @@ function answerIdentity(text, ctx = {}) {
     };
   }
 
+  // Questions about the user ("where do I work?", "tell me about me").
+  const aboutMe = answerAboutUser(text, ctx);
+  if (aboutMe) return aboutMe;
+
   if (MY_NAME_RE.test(raw)) {
     if (ctx.userName) return { text: `You're ${ctx.userName}. I haven't forgotten.`, kind: 'my_name' };
     return {
@@ -198,4 +310,4 @@ function answerIdentity(text, ctx = {}) {
   return null;
 }
 
-module.exports = { answerIdentity, resolveNameReply, extractName, titleCase, KRIS_NAME, NAME_MEANING_RE, CAPABILITY_RE, capabilityAnswer };
+module.exports = { answerIdentity, answerAboutUser, aboutTopic, normaliseQuestion, resolveNameReply, extractName, titleCase, KRIS_NAME, NAME_MEANING_RE, CAPABILITY_RE, capabilityAnswer };

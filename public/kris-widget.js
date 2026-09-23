@@ -60,7 +60,7 @@
 
   if (global.KRIS && global.KRIS.__loaded) return;
 
-  var VERSION = '2026-09-23.kris-3';
+  var VERSION = '2026-09-23.kris-4';
 
   // Where was this script loaded from? The API lives on the same origin.
   var SCRIPT_ORIGIN = '';
@@ -1537,6 +1537,48 @@
     [/^(?:(?:my )?(?:full )?name|who i am)$/i, ['name', 'preferredName']]
   ];
 
+  // --- questions about the user: "where do I work?", "tell me about me" ------
+  // Answered from the profile and this chat, never by the app guide or a
+  // model. Typing is forgiving: "i wask were do i work", "whats my comp name".
+  function normaliseQuestion(text) {
+    return ' ' + String(text || '').toLowerCase()
+      .replace(/[‘’`]/g, "'")
+      .replace(/[^a-z0-9'\s]/g, ' ')
+      .replace(/\b(?:were|wher|whre|wehre)\b/g, 'where')
+      .replace(/\b(?:wat|wht|whta|waht)\b/g, 'what')
+      .replace(/\bwhat'?s\b/g, 'what is')
+      .replace(/\bwho'?s\b/g, 'who is')
+      .replace(/\b(?:comp|compny|companey|compnay|cmpany|campany|co)\b/g, 'company')
+      .replace(/\b(?:ur|yr)\b/g, 'your')
+      .replace(/\bu\b/g, 'you')
+      .replace(/\b(?:i'?m|im)\b/g, 'i am')
+      .replace(/\b(?:wrk|wok|werk)\b/g, 'work')
+      .replace(/\bdept\b/g, 'department')
+      .replace(/\s+/g, ' ') + ' ';
+  }
+  var ABOUT_TOPICS = [
+    ['work', / where (?:do|did) i work | who do i work for | (?:what|which) (?:is|was) (?:my|the) company(?: name)? | (?:what|which) company (?:do|am|did) i | my company(?: name)? $| what is my (?:employer|organi[sz]ation|firm|office) /],
+    ['role', / what (?:is|was) my (?:role|job|job title|title|position|designation|work) | what do i do(?: for (?:work|a living))? $/],
+    ['department', / (?:which|what) (?:department|team|division) (?:am i|do i)| what is my (?:department|team|division) /],
+    ['location', / where am i (?:based|located|working from) | where do i live | what is my (?:location|city|base) /],
+    ['timezone', / what is my time ?zone | which time ?zone am i /],
+    ['interests', / what (?:am i interested in|are my interests|do i focus on) /],
+    ['name', / what is my name | (?:do|did) you (?:know|remember) my name | what (?:do|should) you call me /],
+    ['all', / (?:tell|say|talk|share)(?: me)? (?:something )?about me | who am i $| what (?:do|did) you know about me | (?:said|asked|meant|mean|talking) (?:about )?me $| describe me | about me $| my profile $/]
+  ];
+  function aboutTopic(text) {
+    var raw = String(text || '');
+    if (raw.length > 160 || /\n/.test(raw)) return null;
+    var n = normaliseQuestion(raw);
+    if (/ who am i (?:talking|speaking|chatting)/.test(n)) return null;
+    for (var i = 0; i < ABOUT_TOPICS.length; i++) if (ABOUT_TOPICS[i][1].test(n)) return ABOUT_TOPICS[i][0];
+    return null;
+  }
+  // "what?" / "huh?" after an answer: the last reply missed.
+  var CONFUSED_RE = /^\s*(?:(?:what|wat|huh|eh|pardon|come again|what do you mean|i don'?t (?:get it|understand)|that'?s not what i (?:asked|meant))\s*[?!.]*|sorry\s*\?+)\s*$/i;
+
+  var FIELD_FOR_TOPIC = { work: ['company', 'department', 'role'], role: ['role'], department: ['department'], location: ['location'], timezone: ['timezone'], interests: ['interests'], name: ['name', 'preferredName'] };
+
   function parseMemoryCommand(text) {
     var t = String(text || '').trim();
     if (!t || t.length > 320) return null;
@@ -1548,6 +1590,10 @@
     if (m && !/\?\s*$/.test(t) && !/[,;:]/.test(m[1]) && m[1].trim().split(/\s+/).length <= 8) {
       return { type: 'forget', target: m[1].trim().replace(/^(?:my|the|about)\s+/i, ''), raw: t };
     }
+    // Last, so "forget my company name" stays a forget, not a question.
+    if (REMEMBER_RE.test(t) || FORGET_RE.test(t)) return null;
+    var topic = aboutTopic(t);
+    if (topic) return topic === 'all' ? { type: 'recall' } : { type: 'about', topic: topic };
     return null;
   }
 
@@ -3263,6 +3309,9 @@
     // ---- local: memory commands and greetings never touch the network --------
     var local = null;
     if (cmd) local = this.runMemoryCommand(cmd);
+    if (!local && !carried && this.turns.length > 1 && CONFUSED_RE.test(body)) {
+      local = { status: 'answer', source: 'local', instant: true, text: 'Sorry — I didn’t get that right. Could you ask it another way?' };
+    }
     if (!local && this.opts.localReplies && !carried && typeof this.opts.ask !== 'function') {
       var hello = localReply(body, this.addressName());
       if (hello) local = { status: 'answer', source: 'local', instant: true, text: hello };
@@ -3428,7 +3477,10 @@
     this.history = this.history.slice(-10);
 
     var rec = { role: 'assistant', text: data.text || '', data: slimForStore(data), at: Date.now(), ms: ms, send: body };
-    var offer = data.status === 'error' ? [] : this.memoryOffer((facts || []).concat(heard));
+    // The user's own words stand whatever the server made of them — but a
+    // message that never arrived will be sent again, and offered again then.
+    var undelivered = data.status === 'error' && /^(?:network|offline|timeout)$/.test(String(data.reason || ''));
+    var offer = undelivered ? [] : this.memoryOffer((facts || []).concat(heard));
     if (offer.length) {
       rec.memo = { state: 'asked', items: offer.map(function (f) { return { key: f.key, value: f.value, on: true }; }) };
       offer.forEach(function (f) { self.suggested[factSig(f.key, f.value)] = 1; });
@@ -3507,7 +3559,13 @@
     for (i = (lastA == null ? this.turns.length : lastA) - 1; i >= 0; i--) { if (this.turns[i].role === 'user') { lastU = i; break; } }
     if (lastU == null) return;
     var u = this.turns[lastU];
-    if (lastA != null) this.turns.splice(lastA, 1);
+    if (lastA != null) {
+      // A "remember this?" card that goes with the replaced answer was never
+      // answered: the new answer may ask again.
+      var gone = this.turns[lastA].memo, self = this;
+      if (gone && gone.state === 'asked') (gone.items || []).forEach(function (it) { delete self.suggested[factSig(it.key, it.value)]; });
+      this.turns.splice(lastA, 1);
+    }
     // drop the matching history entries
     if (this.history.length && this.history[this.history.length - 1].role === 'assistant') this.history.pop();
     if (this.history.length && this.history[this.history.length - 1].role === 'user') this.history.pop();
@@ -3740,29 +3798,37 @@
     var turnOn = { label: 'Turn memory on', run: 'memory:enable', icon: 'memory' };
 
     if (cmd.type === 'recall') {
-      var items = this.memItems();
-      var only = this.convOnlyFacts();
-      if (paused) {
-        return reply('Memory is paused, so I’m not using anything I’ve saved' + (items.length
-          ? ' — ' + items.length + (items.length === 1 ? ' detail is' : ' details are') + ' kept until you delete ' + (items.length === 1 ? 'it' : 'them') + '.'
-          : '.'), [turnOn, manage]);
-      }
-      if (!items.length && !only.length) {
-        return reply('I haven’t saved anything about you yet. Tell me about your role or your team and I’ll ask before remembering it — or add details to your profile yourself.', [{ label: 'Open profile', run: 'view:profile', icon: 'user' }]);
-      }
+      var kept = this.memItems();
+      var items = paused ? [] : kept;
+      var only = this.convOnlyFacts();       // this chat's details that memory doesn't hold
+      var show = function (f) { return FIELD[f.key].choices ? choiceLabel(f.key, f.value) : f.value; };
       var lines = [];
       if (items.length) {
         lines.push('Here’s what I remember about you:', '');
         items.forEach(function (it) { lines.push('- **' + it.label + ':** ' + it.display); });
-      } else {
-        lines.push('I haven’t saved anything about you yet.');
       }
       if (only.length) {
-        lines.push('', 'Only for this conversation: ' + only.map(function (f) { return FIELD[f.key].label.toLowerCase() + ' ' + (FIELD[f.key].choices ? choiceLabel(f.key, f.value).toLowerCase() : f.value); }).join('; ') + '.');
+        lines.push.apply(lines, items.length ? ['', 'From this conversation only:', ''] : ['Here’s what I know about you from this conversation:', '']);
+        only.forEach(function (f) { lines.push('- **' + FIELD[f.key].label + ':** ' + show(f)); });
+      }
+      if (paused) {
+        var why = 'Memory is paused, so I’m not using anything I’ve saved' + (kept.length
+          ? ' — ' + kept.length + (kept.length === 1 ? ' detail is' : ' details are') + ' kept until you delete ' + (kept.length === 1 ? 'it' : 'them') + '.'
+          : '.');
+        return reply(only.length ? lines.concat(['', why + ' What you tell me is used in this chat only.']).join('\n') : why, [turnOn, manage]);
+      }
+      if (!lines.length) {
+        return reply('I don’t know anything about you yet. Tell me your name, your role or where you work — I’ll use it in this chat and ask before remembering it. Or fill in your profile yourself.', [{ label: 'Open profile', run: 'view:profile', icon: 'user' }]);
+      }
+      if (only.length) {
+        lines.push('', (items.length ? 'Those aren’t' : 'None of this is') + ' saved — it’s used in this chat only.');
+        return reply(lines.join('\n'), [{ label: only.length === 1 ? 'Remember it' : 'Remember these', run: 'memory:keep-conv', icon: 'memory' }, manage]);
       }
       lines.push('', 'You can change or delete any of it in Memory.');
       return reply(lines.join('\n'), [manage]);
     }
+
+    if (cmd.type === 'about') return this.aboutReply(cmd.topic);
 
     if (cmd.type === 'remember') {
       var content = oneLine(cmd.content, 320);
@@ -3851,6 +3917,49 @@
     return null;
   };
 
+  /**
+   * "Where do I work?", "what's my role?" — answered from this chat and what
+   * the user let K.R.1.S remember. What it does not know, it says so.
+   */
+  Widget.prototype.aboutReply = function (topic) {
+    var p = this.profileView();
+    var paused = this.memoryAllowed() && !this.memory.enabled;
+    var reply = function (text, actions) { return { status: 'answer', source: 'local', instant: true, text: text, actions: actions || undefined }; };
+    var profileAct = { label: 'Add it to your profile', run: 'view:profile', icon: 'user' };
+    var role = p.role ? article(p.role) + ' ' + lowerFirst(p.role) : null;
+    var unknown = function (what, example) {
+      var savedButPaused = paused && FIELD_FOR_TOPIC[topic] && FIELD_FOR_TOPIC[topic].some(function (k) { return this.memGet(k) != null; }, this);
+      if (savedButPaused) return reply('Memory is paused, so I’m not using what I saved about ' + what + '. Turn it on and ask me again.', [{ label: 'Turn memory on', run: 'memory:enable', icon: 'memory' }]);
+      return reply('You haven’t told me ' + what + ' yet. Tell me — for example “' + example + '” — and I’ll use it in this chat and offer to remember it.', [profileAct]);
+    }.bind(this);
+    switch (topic) {
+      case 'work':
+        if (p.company) return reply('You work at **' + p.company + '**' + (p.department ? ', in ' + p.department : '') + (role ? ', as ' + role : '') + '.');
+        if (role || p.department) return reply('You haven’t told me which company you work for — I do know you’re ' + (role || 'in ' + p.department) + '.', [profileAct]);
+        return unknown('where you work', 'I work at …');
+      case 'role':
+        if (role) return reply('You’re ' + role + (p.company ? ' at ' + p.company : '') + '.');
+        return unknown('your role', 'I work as a marine emissions analyst');
+      case 'department':
+        if (p.department) return reply('You’re in ' + p.department + (p.company ? ' at ' + p.company : '') + '.');
+        return unknown('your department', 'I’m in the emissions team');
+      case 'location':
+        if (p.location) return reply('You’re based in ' + p.location + '.');
+        return unknown('where you’re based', 'I’m based in …');
+      case 'timezone':
+        if (p.timezone) return reply('Your time zone is ' + p.timezone + '.');
+        return reply('You haven’t set a time zone, so I use this device’s' + (detectedTz() ? ' (' + detectedTz() + ')' : '') + '.', [profileAct]);
+      case 'interests':
+        if (p.interests) return reply('You’re interested in ' + p.interests + '.');
+        return unknown('what you focus on', 'I’m interested in FuelEU Maritime');
+      case 'name':
+        if (p.preferredName || p.name) return reply('You’re ' + (p.name || p.preferredName) + (p.preferredName && p.name && p.preferredName !== p.name ? ' — I call you ' + p.preferredName : '') + '.');
+        return unknown('your name', 'my name is …');
+      default:
+        return null;
+    }
+  };
+
   /** Put back what a "remember" replaced (or remove what it added). */
   Widget.prototype.undoFields = function (saved, quiet) {
     var self = this;
@@ -3869,6 +3978,23 @@
     if (m) { this.showView(m[1]); return; }
     if (run === 'memory:enable') { this.memEnable(true); this.toast('Memory is on.'); lock(); return; }
     if (run === 'memory:clear') { this.memClear(); this.toast('Memory cleared.'); lock(); return; }
+    if (run === 'memory:keep-conv') {
+      var self = this, kept = 0;
+      if (!this.memory.enabled) { this.toast('Memory is paused, so nothing can be saved.', { label: 'Turn on', fn: function () { self.memEnable(true); } }); return; }
+      var saved = [];
+      this.convOnlyFacts().forEach(function (f) {
+        var prev = self.memory.fields[f.key] ? assign({}, self.memory.fields[f.key]) : null;
+        if (self.memSet(f.key, f.value, 'chat').ok) { saved.push({ key: f.key, prev: prev }); kept++; }
+      });
+      if (kept) {
+        this.toast(kept === 1 ? 'Saved to memory.' : 'Saved ' + kept + ' details to memory.', { label: 'Undo', fn: function () {
+          saved.forEach(function (f) { if (f.prev) self.memPut(f.key, f.prev); else self.memRemove(f.key); });
+          self.toast('Removed from memory.');
+        } });
+      } else this.toast('Nothing new to save.');
+      lock();
+      return;
+    }
     if (run === 'dismiss') { lock(); if (this.input) this.input.focus(); }
   };
 
@@ -4188,7 +4314,7 @@
     return data.actions.filter(function (a) {
       if (!a || typeof a.label !== 'string' || typeof a.run !== 'string') return false;
       if (/^view:(history|profile|memory|appearance|settings|about)$/.test(a.run)) return true;
-      return local && /^(memory:enable|memory:clear|dismiss)$/.test(a.run);
+      return local && /^(memory:enable|memory:clear|memory:keep-conv|dismiss)$/.test(a.run);
     }).slice(0, 4).map(function (a) {
       return { label: a.label.slice(0, 40), run: a.run, danger: !!a.danger && local, icon: typeof a.icon === 'string' ? a.icon : null };
     });
@@ -5802,7 +5928,11 @@
     sg.appendChild(kvRow('Server', conn[0], conn[1]));
     if (h && h.build) sg.appendChild(kvRow('Server build', String(h.build)));
     if (h && typeof h.database === 'boolean') sg.appendChild(kvRow('Records database', h.database ? 'Configured' : 'Not configured', h.database ? '' : 'badc'));
-    if (h && h.companion) sg.appendChild(kvRow('Conversation model', h.companion.enabled === false ? 'Off' : String(h.companion.model || 'Configured')));
+    if (h && h.companion) {
+      var notSet = h.companion.configured === false;
+      sg.appendChild(kvRow('Conversation model', h.companion.enabled === false ? 'Off' : notSet ? 'Not configured' : String(h.companion.model || 'Configured'), notSet ? 'badc' : ''));
+    }
+    if (h && h.auth) sg.appendChild(kvRow('Sign-in', h.auth === 'prototype' ? 'Prototype (unsigned tokens)' : 'Production'));
     sg.appendChild(kvRow('Widget', VERSION));
     ss.appendChild(sg);
     var refresh = el('button', 'btn sm', 'Check again');

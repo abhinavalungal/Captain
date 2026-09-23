@@ -155,6 +155,55 @@ const ALEX = {
     }
   });
 
+  await ta('server: questions about the user come from the profile, not the guide or the capability answer', async () => {
+    const ask = (text, profile) => router.route({ text, session, now: NOW, context: readContext(profile ? { profile } : {}) }, NO_DB, { orgId: 'o', env: { KRIS_ENABLE_LLM: '0' } });
+    const P = { name: 'Alex', role: 'Marine emissions analyst', company: 'GeoServe' };
+    let out = await ask('where do i work ?', P);
+    assert.strictEqual(out.source, 'identity');
+    assert.ok(/You work at GeoServe/.test(out.text), out.text);
+    out = await ask('i wask were do i work ?', null);
+    assert.ok(/haven't told me where you work/.test(out.text) && !/department/i.test(out.text), out.text);
+    out = await ask('whats my comp name ?', P);
+    assert.ok(/GeoServe/.test(out.text), out.text);
+    for (const q of ['tell about me', 'i didnt said about you i said about me']) {
+      out = await ask(q, P);
+      assert.ok(/Marine emissions analyst/.test(out.text) && !/calm guide/.test(out.text), q + ' -> ' + out.text);
+    }
+    out = await ask('tell about me', null);
+    assert.ok(/don't know anything about you yet/.test(out.text) && out.pending && out.pending.kind === 'name', out.text);
+    out = await ask('what ?', null);
+    assert.ok(/didn’t get that right/.test(out.text) && out.instant, 'a bare "what?" went to the model');
+    out = await ask('who am i talking to', null);
+    assert.ok(/K\.R\.1\.S/.test(out.text), 'K.R.1.S should still introduce itself');
+  });
+
+  await ta('server: an unreachable model is an error with a named cause, and health says whether a model is configured', async () => {
+    const env = { KRIS_ENABLE_LLM: '1' };   // no KRIS_LLM_URL: the default local Ollama, which is not running
+    const out = await router.route({ text: 'explain pooling to me in simple words', session, now: NOW }, NO_DB,
+      { orgId: 'o', env, fetchImpl: async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:11434'); } });
+    assert.strictEqual(out.status, 'error', JSON.stringify(out));
+    assert.strictEqual(out.reason, 'model_unavailable');
+    assert.strictEqual(out.code, 'LLM_NOT_CONFIGURED');
+    assert.ok(/KRIS_LLM_URL/.test(out.detail) && !/127\.0\.0\.1/.test(out.detail), out.detail);
+    const out2 = await router.route({ text: 'explain pooling to me in simple words', session, now: NOW }, NO_DB,
+      { orgId: 'o', env: { KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'https://llm.test', KRIS_LLM_MODEL: 'm' },
+        fetchImpl: async () => ({ ok: false, status: 401, text: async () => 'bad key', headers: { get: () => '' } }) });
+    assert.strictEqual(out2.code, 'LLM_HTTP_401');
+    assert.ok(/KRIS_LLM_API_KEY/.test(out2.detail), out2.detail);
+    const { health } = require('../src/httpHandler');
+    assert.strictEqual(health({ KRIS_ENABLE_LLM: '1' }).companion.configured, false);
+    assert.strictEqual(health({ KRIS_ENABLE_LLM: '1', KRIS_LLM_URL: 'https://llm.test' }).companion.configured, true);
+  });
+
+  await ta('server: an introduction is answered even when the model is down', async () => {
+    const env = { KRIS_ENABLE_LLM: '1' };
+    const out = await router.route({ text: "I'm Nav and I work as a marine emissions analyst at GeoServe", session, now: NOW,
+      context: { userName: 'Nav', profile: { name: 'Nav', role: 'Marine emissions analyst', company: 'GeoServe' } } }, NO_DB,
+      { orgId: 'o', env, fetchImpl: async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:11434'); } });
+    assert.strictEqual(out.status, 'answer', JSON.stringify(out));
+    assert.ok(/Nav/.test(out.text) && !/couldn.t reach/i.test(out.text), out.text);
+  });
+
   console.log(`\nProfile: ${passed} passed, ${fails.length} failed`);
   fails.forEach((f) => console.log('  FAIL ' + f));
   process.exit(fails.length ? 1 : 0);

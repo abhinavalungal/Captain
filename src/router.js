@@ -39,7 +39,7 @@ const identity = require('./identity');
 const agent = require('./agent');
 const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-23.kris-3';
+const ROUTER_BUILD = '2026-09-23.kris-4';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -193,7 +193,12 @@ async function route(input, db, opts) {
     };
   }
 
-  return companionReply(text, input, opts, env);
+  const reply = await companionReply(text, input, opts, env);
+  // An introduction deserves a reply even when the model is down.
+  if (intro && reply && reply.status === 'error' && reply.reason === 'model_unavailable') {
+    return { status: 'answer', source: 'router', instant: true, text: introReply(userName) };
+  }
+  return reply;
 }
 
 /**
@@ -224,13 +229,20 @@ function fastLane(text, input, opts) {
   if (instant) return { status: 'answer', source: 'instant', kind: instant.kind, text: instant.text, chart: instant.chart || undefined, instant: true };
 
   // Names, in both directions.
-  const whoAmI = identity.answerIdentity(text, { userName: userName, vesselName: vesselName });
+  const whoAmI = identity.answerIdentity(text, { userName: userName, vesselName: vesselName, profile: input.context && input.context.profile ? input.context.profile : null });
   if (whoAmI) {
     return {
       status: 'answer', source: 'identity', instant: true, text: whoAmI.text,
       remember: whoAmI.remember || undefined,
       pending: whoAmI.pending || undefined,
+      actions: whoAmI.actions || undefined,
     };
+  }
+
+  // "what?", "huh?" right after an answer: the last reply missed. Say so and
+  // ask again, instead of sending one word to a model.
+  if (CONFUSED_RE.test(text)) {
+    return { status: 'answer', source: 'router', instant: true, text: 'Sorry — I didn’t get that right. Could you ask it another way?' };
   }
 
   // "What can you do" and every malformed variant: a warm overview with next
@@ -342,6 +354,21 @@ async function companionReply(text, input, opts, env) {
       error: String((err && err.message) || err),
     };
   }
+  // The model could not be reached (or answered nothing). That is a failure,
+  // and it should look like one: an error card with "Try again", and — for
+  // whoever runs the server — the cause, by name only, never a URL or a key.
+  if (convo.error && !convo.streamed && !convo.blocked && /couldn.t reach|hit a snag/i.test(convo.text || '')) {
+    const why = modelFailure(env, convo.error);
+    return {
+      status: 'error',
+      source: 'companion',
+      reason: 'model_unavailable',
+      text: convo.text,
+      code: why.code,
+      detail: why.detail,
+      error: 'companion: ' + String(convo.error).slice(0, 200),
+    };
+  }
   return {
     status: 'answer',
     text: convo.text,
@@ -353,6 +380,22 @@ async function companionReply(text, input, opts, env) {
     // records it for /api/kris diagnostics, and strips it before replying.
     error: convo.error ? 'companion: ' + String(convo.error).slice(0, 200) : undefined,
   };
+}
+
+/** Why the conversation model failed, in words the person running the server can act on. */
+function modelFailure(env, error) {
+  const e = String(error || '');
+  if (!env.KRIS_LLM_URL) {
+    return { code: 'LLM_NOT_CONFIGURED', detail: 'Server: no conversation model is configured - set KRIS_LLM_PROVIDER, KRIS_LLM_URL and KRIS_LLM_MODEL (and KRIS_LLM_API_KEY if the server needs one).' };
+  }
+  const m = e.match(/HTTP (\d{3})/);
+  if (m) {
+    const hint = { 401: 'check KRIS_LLM_API_KEY', 403: 'check KRIS_LLM_API_KEY', 402: 'the model account is out of credit', 404: 'check KRIS_LLM_MODEL', 429: 'rate limited - try again shortly' }[m[1]] || 'see the server log';
+    return { code: 'LLM_HTTP_' + m[1], detail: 'Model server answered HTTP ' + m[1] + ' (' + hint + ').' };
+  }
+  if (/timed out/i.test(e)) return { code: 'LLM_TIMEOUT', detail: 'The model server did not answer in time (KRIS_LLM_TIMEOUT_MS, or a faster KRIS_LLM_FAST_MODEL).' };
+  if (/empty reply/i.test(e)) return { code: 'LLM_EMPTY', detail: 'The model returned an empty reply (a reasoning model may have used its whole token budget; try a non-reasoning KRIS_LLM_FAST_MODEL).' };
+  return { code: 'LLM_UNREACHABLE', detail: 'Cannot connect to the model server (check KRIS_LLM_URL and that the server is running).' };
 }
 
 async function converseSafe(text, input, opts, env, guideSnippets, tz) {
@@ -523,6 +566,8 @@ const SMALL_TALK = new Set(['hi', 'hello', 'hey', 'hiya', 'yo', 'sup', 'thanks',
   'so', 'very', 'awesome', 'perfect', 'noted', 'alright', 'sure', 'gotcha', 'yeah', 'hmm', 'wow', 'welcome', 'appreciated', 'cya', 'later', 'see']);
 
 /** True when every word is conversational filler — nothing that could name a metric. */
+const CONFUSED_RE = /^\s*(?:(?:what|wat|huh|eh|pardon|come again|what do you mean|i don'?t (?:get it|understand)|that'?s not what i (?:asked|meant))\s*[?!.]*|sorry\s*\?+)\s*$/i;
+
 /**
  * A first-person introduction: a name, a role, an employer, a base — with no
  * request in it and no period to read. "I'm checking shaft power" and "I am
