@@ -61,6 +61,7 @@ function recordError(where, err, extra) {
   } catch (_) { /* never let diagnostics break a request */ }
 }
 const router = require('./router');
+const { findRenames } = require('./envcheck');
 const { LIMITS, METRICS, SOURCES } = require('./config');
 const { readEnv: llmConfig, warmLLM } = require('./companion_src');
 const { sync } = require('./integrations/sync');
@@ -244,6 +245,14 @@ function warmUp(env) {
 }
 
 /**
+ * Set to true once verifyToken() below checks real sessions. While it is
+ * false, and prototype sign-in is off, every token is refused — and the 401
+ * says so plainly ("sign-in isn't set up on this server") instead of telling
+ * the user their session expired.
+ */
+const REAL_VERIFIER = false;
+
+/**
  * Replace this with your real session check. Must return
  *   { userId, orgId, departments?, vesselIds? }   or   null.
  *
@@ -282,6 +291,28 @@ async function resolveSession(headers, env, bodyToken) {
   if (!token && typeof bodyToken === 'string' && bodyToken.length < 8192) token = bodyToken.trim();
   if (!token) return null;
   return verifyToken(token, env);
+}
+
+/** Why a request without a session was refused: the user, or the server. */
+function refusal(headers, env, bodyToken) {
+  const renames = findRenames(env);
+  const hasToken = /^Bearer \S/.test(headers.authorization || '') || (typeof bodyToken === 'string' && bodyToken.trim() !== '');
+  if (hasToken && env.KRIS_DEV_SESSION !== '1' && !REAL_VERIFIER) {
+    return {
+      status: 'unauthenticated',
+      reason: 'auth_not_configured',
+      text: 'I can\u2019t confirm who you are yet \u2014 sign-in isn\u2019t set up on this server. Your session is fine; nothing needs to be done on your side.',
+      // Names only, never values. Shown under the message so whoever runs the
+      // server can see the cause at a glance.
+      detail: diagnosticsOn(env)
+        ? (renames.length
+          ? 'Server settings not renamed: ' + renames.map((r) => r.from + ' \u2192 ' + r.to).join(', ')
+          : 'Server: set KRIS_DEV_SESSION=1 (prototype) or wire verifyToken()')
+        : undefined,
+    };
+  }
+  if (!hasToken) return { status: 'unauthenticated', reason: 'no_token', text: 'Sign in and I can look at your vessel data.' };
+  return { status: 'unauthenticated', reason: 'session_rejected', text: 'Your sign-in wasn\u2019t accepted. Sign in again and ask me once more.' };
 }
 
 // --- CORS: works the same regardless of host --------------------------------
@@ -363,6 +394,9 @@ function health(env) {
     mode: String(env.KRIS_MODE || 'router'),
     features: { stream: true, bodyToken: true, fastLane: true },
     diagnostics: diagnosticsOn(env),
+    // Settings found under another prefix than KRIS_ — names only. Non-empty
+    // means the server is running on defaults until they are renamed.
+    renameNeeded: findRenames(env).map((r) => r.from + ' -> ' + r.to),
     node: process.version,
     recentErrors: env.KRIS_DEV_SESSION === '1' ? RECENT_ERRORS : undefined,
     files: env.KRIS_DEV_SESSION === '1' ? fileFingerprints() : undefined,
@@ -404,7 +438,7 @@ async function handleKris(req) {
     console.error('kris: auth error', err);
     return reply(500, { status: 'error', text: 'Authentication is misconfigured.' });
   }
-  if (!session) return reply(401, { status: 'unauthenticated', text: 'Sign in and I can look at your vessel data.' });
+  if (!session) return reply(401, refusal(headers, env, payload.token));
 
   // The database is NOT opened here. The router decides whether this message
   // needs vessel records at all; only then does it call getDb(). A greeting or

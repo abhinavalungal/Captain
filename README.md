@@ -39,7 +39,12 @@ one-time steps, in this order:
 2. **Environment** — every variable now starts with `KRIS_` (for example
    `KRIS_READ_URL`, `KRIS_LLM_API_KEY`, `KRIS_ALLOW_ORIGIN`). Rename them in
    your host's dashboard (Render → Environment) before deploying; `.env.example`
-   lists them all.
+   lists them all. If a setting is missed, the server still starts but runs on
+   defaults — no database, production sign-in — and every signed-in question
+   gets a 401. It tells you which: the startup log and `GET /api/kris`
+   (`renameNeeded`) list every setting still under the old prefix, the
+   prototype page shows them in red, and the widget says "sign-in isn't set up
+   on this server" with the list underneath, instead of "session expired".
 3. **Deploy** the new build.
 4. **Embed** — the script is now `/kris-widget.js`, the API is `/api/kris`
    (sync: `/api/kris-sync`, header `x-kris-sync-key`), and the global is

@@ -492,6 +492,26 @@ function boot(opts, storage) {
     assert(!/bridge|shipshape|steady as she goes/i.test(how), how);
   });
 
+  await ta('401: the server\'s own explanation is shown, never a made-up "session expired"', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({ status: 'unauthenticated', reason: 'auth_not_configured', text: 'I can’t confirm who you are yet — sign-in isn’t set up on this server.', detail: 'Server settings not renamed: OLDAPP_DEV_SESSION → KRIS_DEV_SESSION' }, 401));
+    await w.type('fuel consumption last month');
+    await w.idle();
+    const n = w.q('.turn.assistant .notice');
+    assert(n, 'no notice');
+    assert(/sign-in isn’t set up on this server/.test(n.textContent), n.textContent);
+    assert(!/expired/i.test(n.textContent), 'still says expired');
+    assert(/OLDAPP_DEV_SESSION/.test(n.querySelector('.sub').textContent), 'hint not shown');
+    assert(!n.querySelector('.retry'), 'retrying cannot fix a sign-in refusal');
+    w.respond(async () => ({ ok: false, status: 401, headers: { get: () => 'application/json' }, json: async () => ({}), body: null }));
+    await w.type('and last week');
+    await w.idle();
+    const last = w.qa('.turn.assistant .notice');
+    assert(/couldn’t confirm your sign-in/.test(last[last.length - 1].textContent), 'fallback text');
+  });
+
   await ta('destroy removes the widget and its listeners', async () => {
     const w = boot();
     await wait(20);

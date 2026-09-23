@@ -1650,7 +1650,14 @@
       var ctype = (res.headers && res.headers.get && res.headers.get('content-type')) || '';
       if (/ndjson/i.test(ctype) && res.body && res.body.getReader) return readStream(res, hooks);
       return res.json().then(function (data) {
-        if (res.status === 401) return { status: 'error', reason: 'unauthenticated', text: 'Your session has expired. Sign in again and ask me once more.' };
+        // Use the server's own explanation: "sign-in isn't set up on this
+        // server" and "your session expired" need very different reactions.
+        if (res.status === 401) return {
+          status: 'error',
+          reason: (data && data.reason) || 'unauthenticated',
+          text: (data && typeof data.text === 'string' && data.text) || 'I couldn\u2019t confirm your sign-in. Sign in again and ask me once more.',
+          detail: data && typeof data.detail === 'string' ? data.detail : undefined
+        };
         if (res.status === 413) return { status: 'error', text: 'That message is too long for me.' };
         return data;
       }, function () {
@@ -2042,7 +2049,7 @@
       tx.appendChild(el('div', null, data.text || 'Something went wrong.'));
       var sub = [data.code, data.detail || null, data.build ? 'build ' + data.build : null].filter(Boolean).join(' · ');
       if (sub) tx.appendChild(el('div', 'sub', sub));
-      if (data.status === 'error' && data.reason !== 'unauthenticated' && question && !restoring) {
+      if (data.status === 'error' && !/^(unauthenticated|no_token|session_rejected|auth_not_configured)$/.test(String(data.reason || '')) && question && !restoring) {
         var rb = el('button', 'retry');
         rb.type = 'button';
         rb.innerHTML = ICON.retry;

@@ -239,6 +239,17 @@ ol.steps code{background:var(--surface);border:1px solid var(--line);padding:1px
     var proto = h.auth === 'prototype';
     set(3, proto ? 'warn' : 'ok', proto ? 'Prototype' : 'Production', proto ? 'department dropdown is trusted' : 'real session required');
     var note = document.getElementById('authNote');
+    if (h.renameNeeded && h.renameNeeded.length) {
+      // The host still carries settings under another prefix: the server is
+      // running on defaults (no database, production sign-in) until renamed.
+      var r = document.createElement('div');
+      r.className = 'note hard'; r.style.marginTop = '16px';
+      r.appendChild(document.createTextNode('This server is ignoring ' + h.renameNeeded.length + ' setting' + (h.renameNeeded.length === 1 ? '' : 's') + ' because they use an old name. Rename them on the host, then redeploy:'));
+      var ul = document.createElement('ul'); ul.style.margin = '8px 0 0'; ul.style.paddingLeft = '20px';
+      h.renameNeeded.forEach(function (line) { var li = document.createElement('li'); li.appendChild(Object.assign(document.createElement('code'), { textContent: line })); ul.appendChild(li); });
+      r.appendChild(ul);
+      document.getElementById('readout').parentNode.insertBefore(r, document.getElementById('readout').nextSibling);
+    }
     if (!proto) {
       note.style.display = '';
       note.textContent = 'Prototype sign-in is off on this backend, so the department dropdown has no effect and K.R.1.S will ask you to sign in. That is the correct state once your page supplies a real token.';

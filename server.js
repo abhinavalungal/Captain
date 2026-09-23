@@ -233,7 +233,13 @@ server.listen(PORT, () => {
   console.log('K.R.1.S listening on http://localhost:' + PORT);
   console.log('  widget:  http://localhost:' + PORT + '/kris-widget.js');
   console.log('  api:     http://localhost:' + PORT + '/api/kris');
+  const renames = require('./src/envcheck').findRenames(process.env);
+  if (renames.length) {
+    console.log('  ⚠ ' + renames.length + ' setting(s) use another prefix and are being IGNORED — this build reads KRIS_*. Rename them on the host:');
+    for (const r of renames) console.log('      ' + r.from + '  ->  ' + r.to);
+  }
   if (!process.env.KRIS_READ_URL) console.log('  ⚠ KRIS_READ_URL is not set — data questions will return a friendly 503 until it is.');
+  if (process.env.KRIS_DEV_SESSION !== '1') console.log('  ⚠ KRIS_DEV_SESSION is not 1 and verifyToken() is the stub — every signed-in question will be refused (401) until one of them changes.');
   // Open the database and model connections now, not on the first message,
   // and warm the fast lane so the first "hi" after a restart is still instant.
   warmUp(process.env);

@@ -33,7 +33,7 @@ const { readSSE, readNDJSON, SentenceGate, anySignal } = require('./stream');
 const DEFAULTS = {
   provider: 'ollama',
   url: 'http://127.0.0.1:11434',
-  model: 'llama3.1:8b',
+  model: 'K.R.1.S',
   timeoutMs: 30000,
   maxTokens: 700,
   temperature: 0.4,
