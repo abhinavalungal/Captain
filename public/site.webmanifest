@@ -1,7 +1,7 @@
 {
-  "name": "Shuddha now",
-  "short_name": "Shuddha now",
-  "description": "Powering the transition to zero carbon shipping",
+  "name": "Shuddha Now",
+  "short_name": "Shuddha Now",
+  "description": "Powering the transition to zero-carbon shipping",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#F7F6F1",

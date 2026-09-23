@@ -1,6 +1,8 @@
 'use strict';
 
 const dates = require('./dates');
+const { levenshtein } = require('./normalize');
+const { METRICS } = require('./config');
 
 /**
  * Instant answers. Questions a server can answer exactly, in microseconds,
@@ -262,66 +264,105 @@ function tryConversion(text) {
  * @returns {{ text, kind } | null}
  */
 // --- comparing plain numbers -------------------------------------------------
-// "Which is bigger, 2 or 19?"  "Visualize a comparison of 3, 7 and 5."
-// Exact, local, and never claims a data question: after removing the numbers
-// and comparison/filler vocabulary, NOTHING may be left over. "Compare fuel
+// "Which is bigger, 2 or 19?"  "Compare 2 and 10. Show me visually."
+// Exact, local, and never claims a data question: after removing the numbers,
+// every word left must be comparison vocabulary — or one slip away from it
+// ("whoch", "bisually", "oyu"), because people type fast. "Compare fuel
 // consumption 2024 vs 2025" leaves "fuel consumption" and falls through to
 // the metric parser, exactly as before.
 
-const COMPARE_CUE_RE = /\b(compare|comparison|bigger|biggest|larger|largest|greater|greatest|smaller|smallest|higher|highest|lower|lowest|max|maximum|min|minimum)\b/i;
-const CHART_CUE_RE = /\b(visuali[sz]e|visuali[sz]ation|chart|graph|plot|draw|comparison)\b/i;
-const SMALLER_CUE_RE = /\b(smaller|smallest|lower|lowest|less|least|min|minimum)\b/i;
+const COMPARE_CUES = ['compare', 'comparison', 'bigger', 'biggest', 'larger', 'largest', 'greater', 'greatest',
+  'smaller', 'smallest', 'higher', 'highest', 'lower', 'lowest', 'more', 'most', 'less', 'least', 'fewer',
+  'max', 'maximum', 'min', 'minimum'];
+const CHART_CUES = ['visualize', 'visualise', 'visualization', 'visualisation', 'visual', 'visually', 'visuals',
+  'chart', 'graph', 'graphically', 'plot', 'draw', 'diagram', 'picture', 'comparison'];
+const SMALLER_CUES = new Set(['smaller', 'smallest', 'lower', 'lowest', 'less', 'least', 'fewer', 'min', 'minimum']);
+const BIGGER_RE = /^(?:bigger|larger|greater|higher|more)$/;
 
-const COMPARE_FILLER = new Set([
-  'can', 'could', 'you', 'u', 'please', 'pls', 'me', 'my', 'a', 'an', 'the', 'of', 'is', 'are', 'was',
-  'which', 'what', 'whats', 'wat', 'one', 'number', 'numbers', 'value', 'values', 'figure', 'figures',
-  'out', 'these', 'those', 'this', 'that', 'two', 'three', 'following', 'and', 'or', 'vs', 'versus',
-  'between', 'than', 'tell', 'show', 'give', 'visualize', 'visualise', 'visualization', 'visualisation',
-  'chart', 'graph', 'plot', 'draw', 'as', 'in', 'a', 'bar', 'it', 'to', 'for',
-  'compare', 'comparison', 'bigger', 'biggest', 'larger', 'largest', 'greater', 'greatest',
-  'smaller', 'smallest', 'higher', 'highest', 'lower', 'lowest', 'less', 'least',
-  'big', 'small', 'large', 'max', 'maximum', 'min', 'minimum', 'so', 'hey', 'hi', 'hello',
-]);
+const COMPARE_FILLER = [
+  'can', 'could', 'would', 'you', 'u', 'please', 'pls', 'plz', 'kindly', 'me', 'my', 'i', 'a', 'an', 'the', 'of',
+  'is', 'are', 'was', 'be', 'do', 'does', 'which', 'what', 'whats', 'wat', 'one', 'number', 'numbers', 'value',
+  'values', 'figure', 'figures', 'out', 'these', 'those', 'this', 'that', 'them', 'both', 'all', 'two', 'three',
+  'following', 'and', 'or', 'vs', 'versus', 'between', 'among', 'than', 'tell', 'show', 'give', 'see', 'let', 'lets',
+  'want', 'know', 'like', 'as', 'in', 'on', 'by', 'with', 'using', 'bar', 'bars', 'it', 'to', 'for', 'how', 'much',
+  'just', 'also', 'quick', 'quickly', 'big', 'small', 'large', 'so', 'hey', 'hi', 'hello', 'thanks', 'thank',
+];
+// Cues first, so a typo that is one slip from both a cue and a filler word counts as the cue.
+const COMPARE_VOCAB = Array.from(new Set(COMPARE_CUES.concat(CHART_CUES, COMPARE_FILLER)));
+const VOCAB_SET = new Set(COMPARE_VOCAB);
+const CUE_SET = new Set(COMPARE_CUES);
+const CHART_SET = new Set(CHART_CUES);
+
+// Words that name vessel data are never read as typos: "power" is not "lower",
+// "legs" is not "less". Built from the same aliases the metric parser uses.
+const DATA_WORDS = new Set(['vessel', 'vessels', 'ship', 'ships', 'fleet', 'voyage', 'voyages', 'report', 'reports', 'engine', 'engines']
+  .concat(...METRICS.map((m) => [m.key, m.label].concat(m.aliases || []).join(' ').toLowerCase().split(/[^a-z]+/)))
+  .filter((w) => w.length >= 3));
+
+/** One adjacent swap apart: "oyu" / "you". */
+function isSwap(a, b) {
+  if (a.length !== b.length) return false;
+  let i = 0;
+  while (i < a.length && a[i] === b[i]) i++;
+  return i < a.length - 1 && a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2);
+}
+
+/** The comparison word this is (or is a slip of), or null. */
+function vocabWord(w) {
+  if (VOCAB_SET.has(w)) return w;
+  if (w.length < 3 || DATA_WORDS.has(w)) return null;
+  for (const v of COMPARE_VOCAB) {
+    if (v.length < 3 || Math.abs(v.length - w.length) > 1) continue;
+    if (isSwap(w, v) || (w.length >= 4 && v.length >= 4 && levenshtein(w, v) === 1)) return v;
+  }
+  return null;
+}
 
 function fmtNum(n) {
   return Number.isInteger(n) ? String(n) : String(Math.round(n * 1e6) / 1e6);
 }
 
 function tryCompare(raw) {
-  const lower = String(raw).toLowerCase();
-  if (!COMPARE_CUE_RE.test(lower)) return null;
-
+  const lower = String(raw).toLowerCase().replace(/['’]/g, '');
   const numTokens = lower.match(/-?\d+(?:\.\d+)?/g);
   if (!numTokens || numTokens.length < 2 || numTokens.length > 12) return null;
   const nums = numTokens.map(Number);
 
-  // Leftover guard: every remaining word must be comparison vocabulary.
-  const scrubbedWords = lower
-    .replace(/-?\d+(?:\.\d+)?/g, ' ')
-    .replace(/[^a-z\s]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w && !COMPARE_FILLER.has(w));
-  if (scrubbedWords.length) return null;
+  const words = lower.replace(/-?\d+(?:\.\d+)?/g, ' ').replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const canon = words.map(vocabWord);
+  if (canon.some((w) => w === null) || !canon.some((w) => CUE_SET.has(w))) return null;
 
-  const wantSmall = SMALLER_CUE_RE.test(lower);
   const max = Math.max.apply(null, nums);
   const min = Math.min.apply(null, nums);
+  const diff = fmtNum(max - min);
+
+  // "Is 2 bigger than 10?" is a yes/no question: answer it as one.
+  const cues = canon.filter((w) => CUE_SET.has(w));
+  const yesNo = nums.length === 2 && canon[0] === 'is' && canon.indexOf('than') > 0 && cues.length === 1;
 
   let text;
   if (max === min) {
-    text = `They're equal — all ${fmtNum(max)}.`;
+    text = yesNo ? `No — they're equal (${fmtNum(max)}).` : `They're equal — all ${fmtNum(max)}.`;
+  } else if (yesNo) {
+    const bigger = BIGGER_RE.test(cues[0]);
+    const claim = bigger ? nums[0] > nums[1] : nums[0] < nums[1];
+    text = `${claim ? 'Yes' : 'No'} — ${bigger ? `${fmtNum(max)} is bigger than ${fmtNum(min)}` : `${fmtNum(min)} is smaller than ${fmtNum(max)}`}, by ${diff}.`;
   } else if (nums.length === 2) {
-    const diff = fmtNum(Math.abs(nums[0] - nums[1]));
-    text = wantSmall
+    text = cues.some((w) => SMALLER_CUES.has(w))
       ? `${fmtNum(min)} is smaller than ${fmtNum(max)} — by ${diff}.`
       : `${fmtNum(max)} is bigger than ${fmtNum(min)} — by ${diff}.`;
   } else {
-    text = `Largest is ${fmtNum(max)}, smallest is ${fmtNum(min)}. In order: ${nums.slice().sort((a, b) => a - b).map(fmtNum).join(', ')}.`;
+    const order = nums.slice().sort((a, b) => a - b).map(fmtNum).join(', ');
+    text = cues.some((w) => SMALLER_CUES.has(w))
+      ? `Smallest is ${fmtNum(min)}, largest is ${fmtNum(max)}. In order: ${order}.`
+      : `Largest is ${fmtNum(max)}, smallest is ${fmtNum(min)}. In order: ${order}.`;
   }
 
   const out = { text: text, kind: 'compare' };
-  if (CHART_CUE_RE.test(lower)) {
-    out.chart = { type: 'bar', labels: nums.map(fmtNum), values: nums };
+  // A chart when it was asked for, or when there are enough numbers that one reads faster than a list.
+  if (canon.some((w) => CHART_SET.has(w)) || nums.length >= 3) {
+    const labels = nums.map(fmtNum);
+    out.chart = { type: 'bar', title: labels.length <= 4 ? labels.join(' vs ') : 'Comparison', labels: labels, values: nums };
   }
   return out;
 }

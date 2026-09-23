@@ -16,6 +16,19 @@
  */
 
 const KRIS_NAME = 'K.R.1.S';
+// The model's name wherever a person can see it. Whatever the server actually
+// runs (KRIS_LLM_MODEL) stays in the configuration and the logs.
+const MODEL_LABEL = 'N.A.V 3.8b';
+
+// "which model are you", "what llm powers you", "are you chatgpt / llama?"
+// The cheap hint keeps "hi" from paying for the big pattern's first compile.
+const MODEL_HINT_RE = /model|llm|\bai\b|gpt|llama|meta|claude|gemini|mistral|qwen|deepseek|copilot|openai|ollama|engine|version|powers|runs|built|based|running|trained/i;
+const MODEL_RE = new RegExp(
+  '\\b(?:wh?[ao]t|which)(?:\'?s| is)?\\s+(?:(?:ai|llm|language|large language)\\s+)?(?:model|llm|ai|engine|version)\\b.*\\b(?:you|u|kris|k\\.?r\\.?1\\.?s|this|powers?|running|use|using|based)\\b'
+  + '|\\b(?:your|ur)\\s+(?:ai\\s+|language\\s+)?(?:model|llm)\\b'
+  + '|\\bwhat (?:powers|runs) (?:you|u|kris)\\b|\\bwhat are (?:you|u) (?:built|based|running|trained) on\\b'
+  + '|\\b(?:based on|built on|running on|powered by) (?:llama|meta|chat ?gpt|gpt|openai|claude|gemini|mistral|qwen|ollama)\\b'
+  + '|\\bare (?:you|u) (?:an? )?(?:chat ?gpt|gpt[- ]?\\d*\\w*|llama|meta ai|claude|gemini|mistral|qwen|deepseek|copilot|llm|large language model|language model)\\b', 'i');
 
 // --- what is YOUR name / who are you ---------------------------------------
 
@@ -277,6 +290,10 @@ function answerIdentity(text, ctx = {}) {
     return { text: NAME_MEANING, kind: 'kris_meaning' };
   }
 
+  if (MODEL_HINT_RE.test(raw) && MODEL_RE.test(raw)) {
+    return { text: `I'm ${KRIS_NAME}, an AI assistant running on ${MODEL_LABEL}. Every vessel figure I give you comes from your records, never from the model.`, kind: 'kris_model' };
+  }
+
   if (KRIS_NAME_RE.test(raw)) {
     if (ctx.userName) {
       return {
@@ -310,4 +327,4 @@ function answerIdentity(text, ctx = {}) {
   return null;
 }
 
-module.exports = { answerIdentity, answerAboutUser, aboutTopic, normaliseQuestion, resolveNameReply, extractName, titleCase, KRIS_NAME, NAME_MEANING_RE, CAPABILITY_RE, capabilityAnswer };
+module.exports = { answerIdentity, answerAboutUser, aboutTopic, normaliseQuestion, resolveNameReply, extractName, titleCase, KRIS_NAME, MODEL_LABEL, NAME_MEANING_RE, CAPABILITY_RE, capabilityAnswer };

@@ -60,7 +60,7 @@
 
   if (global.KRIS && global.KRIS.__loaded) return;
 
-  var VERSION = '2026-09-23.kris-4';
+  var VERSION = '2026-09-23.kris-5';
 
   // Where was this script loaded from? The API lives on the same origin.
   var SCRIPT_ORIGIN = '';
@@ -5929,8 +5929,10 @@
     if (h && h.build) sg.appendChild(kvRow('Server build', String(h.build)));
     if (h && typeof h.database === 'boolean') sg.appendChild(kvRow('Records database', h.database ? 'Configured' : 'Not configured', h.database ? '' : 'badc'));
     if (h && h.companion) {
-      var notSet = h.companion.configured === false;
-      sg.appendChild(kvRow('Conversation model', h.companion.enabled === false ? 'Off' : notSet ? 'Not configured' : String(h.companion.model || 'Configured'), notSet ? 'badc' : ''));
+      // Only the display label is ever shown; the server's own model id stays out of the UI.
+      var notSet = h.companion.configured === false, down = h.companion.reachable === false;
+      var modelName = String(h.companion.label || 'Configured');
+      sg.appendChild(kvRow('Conversation model', h.companion.enabled === false ? 'Off' : notSet ? 'Not configured' : down ? modelName + ' · unreachable' : modelName, notSet || down ? 'badc' : ''));
     }
     if (h && h.auth) sg.appendChild(kvRow('Sign-in', h.auth === 'prototype' ? 'Prototype (unsigned tokens)' : 'Production'));
     sg.appendChild(kvRow('Widget', VERSION));

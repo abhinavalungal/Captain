@@ -31,6 +31,17 @@ const handler = require('../src/httpHandler');
     const h = JSON.parse(r.body);
     assert.strictEqual(h.database, false);
     assert.ok(!JSON.stringify(h).match(/postgres:\/\/|apiToken/));
+    assert.strictEqual(h.companion.label, 'N.A.V 3.8b', 'pages show the display label, not the backend model id');
+  });
+
+  await ta('handleKris: "which model are you?" answers with the display label, and no reply carries the backend model id', async () => {
+    const env = { KRIS_DEV_SESSION: '1', KRIS_ENABLE_LLM: '0' };
+    const token = Buffer.from(JSON.stringify({ sub: 'x', departments: ['Emission'] })).toString('base64');
+    const r = await handler.handleKris({ method: 'POST', headers: {}, body: JSON.stringify({ text: 'which model are you?', token }), env });
+    const out = JSON.parse(r.body);
+    assert.ok(/N\.A\.V 3\.8b/.test(out.text), out.text);
+    assert.ok(!/llama|meta|ollama/i.test(r.body), r.body);
+    assert.strictEqual(out.model, undefined);
   });
 
   await ta('handleKris: CORS echoes only a listed origin', async () => {
@@ -103,18 +114,20 @@ const handler = require('../src/httpHandler');
     assert.ok(/K\.R\.1\.S/.test(body));
   });
 
-  await ta('server: the host page carries the Shuddha now branding, and every brand asset is served', async () => {
+  await ta('server: the host page carries the Shuddha Now branding, and every brand asset is served', async () => {
     const page = await (await fetch(base + '/')).text();
-    assert.ok(/<title>Shuddha now \u2014 K\.R\.1\.S prototype<\/title>/.test(page), 'title');
-    assert.ok(/<meta name="application-name" content="Shuddha now">/.test(page), 'application-name');
+    assert.ok(/<title>Shuddha Now \u2014 [^<]+<\/title>/.test(page), 'title');
+    assert.ok(/<meta name="application-name" content="Shuddha Now">/.test(page), 'application-name');
     assert.ok(/<meta name="theme-color" content="#0F3D2E">/.test(page), 'theme colour');
     assert.ok(/<link rel="icon" type="image\/svg\+xml" href="assets\/favicon\.svg">/.test(page), 'svg favicon');
-    assert.ok(/<img src="assets\/shuddha-now-logo-reverse\.svg"[^>]+alt="Shuddha now"/.test(page), 'header logo');
+    assert.ok(/<img src="assets\/shuddha-now-logo-reverse\.svg"[^>]+alt="Shuddha Now"/.test(page), 'header logo');
+    assert.ok(/N\.A\.V 3\.8b/.test(page) && !/llama/i.test(page), 'the model is shown by its label, never the backend model id');
     assert.ok(!/geo\s*monitor/i.test(page), 'old product name left on the page');
     const assets = {
       '/assets/shuddha-now-logo.svg': 'image/svg+xml',
       '/assets/shuddha-now-logo-reverse.svg': 'image/svg+xml',
       '/assets/shuddha-now-mark.svg': 'image/svg+xml',
+      '/assets/shuddha-now-mark-reverse.svg': 'image/svg+xml',
       '/assets/favicon.svg': 'image/svg+xml',
       '/favicon.ico': 'image/x-icon',
       '/assets/apple-touch-icon.png': 'image/png',
@@ -132,14 +145,14 @@ const handler = require('../src/httpHandler');
       assert.strictEqual(r.headers.get('content-type'), type, path);
       if (type === 'image/svg+xml') {
         const svg = await r.text();
-        assert.ok(/^<svg[^>]+viewBox=/.test(svg) && /<title id="t">Shuddha now/.test(svg), path + ' is not the logo');
+        assert.ok(/^<svg[^>]+viewBox=/.test(svg) && /<title id="t">Shuddha Now/.test(svg), path + ' is not the logo');
         assert.ok(!/<text\b|<image\b|https?:\/\/(?!www\.w3\.org)/.test(svg), path + ' must be self-contained vector art');
       } else {
         await r.arrayBuffer();
       }
     }
     const manifest = await (await fetch(base + '/site.webmanifest')).json();
-    assert.strictEqual(manifest.name, 'Shuddha now');
+    assert.strictEqual(manifest.name, 'Shuddha Now');
     assert.strictEqual(manifest.theme_color, '#0F3D2E');
   });
 

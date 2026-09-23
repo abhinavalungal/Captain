@@ -1,6 +1,7 @@
 'use strict';
 
 const { profilePrompt } = require('./profile');
+const { MODEL_LABEL } = require('./identity');
 
 /**
  * The companion layer — conversation and app guidance, running on a model you
@@ -35,7 +36,9 @@ const { readSSE, readNDJSON, SentenceGate, anySignal } = require('./stream');
 const DEFAULTS = {
   provider: 'ollama',
   url: 'http://127.0.0.1:11434',
-  model: 'K.R.1.S',
+  // A real Ollama tag. (This used to be 'K.R.1.S', which no server has, so an
+  // unset KRIS_LLM_MODEL failed every conversational message with a 404.)
+  model: 'llama3.1:8b',
   timeoutMs: 30000,
   maxTokens: 700,
   temperature: 0.4,
@@ -101,7 +104,8 @@ function containsStatedFigure(text, vesselNames) {
  * widget to draw. Anything malformed is dropped silently — the prose still
  * stands on its own.
  */
-const CHART_LINE_RE = /^\s*CHART\s+(\{[\s\S]*\})\s*$/m;
+// Small models dress the line up ("CHART: {...}", or inside a ``` fence); both are accepted.
+const CHART_LINE_RE = /^[ \t]*(?:```[a-z]*[ \t]*\n[ \t]*)?CHART:?[ \t]*(\{[\s\S]*\})[ \t]*(?:\n[ \t]*```)?[ \t]*$/m;
 
 function extractChart(text) {
   const m = String(text || '').match(CHART_LINE_RE);
@@ -143,12 +147,12 @@ function systemPrompt(opts) {
   const profileBlock = about ? '\n\n' + about : '';
 
   return think
-    + 'You are K.R.1.S (say it "Kris"), the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is K.R.1.S; if asked, say so. K.R.1.S is a codename inspired by Lord Krishna, the calm charioteer who guides without taking the wheel. You are a capable general assistant in that spirit: serene, warm, clear-sighted and gently playful, never preachy. Do not quote scripture or make religious claims unless the user raises the subject, and treat it with respect when they do.\n\n'
-    + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), arithmetic and unit conversions, comparing numbers the user gives you, writing help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. Match the depth to the question: one line for a quick fact, a short structured answer for something that needs it. Show working for calculations.\n\n'
+    + 'You are K.R.1.S (say it "Kris"), the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is K.R.1.S; if asked, say so. K.R.1.S is a codename inspired by Lord Krishna, the calm charioteer who guides without taking the wheel. You are a capable general assistant in that spirit: serene, warm, clear-sighted and gently playful, never preachy. Do not quote scripture or make religious claims unless the user raises the subject, and treat it with respect when they do. You run on ' + MODEL_LABEL + ': if asked what model, LLM or AI you are, say you are K.R.1.S running on ' + MODEL_LABEL + ', and never name any other model, vendor or company.\n\n'
+    + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), arithmetic and unit conversions, comparing numbers the user gives you, writing help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. People type fast: read past typos and missing punctuation to what they mean ("whoch" is "which", "bisually" is "visually") and never comment on spelling. Lead with the answer in your first sentence. Match the depth to the question: one sentence for a quick fact or a comparison of two numbers, a short structured answer for something that needs it. Work arithmetic out carefully and state the result plainly; show working only for multi-step calculations.\n\n'
     + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data.\n\n'
-    + 'Charts: when a chart would genuinely help and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
+    + 'Charts: when the user asks to see, show, visualise, chart, graph or plot something, or you compare three or more numbers or describe a trend, and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
     + 'CHART {"type":"bar","title":"...","labels":["A","B"],"values":[1,2],"unit":""}\n'
-    + '(type is "bar" or "line"; 2 to 24 points). Do not add a chart to answers that don\'t need one.\n\n'
+    + '(type is "bar" or "line"; 2 to 24 points). Still give the answer in words; the chart supports it. No chart for anything else.\n\n'
     + (opts.light && !(opts.profile && opts.profile.style && opts.profile.style.length === 'detailed') ? 'This is a short question: answer it directly in one or two sentences. Do not pad, do not add caveats, do not restate the question.\n\n' : '')
     + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + nowLine + userLine + profileBlock + guideBlock + ctx;
 }
@@ -256,6 +260,18 @@ function buildRequest(cfg, system, messages, light, stream) {
  * minute, never throws.
  */
 let lastWarm = 0;
+
+// The model server's last known state, reported by GET /api/kris so a status
+// page can say "unreachable" instead of showing a green light while every
+// conversational message fails. null until the first probe or message.
+let llmState = null;
+function setState(ok, code) { llmState = { ok: ok, code: ok ? undefined : code, at: Date.now() }; }
+function llmStatus() { return llmState; }
+function failureCode(error) {
+  const m = String(error || '').match(/HTTP (\d{3})/);
+  return m ? 'LLM_HTTP_' + m[1] : /timed out/i.test(String(error)) ? 'LLM_TIMEOUT' : 'LLM_UNREACHABLE';
+}
+
 function warmLLM(env, fetchImpl) {
   try {
     const cfg = readEnv(env || process.env);
@@ -269,8 +285,20 @@ function warmLLM(env, fetchImpl) {
     const t = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
     if (t && t.unref) t.unref();
     Promise.resolve(f(url, { method: 'GET', headers: cfg.apiKey ? { Authorization: 'Bearer ' + cfg.apiKey } : {}, signal: ctrl ? ctrl.signal : undefined }))
-      .then((r) => (r && r.body && typeof r.body.cancel === 'function' ? r.body.cancel() : r && r.text && r.text()))
-      .catch(() => {})
+      .then((r) => {
+        if (!r || !r.ok) { setState(false, 'LLM_HTTP_' + (r ? r.status : '000')); return r && r.text && r.text(); }
+        // Ollama lists the models it has pulled; a model that was never pulled
+        // answers every message with a 404, so say so here.
+        if (cfg.provider !== 'openai_compat' && typeof r.json === 'function') {
+          return r.json().then((j) => {
+            const names = ((j && j.models) || []).map((m) => m.name || m.model);
+            setState(names.includes(cfg.model) || names.includes(cfg.model + ':latest'), 'LLM_MODEL_MISSING');
+          });
+        }
+        setState(true);
+        return r.body && typeof r.body.cancel === 'function' ? r.body.cancel() : r.text && r.text();
+      })
+      .catch(() => setState(false, 'LLM_UNREACHABLE'))
       .then(() => { if (t) clearTimeout(t); });
   } catch (_) { /* warming is best-effort */ }
 }
@@ -313,6 +341,7 @@ async function converse(text, opts) {
   const names = [].concat(opts.vesselNames || [], opts.context && opts.context.vesselName ? [opts.context.vesselName] : []);
   const fail = function (error) {
     if (timer) clearTimeout(timer);
+    if (!(opts.signal && opts.signal.aborted)) setState(false, failureCode(error)); // the user pressing stop is not an outage
     return { text: UNAVAILABLE, blocked: false, error: error, provider: cfg.provider, model: cfg.model };
   };
 
@@ -339,6 +368,7 @@ async function converse(text, opts) {
     }
     if (!res.ok) return fail('HTTP ' + res.status + ': ' + String(detail).slice(0, 150));
   }
+  setState(true);
 
   // --- non-streamed: unchanged behaviour ----------------------------------------
   if (!streaming) {
@@ -404,4 +434,4 @@ async function converse(text, opts) {
   return { text: parsed.text, chart: parsed.chart, blocked: false, streamed: true, provider: cfg.provider, model: cfg.model };
 }
 
-module.exports = { converse: converse, warmLLM: warmLLM, providerRouting: providerRouting, reasoningDirective: reasoningDirective, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
+module.exports = { converse: converse, warmLLM: warmLLM, llmStatus: llmStatus,providerRouting: providerRouting, reasoningDirective: reasoningDirective, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };

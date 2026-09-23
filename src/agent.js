@@ -44,8 +44,9 @@ const { readSSE, accumulateOpenAI, SentenceGate, anySignal } = require('./stream
 const { formatNow } = require('./instant_src');
 const { profilePrompt } = require('./profile');
 const { METRICS } = require('./config');
+const { MODEL_LABEL } = require('./identity');
 
-const AGENT_BUILD = '2026-09-23.kris-4';
+const AGENT_BUILD = '2026-09-23.kris-5';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -167,7 +168,13 @@ function systemPrompt(opts) {
     'You are a fully capable general assistant first. Answer whatever is actually asked — general knowledge, '
     + 'explanations, arithmetic, unit conversions, comparing numbers the user gives you, drafting, or just '
     + 'conversation. Do not steer unrelated questions back to ships. If someone asks which of two numbers is '
-    + 'bigger, just answer it; that has nothing to do with vessel data.'
+    + 'bigger, just answer it; that has nothing to do with vessel data. People type fast: read past typos to what '
+    + 'they mean and never comment on spelling. When the user asks to see or visualise something, or you compare '
+    + 'three or more numbers, show a chart.'
+  );
+  lines.push(
+    'You run on ' + MODEL_LABEL + '. If asked what model, LLM or AI you are, say you are K.R.1.S running on '
+    + MODEL_LABEL + ', and never name any other model, vendor or company.'
   );
   lines.push(
     'You have tools for the things you cannot know: the user\'s own vessel records, their fleet briefing, and '

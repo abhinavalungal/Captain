@@ -81,6 +81,25 @@ t('does not steal data questions, greetings or general questions', () => {
   assert.strictEqual(ask('how many days did we lose to off hire', 'Asia/Kolkata'), null, 'an off-hire question is data, not date arithmetic');
 });
 
+t('compare: the prompt that used to fall through to the model is answered here, with a chart', () => {
+  for (const q of ['can oyu compare 2 and 10 whoch is bigger and show me bisually', 'Compare 2 and 10. Which one is bigger? Show me visually.']) {
+    const r = ask(q);
+    assert.strictEqual(r && r.text, '10 is bigger than 2 — by 8.', q);
+    assert.deepStrictEqual(r.chart && r.chart.values, [2, 10], q);
+  }
+  assert.strictEqual(ask('compare 2 and 10').chart, undefined, 'two numbers and no visual cue: one line, no chart');
+  assert.ok(ask('compare 3, 9 and 5').chart, 'three or more numbers get a chart');
+});
+t('compare: yes/no questions get a yes or no', () => {
+  assert.strictEqual(ask('Is 2 bigger than 10?').text, 'No — 10 is bigger than 2, by 8.');
+  assert.strictEqual(ask('is 2 smaller than 10').text, 'Yes — 2 is smaller than 10, by 8.');
+});
+t('compare: vessel words are never read as typos of comparison words', () => {
+  for (const q of ['compare power 2 and 10', 'compare legs 2 and 10', 'compare speed of 2 vessels', 'compare fuel consumption 2024 vs 2025']) {
+    assert.strictEqual(ask(q), null, q);
+  }
+});
+
 console.log(`\nInstant: ${passed} passed, ${fails.length} failed`);
 fails.forEach((f) => console.log('  FAIL ' + f));
 process.exit(fails.length ? 1 : 0);

@@ -122,12 +122,46 @@ exposes `memory`, `settings`, `view`, `conversation`, `open`, `close` and
 `answer` events. Voice, files, tools, other models or workspace knowledge
 can be added on these seams without rebuilding the widget.
 
-### Upgrading to this release
+### Upgrading to kris-5 (answer quality, Shuddha Now site)
+
+- Deploy together: `src/instant_src.js`, `src/identity.js`,
+  `src/companion_src.js`, `src/agent.js`, `src/httpHandler.js`,
+  `src/router.js`, `public/kris-widget.js`, `public/index.html`,
+  `public/site.webmanifest` and `public/assets/`. Build stamps are
+  `2026-09-23.kris-5`. No migration, no new environment variables.
+- **Number comparisons no longer depend on the model.** "Compare 2 and 10.
+  Which one is bigger? Show me visually." used to fall through to the model
+  because "visually" (and any typo — "whoch", "bisually", "oyu") was not in
+  the comparison vocabulary; with the model unreachable it failed outright.
+  It is now answered exactly in the fast lane (~1 ms) with a bar chart.
+  Typos one slip from a comparison word are accepted; vessel words never
+  are ("power" is not "lower"), so data questions still reach the parser.
+  "Is 2 bigger than 10?" gets a yes or no; three or more numbers get a chart.
+- **The model is shown as N.A.V 3.8b.** Pages and the widget show only
+  `companion.label` from `GET /api/kris`; the real `KRIS_LLM_MODEL` stays in
+  configuration and logs, and replies no longer carry a `model` field.
+  "Which model are you?" is answered in the fast lane, and both conversation
+  prompts say the same and never name another model or vendor. The label is
+  `MODEL_LABEL` in `src/identity.js`.
+- **Model reachability is reported.** `GET /api/kris` now carries
+  `companion.reachable` and `companion.problem` (`LLM_UNREACHABLE`,
+  `LLM_HTTP_404`, `LLM_MODEL_MISSING` when Ollama hasn't pulled the model…),
+  from the warm-up probe and the last real message. The status page and
+  About show "unreachable" instead of a green light.
+- The companion's default model was `K.R.1.S` — not a real tag, so an unset
+  `KRIS_LLM_MODEL` failed every message with a 404. It is now `llama3.1:8b`.
+- Conversation prompt: answer first, read past typos, one sentence for a
+  simple question, and a chart whenever the user asks to see something or
+  compares three or more numbers. A `CHART:` line or one wrapped in a code
+  fence (small models do both) is now parsed too.
+- `GET /` is now a Shuddha Now site with the new logo (see "Run it").
+
+### Upgrading to kris-4
 
 - Deploy **every** changed server file together — `src/profile.js` (new),
   `src/identity.js`, `src/httpHandler.js`, `src/router.js`,
   `src/companion_src.js`, `src/agent.js` — plus `public/kris-widget.js`. The
-  build stamps are all `2026-09-23.kris-4`; a mixed deploy is reported on
+  build stamps were all `2026-09-23.kris-4`; a mixed deploy is reported on
   error cards as "FILES OUT OF SYNC". `GET /api/kris` shows the build.
 - No database migration and no new environment variables. The conversation
   layer still needs `KRIS_LLM_PROVIDER`, `KRIS_LLM_URL` and `KRIS_LLM_MODEL`
@@ -370,7 +404,7 @@ upstream APIs exist.
 | `KRIS_LLM_PROVIDER` | `ollama` or `openai_compat` |
 | `KRIS_LLM_URL`, `KRIS_LLM_MODEL` | where the model is and which one |
 | `KRIS_LLM_API_KEY` | only if your own server requires one |
-| `KRIS_APP_NAME` | how K.R.1.S refers to your application (`Shuddha now`) |
+| `KRIS_APP_NAME` | how K.R.1.S refers to your application (`Shuddha Now`) |
 
 A token that has been pasted into a chat or ticket should be rotated. The one
 you gave me is in `.env` now; `.gitignore` excludes it.
@@ -443,7 +477,7 @@ warning in the result, not an abort. Each run is recorded in
 
 Vessel ids are IMO numbers — the key Veson and Geoform share. The `vessels`
 table is populated from what the sync sees; set `department` there to scope
-users the way Shuddha now does.
+users the way Shuddha Now does.
 
 ### What K.R.1.S can be asked
 
@@ -468,7 +502,7 @@ only — see step 6). That is deliberate: K.R.1.S refuses everything rather
 than trusting a client-supplied identity.
 
 Return `{ userId, orgId, departments?, vesselIds? }`. Give it `departments` to
-reuse the Shuddha now department gate, or `vesselIds` to pin a user to an
+reuse the Shuddha Now department gate, or `vesselIds` to pin a user to an
 explicit list.
 
 ### 6. Run it
@@ -479,22 +513,17 @@ KRIS_READ_URL=... KRIS_WRITE_URL=... node server.js
 
 That starts a plain HTTP server on `PORT` (default `8787`) serving:
 
-- `GET /` — the prototype host page, standing in for `perform.geoserves.com/pages/`
-  until K.R.1.S moves there for real. Shows a live readout (backend,
-  database, companion model, sign-in mode), a department switcher to try
-  RBAC, a page-context demo, and the exact embed snippet for your real page.
-  It carries the Shuddha now identity: the reverse logo in a Deep Pine
-  header, the compass-and-kayak favicon, and the brand palette and typeface
-  (Manrope, served locally from `assets/fonts/`).
+- `GET /` — the Shuddha Now site, standing in for `perform.geoserves.com/pages/`
+  until K.R.1.S moves there for real: hero, platform overview, a K.R.1.S
+  section with try-it prompts and the department switcher (prototype
+  sign-in), a live status readout (backend, database, model — shown as
+  N.A.V 3.8b — and sign-in mode), the page-context demo and the embed
+  snippet. It uses the new Shuddha Now logo (S-ring and needle mark) in Deep
+  Pine, Jade, Sage and Mist, set in Manrope (served from `assets/fonts/`).
 - `GET /assets/…`, `/favicon.ico`, `/site.webmanifest` — the logo (light and
-  reverse), symbol, favicons, app icons, social preview image and fonts. The
-  SVGs are vector artwork with the lettering converted to outlines, so they
-  render the same on every machine with no font installed.
-
-The complete brand kit — every logo version as SVG and PNG, app icons, and
-the brand guide (`brand/Shuddha-now-brand-guide.pdf`) — is in `brand/`; see
-`brand/README.md` for which file to use where. It is not part of the deployed
-server.
+  reverse), the mark (light and reverse), favicons, app icons, social preview
+  image and fonts. The SVGs are vector artwork with the lettering converted
+  to outlines, so they render the same on every machine with no font installed.
 - `GET /kris-widget.js` — the widget, as a static file
 - `GET|POST /api/kris` — health check / ask a question
 - `POST /api/kris-sync` — optional network-triggered sync (see step 4)

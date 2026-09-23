@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const KRIS_BUILD = '2026-09-23.kris-4';
+const KRIS_BUILD = '2026-09-23.kris-5';
 
 // Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
@@ -63,7 +63,8 @@ function recordError(where, err, extra) {
 const router = require('./router');
 const { findRenames } = require('./envcheck');
 const { LIMITS, METRICS, SOURCES } = require('./config');
-const { readEnv: llmConfig, warmLLM } = require('./companion_src');
+const { readEnv: llmConfig, warmLLM, llmStatus } = require('./companion_src');
+const { MODEL_LABEL } = require('./identity');
 const { sanitizeProfile, addressName } = require('./profile');
 const { sync } = require('./integrations/sync');
 
@@ -377,6 +378,7 @@ function safeAgentBuild() {
 
 function health(env) {
   const llm = llmConfig(env);
+  const state = llmStatus();
   return {
     status: 'ok',
     service: 'kris',
@@ -388,7 +390,12 @@ function health(env) {
     database: !!env.KRIS_READ_URL,
     writer: !!env.KRIS_WRITE_URL,
     auth: env.KRIS_DEV_SESSION === '1' ? 'prototype' : 'production',
-    companion: llm.enabled ? { provider: llm.provider, model: llm.model, url: llm.url ? '(configured)' : null, configured: !!env.KRIS_LLM_URL } : { enabled: false },
+    // `label` is the only model name a page should show; `model` is for whoever runs the server.
+    // `reachable` is the last probe or message: true, false, or null before the first one.
+    companion: llm.enabled
+      ? { provider: llm.provider, model: llm.model, label: MODEL_LABEL, url: llm.url ? '(configured)' : null, configured: !!env.KRIS_LLM_URL,
+        reachable: state ? state.ok : null, problem: state && !state.ok ? state.code : undefined }
+      : { enabled: false, label: MODEL_LABEL },
     sources: Object.values(SOURCES).map((s) => s.description),
     metrics: METRICS.filter((m) => !m.finerVersionOf).length,
     allowedOrigins: allowedOriginsList(env),
@@ -543,6 +550,7 @@ async function handleKris(req) {
       recordError('router:' + (out.reason || out.source || ''), { name: 'Error', message: out.error });
       delete out.error;
     }
+    delete out.model; // the backend model id never reaches the browser; pages show MODEL_LABEL
     if (out.status === 'error') {
       out.build = KRIS_BUILD;
       // Belt and braces: if the router did not attach the cause (older
