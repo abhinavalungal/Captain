@@ -60,7 +60,7 @@
 
   if (global.KRIS && global.KRIS.__loaded) return;
 
-  var VERSION = '2026-09-23.kris-5';
+  var VERSION = '2026-09-24.kris-6';
 
   // Where was this script loaded from? The API lives on the same origin.
   var SCRIPT_ORIGIN = '';
@@ -621,7 +621,7 @@
     '.msg > :first-child{margin-top:0}',
     '.msg p{margin:0}',
     '.msg p + p,.msg p + ul,.msg p + ol,.msg ul + p,.msg ol + p,.msg pre + p,.msg p + pre,.msg .tablewrap + p,.msg p + .tablewrap,.msg blockquote + p,.msg p + blockquote{margin-top:10px}',
-    '.msg h4{margin:14px 0 6px;font:650 14.5px/1.4 var(--display);letter-spacing:-.01em}',
+    '.msg h4{margin:18px 0 6px;font:650 calc(var(--fs,14.5px) + 1px)/1.35 var(--display);letter-spacing:-.012em;color:var(--ink)}',
     '.msg h4:first-child{margin-top:0}',
     '.msg strong{font-weight:650;color:var(--ink)}',
     '.msg em{font-style:italic}',
@@ -706,7 +706,8 @@
     '.tablewrap{margin-top:10px;overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}',
     '.card .tablewrap{border-radius:10px}',
     'table.grid{border-collapse:collapse;width:100%;font-size:13px}',
-    'table.grid th,table.grid td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}',
+    'table.grid th,table.grid td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:normal;word-break:normal}',
+    'table.grid td:first-child{font-weight:550;color:var(--ink)}',
     'table.grid tr:last-child td,table.grid tr:last-child th{border-bottom:0}',
     'table.grid th{font:600 10.5px/1.3 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);white-space:nowrap}',
     'table.grid .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}',
@@ -757,7 +758,7 @@
     '.box:hover{border-color:var(--line-3)}',
     '.box.focus{border-color:var(--ring-line);box-shadow:0 0 0 4px var(--ring),var(--shadow-md)}',
     '.box textarea{grid-column:1;display:block;width:100%;border:0;outline:0;resize:none;background:transparent;color:var(--ink);' +
-      'font:400 calc(var(--fs,14.5px) + .5px)/1.5 var(--font);letter-spacing:-.003em;padding:13px 6px 13px 16px;height:48px;min-height:48px;max-height:180px;overflow-y:auto;scrollbar-width:thin}',
+      'font:400 calc(var(--fs,14.5px) + .5px)/1.5 var(--font);letter-spacing:-.003em;padding:13px 6px 13px 16px;height:48px;min-height:48px;max-height:180px;overflow-y:hidden;scrollbar-width:thin}',
     '.box textarea::placeholder{color:var(--ink-3);opacity:1}',
     '.send{grid-column:2;margin:6px 6px 6px 0;width:36px;height:36px;border-radius:50%;border:0;background:var(--send-bg);color:var(--on-accent);cursor:pointer;display:grid;place-items:center;flex:none;' +
       'box-shadow:0 6px 14px -7px rgba(27,32,102,.8),inset 0 0 0 1px rgba(255,255,255,.18);transition:filter .15s,transform .2s var(--spring),background .15s}',
@@ -1760,8 +1761,8 @@
     persist: true,          // keep the conversation for this tab (sessionStorage); false also turns history off
     localReplies: true,     // answer pure greetings/thanks instantly, offline
     warm: true,             // warm the server connection when the page is idle
-    maxLength: 1000,
-    timeoutMs: 90000,
+    maxLength: 8000,
+    timeoutMs: 90000,       // longest SILENCE before giving up; every streamed event restarts it
     onOpen: null,
     onClose: null,
     onAnswer: null,
@@ -1784,6 +1785,10 @@
                             // character, sendWithEnter, followups, history }
     hotkey: null            // e.g. 'mod+k': open / close from anywhere on the page (mod = Ctrl, or ⌘ on a Mac)
   };
+
+  // What the model sees of this chat (the server applies the same limits).
+  var HISTORY_TURNS = 20;
+  var HISTORY_CHARS = 6000;
 
   var THEMES = ['light', 'dark', 'auto'];
   var THEME_KEY = 'kris:theme';
@@ -2601,6 +2606,9 @@
     var ta = this.input;
     ta.style.height = 'auto';
     ta.style.height = Math.min(Math.max(ta.scrollHeight, 48), 180) + 'px';
+    // A scrollbar only once the text outgrows the box (half a pixel of
+    // rounding used to show one on an empty composer).
+    ta.style.overflowY = ta.scrollHeight > 180 ? 'auto' : 'hidden';
   };
 
   Widget.prototype.updateComposer = function () {
@@ -3303,7 +3311,7 @@
     // belongs to THIS chat at once, so the reply can already use it. ("Forget
     // that I work at Maersk" is not a statement that they do.)
     var facts = carried || cmd ? [] : this.noticeFacts(body);
-    var historySnapshot = this.history.slice(-8);
+    var historySnapshot = this.history.slice(-HISTORY_TURNS);
     this.pending = null;
 
     // ---- local: memory commands and greetings never touch the network --------
@@ -3356,11 +3364,11 @@
     this._tick = setInterval(function () {
       var s = Math.round((Date.now() - t0) / 1000);
       if (s >= 3) secs.textContent = s + 's';
-      if (s >= 12 && !slowShown && thinking.parentNode) {
+      if (s >= 20 && !slowShown && thinking.parentNode) {
         slowShown = true;
         slot.msg.appendChild(el('div', 'slowhint', self._conn === 'waking'
           ? 'The server is waking up — the first reply can take up to a minute.'
-          : 'Still working on it. Long questions can take a little while.'));
+          : 'Still thinking. A careful answer to a bigger question can take a little longer.'));
         self.stick();
       }
     }, 1000);
@@ -3368,19 +3376,25 @@
 
     var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     var timedOut = false;
-    var timer = setTimeout(function () { timedOut = true; if (ctrl) ctrl.abort(); }, this.opts.timeoutMs);
+    // Restarted by every streamed event (text, or "still thinking"), so only
+    // silence gives up; a long answer that keeps coming is never cut off.
+    var timer = null;
+    var arm = function () { clearTimeout(timer); timer = setTimeout(function () { timedOut = true; if (ctrl) ctrl.abort(); }, self.opts.timeoutMs); };
+    var disarm = function () { clearTimeout(timer); };
+    arm();
     var stream = new Typewriter(this, slot);
     // A reply belongs to the conversation that asked for it. New chat, opening
     // another conversation or a change of user abandons it (gen moves on), and
     // whatever arrives later is dropped instead of landing in the wrong chat.
     var gen = this._gen = (this._gen || 0) + 1;
     var stale = function () { return gen !== self._gen; };
-    this._active = { ctrl: ctrl, stream: stream, slot: slot, body: body, timer: timer, gen: gen };
+    this._active = { ctrl: ctrl, stream: stream, slot: slot, body: body, disarm: disarm, gen: gen };
 
     var hooks = {
       signal: ctrl ? ctrl.signal : undefined,
       onDelta: function (evt) {
         if (!evt || stale()) return;
+        arm();
         markDelivered();
         if (evt.t === 'status') { label.textContent = evt.text || label.textContent; self.setStatusText((evt.text || '') + '…'); return; }
         if (evt.t === 'delta' || evt.t === 'replace') {
@@ -3392,7 +3406,7 @@
 
     this.transport(body, carried, historySnapshot, hooks).then(function (data) {
       if (stale()) return;
-      clearTimeout(timer); stopClock(); markDelivered();
+      disarm(); stopClock(); markDelivered();
       if (!data || typeof data !== 'object') data = { status: 'error', text: 'The server sent an empty response.' };
       return stream.finish(data).then(function () {
         if (stale()) return;
@@ -3400,7 +3414,7 @@
       });
     }, function (err) {
       if (stale()) return;
-      clearTimeout(timer); stopClock(); clearTimeout(sendingT);
+      disarm(); stopClock(); clearTimeout(sendingT);
       if (userEl) userEl.classList.remove('sending');
       var aborted = err && err.name === 'AbortError';
       if (aborted && !timedOut) {
@@ -3434,7 +3448,7 @@
     if (silent) {
       // Abandon it: whatever the transport does next is ignored.
       this._gen = (this._gen || 0) + 1;
-      clearTimeout(a.timer);
+      a.disarm();
       if (a.ctrl) a.ctrl.abort();
       a.stream.cancel();
       this._active = null;
@@ -3473,8 +3487,8 @@
     // "and last week?" into the previous question over a new period.
     // Assistant turns are kept only for conversational sources.
     this.history.push({ role: 'user', text: body });
-    if (isConversational(data) && data.text) this.history.push({ role: 'assistant', text: String(data.text).slice(0, 1200) });
-    this.history = this.history.slice(-10);
+    if (isConversational(data) && data.text) this.history.push({ role: 'assistant', text: String(data.text).slice(0, HISTORY_CHARS) });
+    this.history = this.history.slice(-HISTORY_TURNS);
 
     var rec = { role: 'assistant', text: data.text || '', data: slimForStore(data), at: Date.now(), ms: ms, send: body };
     // The user's own words stand whatever the server made of them — but a
@@ -3545,10 +3559,10 @@
       if (tr.role === 'user') h.push({ role: 'user', text: tr.send || tr.text });
       else {
         var data = tr.data || { text: tr.text };
-        if (isConversational(data) && data.text) h.push({ role: 'assistant', text: String(data.text).slice(0, 1200) });
+        if (isConversational(data) && data.text) h.push({ role: 'assistant', text: String(data.text).slice(0, HISTORY_CHARS) });
       }
     });
-    this.history = h.slice(-10);
+    this.history = h.slice(-HISTORY_TURNS);
   };
 
   /** Re-ask the last question, replacing the last answer. */
@@ -4001,19 +4015,30 @@
   // ==========================================================================
   //  Streaming renderer: steady reveal, markdown re-rendered per frame
   // ==========================================================================
+  /**
+   * Blocks that can no longer change (everything before the last blank line
+   * outside a code fence) are drawn once and kept; only the block still being
+   * written is redrawn each frame. The result is the same DOM a full render
+   * gives, without rebuilding a long answer sixty times a second.
+   */
   function Typewriter(widget, slot) {
     this.w = widget; this.slot = slot;
     this.target = ''; this.shown = 0; this.started = false; this.done = false;
     this.raf = null; this.resolve = null; this.last = 0;
+    this.frozen = 0; this.tail = []; this.caret = null;
   }
+  Typewriter.prototype.reset = function () {
+    this.slot.msg.innerHTML = '';
+    this.frozen = 0; this.tail = []; this.caret = null;
+  };
   Typewriter.prototype.start = function () {
     this.started = true;
     this.slot.el.classList.add('streaming');
-    this.slot.msg.innerHTML = '';
+    this.reset();
     this.tick();
   };
   Typewriter.prototype.push = function (t) { this.target += t; this.tick(); };
-  Typewriter.prototype.replace = function (t) { this.target = t; this.shown = Math.min(this.shown, t.length); if (t.length < this.shown) this.shown = 0; this.tick(); };
+  Typewriter.prototype.replace = function (t) { this.target = t; this.shown = Math.min(this.shown, t.length); if (this.started) this.reset(); this.tick(); };
   Typewriter.prototype.text = function () { return this.target; };
   Typewriter.prototype.cancel = function () { this.done = true; if (this.raf) caf(this.raf); this.raf = null; if (this.resolve) { var r = this.resolve; this.resolve = null; r(); } };
   Typewriter.prototype.tick = function () {
@@ -4036,15 +4061,40 @@
   };
   Typewriter.prototype.render = function () {
     var msg = this.slot.msg;
-    msg.innerHTML = '';
-    renderRich(msg, this.target.slice(0, this.shown), true);
-    var caret = el('span', 'caret');
+    var text = this.target.slice(0, this.shown);
+    if (this.caret && this.caret.parentNode) this.caret.parentNode.removeChild(this.caret);
+    for (var i = 0; i < this.tail.length; i++) if (this.tail[i].parentNode === msg) msg.removeChild(this.tail[i]);
+    var cut = stableCut(text);
+    if (cut > this.frozen) {
+      var chunk = text.slice(this.frozen, cut);
+      if (chunk.trim()) { var done = document.createDocumentFragment(); renderRich(done, chunk, false); msg.appendChild(done); }
+      this.frozen = cut;
+    }
+    var live = document.createDocumentFragment();
+    renderRich(live, text.slice(this.frozen), true);
+    this.tail = Array.prototype.slice.call(live.childNodes);
+    msg.appendChild(live);
+    var caret = this.caret = el('span', 'caret');
     var lastBlock = msg.lastElementChild;
     var host = lastBlock && /^(P|LI|H4)$/.test(lastBlock.tagName) ? lastBlock
       : lastBlock && (lastBlock.tagName === 'UL' || lastBlock.tagName === 'OL') ? (lastBlock.lastElementChild || lastBlock) : msg;
     host.appendChild(caret);
     this.w.stick();
   };
+
+  /** Where the finished blocks end: just after the last blank line outside a code fence. */
+  var FENCE_OPEN_RE = /^\s*```\s*([\w+#.-]*)\s*$/, FENCE_CLOSE_RE = /^\s*```\s*$/;
+  function stableCut(text) {
+    var lines = String(text).split('\n'), pos = 0, cut = 0, fence = false;
+    for (var i = 0; i < lines.length - 1; i++) {   // the last line may still be growing
+      var line = lines[i];
+      if (fence) { if (FENCE_CLOSE_RE.test(line)) fence = false; }
+      else if (FENCE_OPEN_RE.test(line)) fence = true;
+      else if (!line.trim()) cut = pos + line.length + 1;
+      pos += line.length + 1;
+    }
+    return cut;
+  }
   /** Let the reveal catch up with the final text, then resolve. */
   Typewriter.prototype.finish = function (data) {
     var self = this;
@@ -4489,12 +4539,12 @@
     }
     while (i < lines.length) {
       var line = lines[i];
-      var fence = line.match(/^\s*```\s*([\w+#.-]*)\s*$/);
+      var fence = line.match(FENCE_OPEN_RE);
       if (fence) {
         flushPara();
         var code = [];
         i++;
-        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { code.push(lines[i]); i++; }
+        while (i < lines.length && !FENCE_CLOSE_RE.test(lines[i])) { code.push(lines[i]); i++; }
         i++;
         container.appendChild(codeBlock(code.join('\n'), fence[1]));
         continue;

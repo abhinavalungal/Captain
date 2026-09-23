@@ -4,17 +4,18 @@ const { profilePrompt } = require('./profile');
 const { MODEL_LABEL } = require('./identity');
 
 /**
- * The companion layer — conversation and app guidance, running on a model you
- * host yourself. No paid API is involved anywhere in this file.
+ * The companion layer — conversation and app guidance.
  *
- * Supported backends (all open-source, all free):
+ * The model is GLM-5.3-Flash (z-ai/glm-5.3-flash) on OpenRouter: set
+ * KRIS_LLM_API_KEY and nothing else. Pages still show it as MODEL_LABEL.
  *
- *   ollama          Ollama's native /api/chat            (default)
- *   openai_compat   any OpenAI-compatible /v1/chat/completions server:
- *                   vLLM, llama.cpp server, LM Studio, LocalAI, text-generation-webui
+ * Transports:
  *
- * Pick with KRIS_LLM_PROVIDER, point at it with KRIS_LLM_URL, choose a
- * model with KRIS_LLM_MODEL. Nothing here is specific to a vendor.
+ *   openai_compat   any OpenAI-compatible /v1/chat/completions server   (default)
+ *                   OpenRouter, vLLM, llama.cpp server, LM Studio, LocalAI
+ *   ollama          Ollama's native /api/chat
+ *
+ * KRIS_LLM_PROVIDER, KRIS_LLM_URL and KRIS_LLM_MODEL override the defaults.
  *
  * This module is never the path for a vessel figure — the router only reaches
  * it after the data parser and the guide matcher have both had a turn. Two
@@ -31,28 +32,60 @@ const { MODEL_LABEL } = require('./identity');
  *      unit-tested directly.
  */
 
-const { readSSE, readNDJSON, SentenceGate, anySignal } = require('./stream');
+const { readSSE, readNDJSON, SentenceGate, anySignal, hasReasoning, thinkingBeat } = require('./stream');
 
 const DEFAULTS = {
-  provider: 'ollama',
-  url: 'http://127.0.0.1:11434',
-  // A real Ollama tag. (This used to be 'K.R.1.S', which no server has, so an
-  // unset KRIS_LLM_MODEL failed every conversational message with a 404.)
-  model: 'llama3.1:8b',
+  provider: 'openai_compat',
+  url: 'https://openrouter.ai/api',
+  model: 'z-ai/glm-5.3-flash',
+  // How long the model may stay SILENT — before its first token, or between
+  // tokens. Reasoning tokens count as progress, so a long, careful answer is
+  // never cut off while it is still being written.
   timeoutMs: 30000,
-  maxTokens: 700,
-  temperature: 0.4,
-  // Light messages get a small, fast model, a tight token budget and a short
-  // timeout — a quick question should never wait on a frontier model.
-  fastTimeoutMs: 12000,
-  fastMaxTokens: 220,
-  // Reasoning models: ask for the LOWEST effort rather than "off". Some models
-  // (e.g. GLM-5.3-flash on OpenRouter) have reasoning marked mandatory and
-  // default to MAX effort; "enabled: false" is rejected or ignored there and
-  // every reply then thinks for tens of seconds. "low" + "exclude" is honoured
-  // by both mandatory and optional reasoning models.
-  reasoningEffort: 'low',
+  // A ceiling, not a target: reasoning and answer share it. The prompt and
+  // the question decide the length.
+  maxTokens: 8192,
+  temperature: 0.4,   // Ollama only; hosted models run at their own recommended setting
 };
+
+// What the model sees of the conversation. Generous on purpose: the context
+// window is large, and a follow-up is only as good as what the model can see.
+const HISTORY_TURNS = 20;
+const HISTORY_CHARS = 6000;
+const MESSAGE_CHARS = 8000;
+
+/**
+ * Short, simple messages are answered briefly and with light reasoning;
+ * substantial ones get the model's full attention. "What does CII stand
+ * for" and "explain FuelEU pooling" deserve different amounts of thought.
+ */
+const HEAVY_RE = /\b(explain|why|how does|how do|compare|analyse|analyze|calculate|work out|difference between|pros and cons|walk me through|step by step|write|draft|summar|plan|evaluate|review|debug)/i;
+
+function isLightMessage(text) {
+  const t = String(text || '').trim();
+  if (t.length > 140) return false;              // long question, treat as substantial
+  if (/\n/.test(t)) return false;                 // multi-line, likely detailed
+  if (HEAVY_RE.test(t)) return false;             // asks for reasoning or composition
+  return t.split(/\s+/).length <= 14;
+}
+
+/**
+ * OpenRouter reasoning effort for one message. KRIS_LLM_REASONING_EFFORT pins
+ * it (low | medium | high); otherwise it follows the question. GLM-5.3-Flash
+ * always reasons; only the depth changes.
+ */
+function effortFor(text, env) {
+  const pinned = String((env && env.KRIS_LLM_REASONING_EFFORT) || '').toLowerCase();
+  if (pinned) return pinned;
+  const t = String(text || '');
+  if (isLightMessage(t)) return 'low';
+  return HEAVY_RE.test(t) || t.length > 400 ? 'high' : 'medium';
+}
+
+/** A model is set up: a key for the default hosted endpoint, or a server of your own. */
+function llmConfigured(env) {
+  return !!(env && (env.KRIS_LLM_API_KEY || env.KRIS_LLM_URL));
+}
 
 /**
  * The output guard. Its ONLY job is to stop the model presenting a figure as
@@ -135,7 +168,6 @@ function systemPrompt(opts) {
   const ctx = opts.context && opts.context.vesselName
     ? '\n\nThe user is currently viewing the vessel "' + opts.context.vesselName + '" in the app. You may refer to it by name, but you have no data about it.'
     : '';
-  const think = opts.reasoningOff ? '/no_think\n\n' : '';
   const nowLine = opts.nowLabel
     ? '\n\nCurrent date and time: ' + opts.nowLabel + '. Use this for anything about today, dates, deadlines or elapsed time. Never say you do not know the date or time. You do not have live news or prices; if asked about current events, say your knowledge may be out of date rather than guessing.'
     : '';
@@ -146,15 +178,15 @@ function systemPrompt(opts) {
   const about = profilePrompt(opts.profile);
   const profileBlock = about ? '\n\n' + about : '';
 
-  return think
-    + 'You are K.R.1.S (say it "Kris"), the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is K.R.1.S; if asked, say so. K.R.1.S is a codename inspired by Lord Krishna, the calm charioteer who guides without taking the wheel. You are a capable general assistant in that spirit: serene, warm, clear-sighted and gently playful, never preachy. Do not quote scripture or make religious claims unless the user raises the subject, and treat it with respect when they do. You run on ' + MODEL_LABEL + ': if asked what model, LLM or AI you are, say you are K.R.1.S running on ' + MODEL_LABEL + ', and never name any other model, vendor or company.\n\n'
-    + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), arithmetic and unit conversions, comparing numbers the user gives you, writing help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. People type fast: read past typos and missing punctuation to what they mean ("whoch" is "which", "bisually" is "visually") and never comment on spelling. Lead with the answer in your first sentence. Match the depth to the question: one sentence for a quick fact or a comparison of two numbers, a short structured answer for something that needs it. Work arithmetic out carefully and state the result plainly; show working only for multi-step calculations.\n\n'
+  return 'You are K.R.1.S (say it "Kris"), the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is K.R.1.S; if asked, say so. K.R.1.S is a codename inspired by Lord Krishna, the calm charioteer who guides without taking the wheel. You are a capable general assistant in that spirit: serene, warm, clear-sighted and gently playful, never preachy. Do not quote scripture or make religious claims unless the user raises the subject, and treat it with respect when they do. You run on ' + MODEL_LABEL + ': if asked what model, LLM or AI you are, say you are K.R.1.S running on ' + MODEL_LABEL + ', and never name any other model, vendor or company.\n\n'
+    + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), regulation (EU ETS, FuelEU Maritime, CII, EEXI, IMO), arithmetic and unit conversions, comparing numbers the user gives you, writing and code help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. People type fast: read past typos and missing punctuation to what they mean ("whoch" is "which", "bisually" is "visually") and never comment on spelling. Work out what they actually need before answering; if a question is genuinely ambiguous, answer the most likely reading and say which one you took.\n\n'
+    + 'Lead with the answer in your first sentence. Match the depth to the question: one sentence for a quick fact or a comparison of two numbers; for anything substantial, a complete, well-organised answer that covers what matters and stops there. Think multi-step problems through before you answer, check arithmetic and logic, and state results plainly; show working only where it helps the user follow. Be accurate rather than confident: if you are unsure, or something may have changed since your training, say so briefly.\n\n'
     + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data.\n\n'
     + 'Charts: when the user asks to see, show, visualise, chart, graph or plot something, or you compare three or more numbers or describe a trend, and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
     + 'CHART {"type":"bar","title":"...","labels":["A","B"],"values":[1,2],"unit":""}\n'
     + '(type is "bar" or "line"; 2 to 24 points). Still give the answer in words; the chart supports it. No chart for anything else.\n\n'
     + (opts.light && !(opts.profile && opts.profile.style && opts.profile.style.length === 'detailed') ? 'This is a short question: answer it directly in one or two sentences. Do not pad, do not add caveats, do not restate the question.\n\n' : '')
-    + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + nowLine + userLine + profileBlock + guideBlock + ctx;
+    + 'Formatting (Markdown): plain prose for short answers. For longer ones, use structure where it helps reading: **bold** for key terms, bullet or numbered lists for steps and options, a table to compare several items across the same attributes, ### headings only to separate the sections of a long answer, and fenced code blocks with a language for code. Link only to well-known official sources you are sure exist. No filler, and no closing summary of what you just said.' + nowLine + userLine + profileBlock + guideBlock + ctx;
 }
 
 function readEnv(env) {
@@ -162,19 +194,11 @@ function readEnv(env) {
     provider: (env.KRIS_LLM_PROVIDER || DEFAULTS.provider).toLowerCase(),
     url: (env.KRIS_LLM_URL || DEFAULTS.url).replace(/\/+$/, ''),
     model: env.KRIS_LLM_MODEL || DEFAULTS.model,
-    apiKey: env.KRIS_LLM_API_KEY || null,   // only for self-hosted servers that require one; never a vendor key
+    apiKey: env.KRIS_LLM_API_KEY || null,
+    configured: llmConfigured(env),
     enabled: env.KRIS_ENABLE_LLM !== '0',
     timeoutMs: parseInt(env.KRIS_LLM_TIMEOUT_MS || String(DEFAULTS.timeoutMs), 10),
     appName: env.KRIS_APP_NAME || 'this application',
-    // Reasoning models think for many seconds before speaking. That is wasted
-    // time for conversation and app help, so it is off by default. Set
-    // KRIS_LLM_REASONING=on to keep it.
-    reasoningOff: (env.KRIS_LLM_REASONING || 'off').toLowerCase() !== 'on',
-    reasoningEffort: (env.KRIS_LLM_REASONING_EFFORT || DEFAULTS.reasoningEffort).toLowerCase(),
-    // A second, smaller model for short questions. Falls back to the main
-    // model if unset, so this is optional configuration, not required.
-    fastModel: env.KRIS_LLM_FAST_MODEL || null,
-    fastTimeoutMs: parseInt(env.KRIS_LLM_FAST_TIMEOUT_MS || String(DEFAULTS.fastTimeoutMs), 10),
     // Ollama unloads a model after ~5 idle minutes by default; the NEXT message
     // then waits 20-60s while it reloads from disk. Keeping it resident is the
     // single biggest latency fix for a self-hosted setup.
@@ -183,12 +207,13 @@ function readEnv(env) {
 }
 
 /**
- * OpenRouter's unified reasoning control. Low effort with the reasoning text
- * excluded from the reply is the fastest setting that every reasoning model
- * accepts — including ones where reasoning cannot be disabled at all.
+ * OpenRouter's unified reasoning control. The reasoning text is streamed back
+ * (not excluded) only so the server can see the model is still working; it is
+ * read as a heartbeat and dropped: never shown, never stored, never guarded
+ * because it never reaches the user.
  */
-function reasoningDirective(cfg) {
-  return { effort: cfg.reasoningEffort || 'low', exclude: true };
+function reasoningDirective(effort) {
+  return { effort: effort || 'medium' };
 }
 
 /** True if a provider's 400 is complaining about the reasoning field itself. */
@@ -208,7 +233,7 @@ function providerRouting(env, url) {
   return { sort: sort };
 }
 
-function buildRequest(cfg, system, messages, light, stream) {
+function buildRequest(cfg, system, messages, effort, stream) {
   if (cfg.provider === 'openai_compat') {
     const routing = providerRouting(cfg.env, cfg.url);
     return {
@@ -216,16 +241,15 @@ function buildRequest(cfg, system, messages, light, stream) {
       headers: Object.assign({ 'Content-Type': 'application/json' }, cfg.apiKey ? { Authorization: 'Bearer ' + cfg.apiKey } : {},
         /openrouter\.ai/i.test(cfg.url) ? { 'X-Title': 'K.R.1.S' } : {}),
       body: Object.assign({
-        model: (light && cfg.fastModel) ? cfg.fastModel : cfg.model,
+        model: cfg.model,
         messages: [{ role: 'system', content: system }].concat(messages),
-        max_tokens: light ? DEFAULTS.fastMaxTokens : DEFAULTS.maxTokens,
-        temperature: DEFAULTS.temperature,
+        max_tokens: DEFAULTS.maxTokens,
         stream: !!stream,
       },
       // OpenRouter's unified switch for reasoning models. Other OpenAI-compatible
       // servers ignore unknown fields, but we only send it where it is known to
       // be understood, to avoid a strict server rejecting the request.
-      (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) ? { reasoning: reasoningDirective(cfg) } : {},
+      /openrouter\.ai/i.test(cfg.url) ? { reasoning: reasoningDirective(effort) } : {},
       routing ? { provider: routing } : {}),
       extract: function (data) {
         const c = data && data.choices && data.choices[0];
@@ -239,11 +263,11 @@ function buildRequest(cfg, system, messages, light, stream) {
     url: cfg.url + '/api/chat',
     headers: { 'Content-Type': 'application/json' },
     body: {
-      model: (light && cfg.fastModel) ? cfg.fastModel : cfg.model,
+      model: cfg.model,
       messages: [{ role: 'system', content: system }].concat(messages),
       stream: !!stream,
       keep_alive: cfg.keepAlive,
-      options: { temperature: DEFAULTS.temperature, num_predict: light ? DEFAULTS.fastMaxTokens : DEFAULTS.maxTokens },
+      options: { temperature: DEFAULTS.temperature, num_predict: DEFAULTS.maxTokens },
     },
     extract: function (data) {
       return data && data.message && typeof data.message.content === 'string' ? data.message.content : '';
@@ -275,7 +299,7 @@ function failureCode(error) {
 function warmLLM(env, fetchImpl) {
   try {
     const cfg = readEnv(env || process.env);
-    if (!cfg.enabled || !cfg.url) return;
+    if (!cfg.enabled || !cfg.configured) return;
     if (Date.now() - lastWarm < 60000) return;
     lastWarm = Date.now();
     const f = fetchImpl || globalThis.fetch;
@@ -320,23 +344,31 @@ async function converse(text, opts) {
     return { text: 'I can help with vessel data and app questions — what would you like to know?', blocked: false, disabled: true };
   }
 
+  if (!cfg.configured) {
+    setState(false, 'LLM_NOT_CONFIGURED');
+    return { text: UNAVAILABLE, blocked: false, error: 'no model configured', provider: cfg.provider, model: cfg.model };
+  }
+
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
   const messages = (opts.history || [])
-    .slice(-6)
-    .map(function (h) { return { role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.text || '').slice(0, 500) }; })
-    .concat([{ role: 'user', content: String(text || '').slice(0, 1000) }]);
+    .slice(-HISTORY_TURNS)
+    .map(function (h) { return { role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.text || '').slice(0, HISTORY_CHARS) }; })
+    .concat([{ role: 'user', content: String(text || '').slice(0, MESSAGE_CHARS) }]);
 
-  const light = !!opts.light;
+  const light = opts.light != null ? !!opts.light : isLightMessage(text);
   const streaming = typeof opts.onDelta === 'function';
-  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff, light: light, nowLabel: opts.nowLabel, userName: opts.userName || null, profile: opts.profile || null });
-  const req = buildRequest(cfg, system, messages, light, streaming);
+  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, light: light, nowLabel: opts.nowLabel, userName: opts.userName || null, profile: opts.profile || null });
+  const req = buildRequest(cfg, system, messages, effortFor(text, cfg.env), streaming);
   // No tools field in either request shape. That is the structural guarantee.
 
-  // A light message gets a short leash: better a fast honest fallback than a
-  // user staring at a spinner.
-  const budgetMs = light ? cfg.fastTimeoutMs : cfg.timeoutMs;
+  // An idle timer, re-armed by every streamed chunk: silence fails, a long
+  // answer does not. Unstreamed, nothing arrives until the whole answer is
+  // written, so that wait gets a longer leash.
+  const budgetMs = streaming ? cfg.timeoutMs : cfg.timeoutMs * 4;
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, budgetMs) : null;
+  let timer = null;
+  const arm = function () { if (!ctrl) return; if (timer) clearTimeout(timer); timer = setTimeout(function () { ctrl.abort(); }, budgetMs); };
+  arm();
   const signal = anySignal([ctrl ? ctrl.signal : null, opts.signal || null]);
   const names = [].concat(opts.vesselNames || [], opts.context && opts.context.vesselName ? [opts.context.vesselName] : []);
   const fail = function (error) {
@@ -387,6 +419,7 @@ async function converse(text, opts) {
     check: function (piece) { return containsStatedFigure(piece, names); },
     emit: function (piece) { opts.onDelta({ t: 'delta', text: piece }); },
   });
+  const beat = thinkingBeat(opts.onDelta, 5000);
   const isJsonBody = /application\/json/i.test(String((res.headers && res.headers.get && res.headers.get('content-type')) || ''));
   try {
     if (isJsonBody) {
@@ -395,6 +428,8 @@ async function converse(text, opts) {
       gate.push(req.extract(data) || '');
     } else if (req.streamKind === 'sse') {
       await readSSE(res, function (chunk) {
+        arm(); // content or reasoning: the model is still working
+        if (hasReasoning(chunk)) beat();
         const c = chunk && chunk.choices && chunk.choices[0];
         const d = c && (c.delta || c.message);
         if (d && typeof d.content === 'string') gate.push(d.content);
@@ -402,6 +437,7 @@ async function converse(text, opts) {
       });
     } else {
       await readNDJSON(res, function (obj) {
+        arm();
         if (obj && obj.message && typeof obj.message.content === 'string') gate.push(obj.message.content);
         if (gate.blocked) { if (ctrl) ctrl.abort(); return false; }
         return true;
@@ -434,4 +470,4 @@ async function converse(text, opts) {
   return { text: parsed.text, chart: parsed.chart, blocked: false, streamed: true, provider: cfg.provider, model: cfg.model };
 }
 
-module.exports = { converse: converse, warmLLM: warmLLM, llmStatus: llmStatus,providerRouting: providerRouting, reasoningDirective: reasoningDirective, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
+module.exports = { converse: converse, warmLLM: warmLLM, llmStatus: llmStatus, llmConfigured: llmConfigured, providerRouting: providerRouting, reasoningDirective: reasoningDirective, effortFor: effortFor, isLightMessage: isLightMessage, HISTORY_TURNS: HISTORY_TURNS, HISTORY_CHARS: HISTORY_CHARS, MESSAGE_CHARS: MESSAGE_CHARS, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };

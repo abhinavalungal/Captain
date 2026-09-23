@@ -190,6 +190,28 @@ class SentenceGate {
   }
 }
 
+/** True when an OpenAI-style chunk carries reasoning (OpenRouter: delta.reasoning / reasoning_details). */
+function hasReasoning(chunk) {
+  const c = chunk && chunk.choices && chunk.choices[0];
+  const d = c && c.delta;
+  return !!(d && (d.reasoning || (Array.isArray(d.reasoning_details) && d.reasoning_details.length)));
+}
+
+/**
+ * While the model reasons, the user sees nothing, and neither does the
+ * browser's idle timer. A throttled { t: 'status', text: 'Thinking' } says it
+ * is still working. Only the word goes out; the reasoning itself never does.
+ */
+function thinkingBeat(onDelta, everyMs) {
+  let last = 0;
+  return function () {
+    const now = Date.now();
+    if (typeof onDelta !== 'function' || now - last < everyMs) return;
+    last = now;
+    onDelta({ t: 'status', text: 'Thinking' });
+  };
+}
+
 /** Combine abort signals (AbortSignal.any where available). */
 function anySignal(signals) {
   const list = signals.filter(Boolean);
@@ -204,4 +226,4 @@ function anySignal(signals) {
   return ctrl.signal;
 }
 
-module.exports = { readSSE, readNDJSON, accumulateOpenAI, SentenceGate, anySignal };
+module.exports = { readSSE, readNDJSON, accumulateOpenAI, SentenceGate, anySignal, hasReasoning, thinkingBeat };

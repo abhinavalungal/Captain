@@ -271,7 +271,7 @@ const run = (text, script, extra, opts) => agent.run(
     assert.ok(/429/.test(out.error));
   });
 
-  await ta('a missing model name fails loudly in the log and softly to the user', async () => {
+  await ta('no key and no model server fails loudly in the log and softly to the user', async () => {
     const out = await agent.run({ text: 'hi', session, now: NOW, history: [], context: {} }, NO_DB,
       { orgId: 'o', env: { KRIS_MODE: 'agent' }, fetchImpl: fakeModel([say('x')]) });
     assert.strictEqual(out.reason, 'no_model');
@@ -312,11 +312,23 @@ const run = (text, script, extra, opts) => agent.run(
     assert.strictEqual(fetchImpl.seen.length, 1);
   });
 
-  await ta('without KRIS_MODE the deterministic router is unchanged', async () => {
+  await ta('agent mode is the default: without KRIS_MODE an open-ended message goes to the model with tools', async () => {
+    const fetchImpl = fakeModel([say('Here is one about a ship.')]);
+    const env = Object.assign({}, ENV); delete env.KRIS_MODE;
+    const out = await router.route(
+      { text: 'tell me a joke about ships', session, now: NOW, history: [], context: {} },
+      NO_DB,
+      { orgId: 'o', env: env, fetchImpl }
+    );
+    assert.strictEqual(out.source, 'agent');
+    assert.ok(Array.isArray(fetchImpl.seen[0].body.tools) && fetchImpl.seen[0].body.tools.length, 'the model was not given its tools');
+  });
+
+  await ta('KRIS_MODE=router keeps the deterministic router', async () => {
     const out = await router.route(
       { text: 'hi', session, now: NOW, history: [], context: {} },
       NO_DB,
-      { orgId: 'o', env: { KRIS_ENABLE_LLM: '0' }, fetchImpl: async () => { throw new Error('no model'); } }
+      { orgId: 'o', env: { KRIS_MODE: 'router', KRIS_ENABLE_LLM: '0' }, fetchImpl: async () => { throw new Error('no model'); } }
     );
     assert.strictEqual(out.source, 'router');
     assert.strictEqual(out.instant, true);

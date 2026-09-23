@@ -33,13 +33,13 @@ const parser = require('./parser');
 const terms = require('./terms');
 const { matchGuide, searchGuide } = require('./guide');
 const { isBriefingRequest, buildBriefing } = require('./alerts');
-const { converse } = require('./companion_src');
+const { converse, isLightMessage, llmConfigured } = require('./companion_src');
 const { answerInstant, formatNow } = require('./instant_src');
 const identity = require('./identity');
 const agent = require('./agent');
 const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-23.kris-5';
+const ROUTER_BUILD = '2026-09-24.kris-6';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -93,8 +93,8 @@ async function route(input, db, opts) {
   // offers to remember it); it must not be read as a data request.
   const intro = isIntroduction(text, input.now);
 
-  // --- AI-FIRST MODE ------------------------------------------------------------
-  // KRIS_MODE=agent hands the message to the model with tools. Two
+  // --- AI-FIRST MODE (default) --------------------------------------------------
+  // The model gets the message with tools. KRIS_MODE=router skips this. Two
   // shortcuts come first because they are strictly better than a model round
   // trip and cannot change an answer's meaning:
   //   - a message the deterministic parser can already answer in full is
@@ -103,7 +103,7 @@ async function route(input, db, opts) {
   //   - everything else streams from the model.
   // If the model layer is unreachable, we fall back to the router below
   // (set KRIS_AGENT_FALLBACK=0 to disable).
-  if (String(env.KRIS_MODE || '').toLowerCase() === 'agent') {
+  if (String(env.KRIS_MODE || 'agent').toLowerCase() === 'agent') {
     if (env.KRIS_AGENT_DIRECT_DATA !== '0' && !intro) {
       const direct = await directData(text, input, getDb, opts);
       if (direct) return direct;
@@ -322,22 +322,6 @@ function fleetNamesFor(input, getDb, opts) {
   };
 }
 
-/**
- * Short, simple messages go to the fast model; substantial ones to the strong
- * model. A frontier reasoning model is the right tool for "explain FuelEU
- * pooling" and the wrong tool for "what does CII stand for" — the difference
- * is tens of seconds.
- */
-const HEAVY_RE = /\b(explain|why|how does|how do|compare|analyse|analyze|calculate|work out|difference between|pros and cons|walk me through|step by step|write|draft|summar)/i;
-
-function isLightMessage(text) {
-  const t = String(text || '').trim();
-  if (t.length > 140) return false;              // long question, treat as substantial
-  if (/\n/.test(t)) return false;                 // multi-line, likely detailed
-  if (HEAVY_RE.test(t)) return false;             // asks for reasoning or composition
-  return t.split(/\s+/).length <= 14;
-}
-
 async function companionReply(text, input, opts, env) {
   const guideSnippets = searchGuide(text, 3).map(function (g) { return { title: g.title, answer: g.answer }; });
   const tz = input.context && input.context.tz ? String(input.context.tz) : null;
@@ -385,16 +369,16 @@ async function companionReply(text, input, opts, env) {
 /** Why the conversation model failed, in words the person running the server can act on. */
 function modelFailure(env, error) {
   const e = String(error || '');
-  if (!env.KRIS_LLM_URL) {
-    return { code: 'LLM_NOT_CONFIGURED', detail: 'Server: no conversation model is configured - set KRIS_LLM_PROVIDER, KRIS_LLM_URL and KRIS_LLM_MODEL (and KRIS_LLM_API_KEY if the server needs one).' };
+  if (!llmConfigured(env)) {
+    return { code: 'LLM_NOT_CONFIGURED', detail: 'Server: no conversation model is configured - set KRIS_LLM_API_KEY (OpenRouter) for GLM-5.3-Flash.' };
   }
   const m = e.match(/HTTP (\d{3})/);
   if (m) {
     const hint = { 401: 'check KRIS_LLM_API_KEY', 403: 'check KRIS_LLM_API_KEY', 402: 'the model account is out of credit', 404: 'check KRIS_LLM_MODEL', 429: 'rate limited - try again shortly' }[m[1]] || 'see the server log';
     return { code: 'LLM_HTTP_' + m[1], detail: 'Model server answered HTTP ' + m[1] + ' (' + hint + ').' };
   }
-  if (/timed out/i.test(e)) return { code: 'LLM_TIMEOUT', detail: 'The model server did not answer in time (KRIS_LLM_TIMEOUT_MS, or a faster KRIS_LLM_FAST_MODEL).' };
-  if (/empty reply/i.test(e)) return { code: 'LLM_EMPTY', detail: 'The model returned an empty reply (a reasoning model may have used its whole token budget; try a non-reasoning KRIS_LLM_FAST_MODEL).' };
+  if (/timed out/i.test(e)) return { code: 'LLM_TIMEOUT', detail: 'The model server went silent for longer than KRIS_LLM_TIMEOUT_MS.' };
+  if (/empty reply/i.test(e)) return { code: 'LLM_EMPTY', detail: 'The model returned an empty reply (it may have spent its whole token budget reasoning; try KRIS_LLM_REASONING_EFFORT=medium).' };
   return { code: 'LLM_UNREACHABLE', detail: 'Cannot connect to the model server (check KRIS_LLM_URL and that the server is running).' };
 }
 

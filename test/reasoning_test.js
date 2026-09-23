@@ -1,7 +1,7 @@
 'use strict';
 /** Reasoning-model handling on OpenRouter. Offline. */
 const assert = require('assert');
-const { converse, buildRequest, readEnv } = require('../src/companion_src');
+const { converse, buildRequest, readEnv, effortFor } = require('../src/companion_src');
 const agent = require('../src/agent');
 const router = require('../src/router');
 let passed = 0; const fails = [];
@@ -9,21 +9,23 @@ const t = (n, f) => { try { f(); passed++; } catch (e) { fails.push(n + ': ' + e
 const ta = async (n, f) => { try { await f(); passed++; } catch (e) { fails.push(n + ': ' + e.message); } };
 const ENV = { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'https://openrouter.ai/api', KRIS_LLM_MODEL: 'z-ai/glm-5.3-flash', KRIS_LLM_API_KEY: 'k' };
 
-t('OpenRouter requests ask for LOW effort with reasoning excluded, never "enabled:false"', () => {
-  const req = buildRequest(readEnv(ENV), 'sys', [{ role: 'user', content: 'hi' }], true);
-  assert.deepStrictEqual(req.body.reasoning, { effort: 'low', exclude: true });
+t('OpenRouter requests carry an effort and stream reasoning back (a heartbeat), never "enabled:false"', () => {
+  const req = buildRequest(readEnv(ENV), 'sys', [{ role: 'user', content: 'hi' }], 'low');
+  assert.deepStrictEqual(req.body.reasoning, { effort: 'low' });
 });
-t('effort is configurable', () => {
-  const req = buildRequest(readEnv(Object.assign({}, ENV, { KRIS_LLM_REASONING_EFFORT: 'medium' })), 'sys', [], true);
-  assert.strictEqual(req.body.reasoning.effort, 'medium');
+t('effort can be pinned', () => {
+  assert.strictEqual(effortFor('explain FuelEU pooling step by step', Object.assign({}, ENV, { KRIS_LLM_REASONING_EFFORT: 'medium' })), 'medium');
 });
 t('non-OpenRouter endpoints get no reasoning field at all', () => {
-  const req = buildRequest(readEnv(Object.assign({}, ENV, { KRIS_LLM_URL: 'http://vllm.local:8000' })), 'sys', [], true);
+  const req = buildRequest(readEnv(Object.assign({}, ENV, { KRIS_LLM_URL: 'http://vllm.local:8000' })), 'sys', [], 'high');
   assert.strictEqual(req.body.reasoning, undefined);
 });
-t('agent mode sends the same directive', () => {
-  const cfg = agent.readEnv(Object.assign({}, ENV, { KRIS_MODE: 'agent' }));
-  assert.strictEqual(cfg.reasoningEffort, 'low');
+t('agent mode sends the same directive, on the same model', () => {
+  const cfg = Object.assign(agent.readEnv(ENV), { effort: 'high' });
+  const body = agent.buildBody(cfg, [], true);
+  assert.deepStrictEqual(body.reasoning, { effort: 'high' });
+  assert.strictEqual(body.model, 'z-ai/glm-5.3-flash');
+  assert.ok(body.max_tokens >= 8192);
 });
 
 ta('a 400 that names "reasoning" is retried once without the field, and succeeds', async () => {

@@ -21,9 +21,8 @@ const SETTINGS = [
   'READ_URL', 'WRITE_URL', 'PG_SSL', 'PG_IDLE_MS', 'PG_KEEPALIVE_MS', 'PG_CONNECT_TIMEOUT_MS',
   'DEV_SESSION', 'ALLOW_ORIGIN', 'APP_NAME', 'DATE_ORDER', 'EXPOSE_SQL', 'DIAGNOSTICS', 'MODE',
   'ENABLE_LLM', 'LLM_PROVIDER', 'LLM_URL', 'LLM_MODEL', 'LLM_API_KEY', 'LLM_TIMEOUT_MS',
-  'LLM_FAST_MODEL', 'LLM_FAST_TIMEOUT_MS', 'LLM_KEEP_ALIVE', 'LLM_PROVIDER_SORT', 'LLM_REASONING',
-  'LLM_REASONING_EFFORT', 'LLM_REFERER', 'LLM_TITLE', 'SMALLTALK_MODEL',
-  'AGENT_DIRECT_DATA', 'AGENT_FALLBACK', 'AGENT_MAX_STEPS', 'AGENT_MAX_TOKENS', 'AGENT_MODEL',
+  'LLM_KEEP_ALIVE', 'LLM_PROVIDER_SORT', 'LLM_REASONING_EFFORT', 'LLM_REFERER', 'LLM_TITLE', 'SMALLTALK_MODEL',
+  'AGENT_DIRECT_DATA', 'AGENT_FALLBACK', 'AGENT_MAX_STEPS', 'AGENT_MAX_TOKENS',
   'AGENT_TEMPERATURE', 'AGENT_TIMEOUT_MS',
   'SYNC_KEY', 'SYNC_DAYS', 'SYNC_INTERVAL_MS', 'AUTO_SYNC', 'IMOS', 'FIELD_MAP',
 ];
@@ -46,8 +45,8 @@ function findRenames(env) {
     if (key.startsWith(PREFIX)) continue;
     const m = /^([A-Z][A-Z0-9]*)_(.+)$/.exec(key);
     if (!m || NOT_OURS.has(m[1])) continue;
-    // Match the longest known setting the key ends with, so LLM_FAST_MODEL is
-    // not mistaken for FAST_MODEL or MODEL.
+    // Match the longest known setting the key ends with, so LLM_TIMEOUT_MS is
+    // not mistaken for TIMEOUT_MS.
     let prefix = m[1]; let rest = m[2];
     while (!KNOWN.has(rest)) {
       const n = /^([A-Z0-9]+)_(.+)$/.exec(rest);

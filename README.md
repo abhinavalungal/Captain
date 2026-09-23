@@ -122,6 +122,37 @@ exposes `memory`, `settings`, `view`, `conversation`, `open`, `close` and
 `answer` events. Voice, files, tools, other models or workspace knowledge
 can be added on these seams without rebuilding the widget.
 
+### Upgrading to kris-6 (GLM-5.3-Flash, tools by default, chat polish)
+
+- Deploy together: `src/companion_src.js`, `src/agent.js`, `src/router.js`,
+  `src/httpHandler.js`, `src/stream.js`, `src/envcheck.js`, `server.js` and
+  `public/kris-widget.js`. Build stamps are `2026-09-24.kris-6`.
+- **The model is GLM-5.3-Flash** (`z-ai/glm-5.3-flash`) on OpenRouter, for
+  both conversation and tool use. Set **`KRIS_LLM_API_KEY`** (an OpenRouter
+  key) on the host; nothing else is required. Remove `KRIS_LLM_PROVIDER`,
+  `KRIS_LLM_URL` and `KRIS_LLM_MODEL` if they point at the old model, and
+  drop `KRIS_LLM_FAST_MODEL`, `KRIS_AGENT_MODEL` and `KRIS_LLM_REASONING`
+  (no longer read). Pages still show the model as N.A.V 3.8b.
+- **Agent mode is the default.** Anything the instant lane doesn't answer
+  goes to the model with its tools (vessel records, fleet briefing, help
+  centre, charts). `KRIS_MODE=router` brings back the old ladder.
+- **Reasoning follows the question**: low effort for a quick fact, medium by
+  default, high for "explain / compare / calculate / draft" or long messages.
+  `KRIS_LLM_REASONING_EFFORT=low|medium|high` pins it. The reasoning is never
+  shown: the server reads it only as a heartbeat and sends the widget a
+  "Thinking" status.
+- **Fewer limits**: 20 turns of history at up to 6,000 characters each,
+  messages up to 8,000 characters, 8,192 output tokens (`KRIS_AGENT_MAX_TOKENS`
+  up to 32,768), and the model's own recommended temperature. Answers may use
+  headings, tables and code blocks. Timeouts are now *silence* timeouts
+  (`KRIS_LLM_TIMEOUT_MS`, `KRIS_AGENT_TIMEOUT_MS`, widget `timeoutMs`): a long
+  answer that keeps streaming is never cut off.
+- **Widget**: finished blocks of a streamed answer are drawn once instead of
+  every frame (long answers no longer stutter, and the DOM matches the final
+  render exactly); no scrollbar in an empty composer; table cells no longer
+  break words mid-word; clearer headings in answers; a calmer "still
+  thinking" note after 20 s instead of 12 s.
+
 ### Upgrading to kris-5 (answer quality, Shuddha Now site)
 
 - Deploy together: `src/instant_src.js`, `src/identity.js`,
@@ -276,8 +307,7 @@ token, database behind a 140 ms round-trip proxy, `KRIS_MODE=agent`):
 
 Add your own network round trip (India → Render, ~200–300 ms) to the server
 figures. The model's own time to first token is the one delay code cannot
-remove. If `z-ai/glm-5.3-flash` is still slow in practice, set
-`KRIS_AGENT_MODEL` to a non-reasoning flash model.
+remove. If replies feel slow, pin `KRIS_LLM_REASONING_EFFORT=low`.
 
 On Render's free plan the instance sleeps after 15 minutes idle and takes
 30–60 s to wake. The widget shows "Waking up the server…" while that happens.
@@ -296,10 +326,10 @@ hasn't changed; `KRIS.reset()` and `KRIS.warm()` are new.
 
 
 
-No paid APIs or services anywhere. Every component is open-source: Postgres,
-the `pg` driver, and — for the optional conversation layer — a model you host
-yourself with Ollama or any OpenAI-compatible server. The only runtime
-dependency is the Postgres driver.
+The conversation layer runs GLM-5.3-Flash on OpenRouter (pay-per-token, one
+key). Everything else is open-source — Postgres and the `pg` driver — and the
+model can be swapped for one you host yourself with Ollama or any
+OpenAI-compatible server. The only runtime dependency is the Postgres driver.
 
 It ships as four parts:
 
@@ -401,9 +431,10 @@ upstream APIs exist.
 | `KRIS_DATE_ORDER` | `DMY` (default) or `MDY` |
 | `KRIS_EXPOSE_SQL` | `1` to send generated SQL to the browser |
 | `KRIS_ENABLE_LLM` | `0` to run without a conversation model |
-| `KRIS_LLM_PROVIDER` | `ollama` or `openai_compat` |
-| `KRIS_LLM_URL`, `KRIS_LLM_MODEL` | where the model is and which one |
-| `KRIS_LLM_API_KEY` | only if your own server requires one |
+| `KRIS_LLM_API_KEY` | OpenRouter key for GLM-5.3-Flash (the only model setting you need) |
+| `KRIS_MODE` | `agent` (default: model + tools) or `router` |
+| `KRIS_LLM_REASONING_EFFORT` | pin `low` / `medium` / `high`; unset follows the question |
+| `KRIS_LLM_PROVIDER`, `KRIS_LLM_URL`, `KRIS_LLM_MODEL` | only to self-host instead (`ollama` or `openai_compat`) |
 | `KRIS_APP_NAME` | how K.R.1.S refers to your application (`Shuddha Now`) |
 
 A token that has been pasted into a chat or ticket should be rotated. The one
@@ -714,28 +745,24 @@ twice, not once:
 
 ### Running the model
 
-Any of these works; all are free and open-source:
+The model is **GLM-5.3-Flash** (`z-ai/glm-5.3-flash`) on OpenRouter. Set
+`KRIS_LLM_API_KEY` and that is all: provider, URL and model default to it,
+requests ask OpenRouter for the lowest-latency provider, and the reasoning
+effort follows each question.
+
+To self-host instead, override the transport:
 
 | Server | `KRIS_LLM_PROVIDER` | Notes |
 |---|---|---|
-| [Ollama](https://ollama.com) | `ollama` (default) | `ollama pull llama3.1:8b`, done. Easiest. |
 | vLLM, llama.cpp server, LM Studio, LocalAI | `openai_compat` | point `KRIS_LLM_URL` at the server; `/v1/chat/completions` is appended |
+| [Ollama](https://ollama.com) | `ollama` | set `KRIS_LLM_URL` and `KRIS_LLM_MODEL`; agent mode uses Ollama's `/v1` endpoint |
 
-Good small models for this job: `llama3.1:8b`, `qwen2.5:7b`, `mistral:7b`.
-Anything that follows a system prompt is fine — the model's only jobs are
-navigation help and pleasantries, and the numeric guard covers the rest.
-
-**Where the model runs matters.** `KRIS_LLM_URL` has to be reachable from
-wherever `server.js` runs. If both are on the same machine, `http://127.0.0.1:11434`
-(Ollama's default) just works. If K.R.1.S is deployed elsewhere (a VPS,
-Render, Railway), either run Ollama on that same host, or point
-`KRIS_LLM_URL` at a model server with a stable network address — a small
-VPS, an office server. Without a reachable model, K.R.1.S still works: data,
-guide and briefing are unaffected, and open-ended chat gets a fixed honest
-line instead of a conversation. Set `KRIS_ENABLE_LLM=0` to turn the
+Without a reachable model, K.R.1.S still works: data, guide and briefing are
+unaffected, and open-ended chat gets an error card that names the cause
+(`LLM_NOT_CONFIGURED`, `LLM_HTTP_401`…). Set `KRIS_ENABLE_LLM=0` to turn the
 companion off outright.
 
-The widget sends the last few turns of the current conversation with each
+The widget sends the last 20 turns of the current conversation with each
 message so the companion has continuity — but only conversational replies are
 included; a data lookup or a clarification is never added to that history,
 because there is nothing about a fuel figure the companion should be recalling

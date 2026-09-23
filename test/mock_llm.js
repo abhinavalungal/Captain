@@ -19,6 +19,7 @@
  *     first completion is a get_vessel_data tool call; the follow-up (after the
  *     tool result) is a plain answer quoting the tool's text.
  *   - `reply(messages)` can override the text for a given conversation.
+ *   - `reasoningMs` streams reasoning deltas for that long before the answer.
  *   - Every request is recorded in `mock.requests` for assertions.
  *   - GET /v1/models answers instantly (used by the server's connection warm-up).
  */
@@ -105,6 +106,12 @@ function startMockLLM(opts = {}) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write(': OPENROUTER PROCESSING\n\n');
     await sleep(firstTokenMs);
+    // A reasoning model thinks out loud first (OpenRouter: delta.reasoning).
+    for (let t = 0; t < (opts.reasoningMs || 0); t += 50) {
+      if (aborted) return;
+      res.write('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { reasoning: 'SECRET-REASONING ' } }] }) + '\n\n');
+      await sleep(50);
+    }
     for (const tok of tokens) {
       if (aborted) return;
       res.write('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { content: tok } }] }) + '\n\n');

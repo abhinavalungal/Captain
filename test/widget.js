@@ -36,7 +36,8 @@ function ndjsonResponse(events, gapMs) {
       getReader: () => ({
         read: async () => {
           if (i >= events.length) return { done: true };
-          if (gapMs) await wait(gapMs);
+          const gap = typeof gapMs === 'function' ? gapMs(i) : gapMs;   // a number, or per event
+          if (gap) await wait(gap);
           return { done: false, value: enc.encode(JSON.stringify(events[i++]) + '\n') };
         },
       }),
@@ -192,6 +193,41 @@ function boot(opts, storage) {
     await w.idle();
     const t = w.q('.turn.assistant .msg').textContent;
     assert(t.indexOf('Sure thing') < 0 && t.indexOf("guess at a number") >= 0, t);
+  });
+
+  await ta('streaming: finished blocks are drawn once, and the streamed DOM is exactly the final render', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    const parts = ['Intro paragraph.\n\n', '```js\nconst a = 1;\n\nconst b = 2;\n```\n\n', '| Item | Qty |\n|---|---|\n| Compliance | 1 |\n\n', '- one\n- two'];
+    const full = parts.join('');
+    // Deltas 60 ms apart; the final payload waits until the reveal has caught up.
+    w.respond(async () => ndjsonResponse(parts.map((p) => ({ t: 'delta', text: p }))
+      .concat([{ t: 'final', status: 200, data: { status: 'answer', source: 'agent', text: full, streamed: true } }]), (i) => (i < parts.length ? 60 : 900)));
+    await w.type('show me everything');
+    await wait(250);
+    const msg = () => w.q('.turn.assistant .msg');
+    const p0 = msg().querySelector('p');
+    assert(p0 && p0.textContent === 'Intro paragraph.', 'first block not shown');
+    await wait(520);
+    assert(msg().querySelector('p') === p0, 'a finished block was rebuilt');
+    assert(msg().querySelectorAll('.codeblock').length === 1 && /const b = 2/.test(msg().querySelector('.codeblock pre').textContent), 'a blank line split the code block');
+    const streamed = msg().innerHTML.replace(/<span class="caret"><\/span>/g, '');
+    await w.idle();
+    assert(msg().innerHTML === streamed, 'streamed DOM differs from the final render:\nS ' + streamed + '\nF ' + msg().innerHTML);
+  });
+
+  await ta('streaming: a slow but steady answer is never cut off by the client timeout', async () => {
+    const w = boot({ timeoutMs: 150 });
+    await wait(20);
+    w.window.KRIS.open();
+    const words = ['Pooling ', 'lets ', 'ships ', 'share ', 'a ', 'balance.'];
+    w.respond(async () => ndjsonResponse([{ t: 'status', text: 'Thinking' }].concat(words.map((x) => ({ t: 'delta', text: x })))
+      .concat([{ t: 'final', status: 200, data: { status: 'answer', source: 'agent', text: words.join(''), streamed: true } }]), 90));
+    await w.type('explain pooling');
+    await w.idle(3000);
+    assert(!w.q('.turn.assistant .notice'), 'timed out: ' + w.q('.turn.assistant .msg').textContent);
+    assert(w.q('.turn.assistant .msg').textContent === 'Pooling lets ships share a balance.', w.q('.turn.assistant .msg').textContent);
   });
 
   await ta('data answer: figure, unit, eyebrow, sources; follow-up chips send full questions', async () => {

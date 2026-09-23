@@ -24,7 +24,7 @@ const NO_DB = async () => { const e = new Error('KRIS_READ_URL is not set'); e.c
 (async () => {
   const mock = await startMockLLM({ firstTokenMs: 30, tokenMs: 2 });
   const AGENT = { KRIS_MODE: 'agent', KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: mock.url, KRIS_LLM_MODEL: 'mock' };
-  const COMPANION = { KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: mock.url, KRIS_LLM_MODEL: 'mock' };
+  const COMPANION = { KRIS_MODE: 'router', KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: mock.url, KRIS_LLM_MODEL: 'mock' };
 
   // --- the gate --------------------------------------------------------------
   await ta('gate: releases whole sentences only, and every released piece passes the guard', async () => {
@@ -121,6 +121,18 @@ const NO_DB = async () => { const e = new Error('KRIS_READ_URL is not set'); e.c
     await m3.close();
     assert.ok(Date.now() - t0 < 400, 'did not stop promptly');
     assert.strictEqual(out.reason, 'cancelled');
+  });
+
+  await ta('agent: while the model reasons the widget hears "Thinking", and never the reasoning itself', async () => {
+    const m5 = await startMockLLM({ firstTokenMs: 5, tokenMs: 1, reasoningMs: 300 });
+    const evts = [];
+    const out = await router.route({ text: 'Tell me a joke', session, now: NOW }, NO_DB,
+      { orgId: 'o', env: Object.assign({}, AGENT, { KRIS_LLM_URL: m5.url }), onDelta: (e) => evts.push(e) });
+    await m5.close();
+    assert.strictEqual(out.source, 'agent');
+    assert.ok(evts.some((e) => e.t === 'status' && e.text === 'Thinking'), 'no Thinking status');
+    assert.ok(!/SECRET-REASONING/.test(JSON.stringify(evts) + out.text), 'reasoning leaked to the user');
+    assert.ok(/flute/.test(out.text), out.text);
   });
 
   // --- companion streaming ---------------------------------------------------

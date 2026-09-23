@@ -16,12 +16,13 @@ const { Client } = require('pg');
 
 const { matchGuide, searchGuide } = require('../src/guide');
 const { isBriefingRequest, buildBriefing } = require('../src/alerts');
-const { converse, containsStatedFigure, extractChart, systemPrompt, buildRequest, readEnv } = require('../src/companion_src');
+const { converse, containsStatedFigure, extractChart, systemPrompt, buildRequest, readEnv, effortFor } = require('../src/companion_src');
 const router = require('../src/router');
 
 let passed = 0; const fails = [];
 const t = (n, f) => { try { f(); passed++; } catch (e) { fails.push(n + ': ' + e.message); } };
 const ta = async (n, f) => { try { await f(); passed++; } catch (e) { fails.push(n + ': ' + e.message); } };
+const TOP = []; // top-level async tests, awaited before the summary
 
 const NOW = new Date('2026-09-02T10:00:00Z');
 // Shaped like Ollama's non-streaming /api/chat reply.
@@ -34,7 +35,8 @@ const ollamaStub = (replyText) => async (url, init) => {
   assert.ok(system && /Never state, estimate or guess a figure as if it were one of their vessels/.test(system.content), 'system prompt must carry the one rule');
   return { ok: true, status: 200, json: async () => ({ model: body.model, message: { role: 'assistant', content: replyText }, done: true }) };
 };
-const LLM_ENV = { KRIS_ENABLE_LLM: '1', KRIS_LLM_URL: 'http://llm.test:11434', KRIS_LLM_MODEL: 'llama3.1:8b', KRIS_APP_NAME: 'Shuddha now' };
+// The router over a self-hosted Ollama: the transport these stubs speak.
+const LLM_ENV = { KRIS_MODE: 'router', KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'ollama', KRIS_LLM_URL: 'http://llm.test:11434', KRIS_LLM_MODEL: 'local', KRIS_APP_NAME: 'Shuddha now' };
 
 // --- guide -------------------------------------------------------------------
 t('guide: exact phrasing matches', () => {
@@ -206,7 +208,7 @@ t('speed: KRIS_SMALLTALK_MODEL=1 opts back in to model-handled greetings', async
   assert.strictEqual(out.text, 'Hello there!');
 });
 
-t('speed: short questions use the fast model, substantial ones the strong model', () => {
+t('speed: short questions are light, substantial ones are not', () => {
   assert.ok(router.isLightMessage('what does CII stand for'));
   assert.ok(router.isLightMessage('capital of France'));
   assert.ok(!router.isLightMessage('explain FuelEU pooling and how it affects our fleet'));
@@ -214,55 +216,75 @@ t('speed: short questions use the fast model, substantial ones the strong model'
   assert.ok(!router.isLightMessage('x'.repeat(200)));
 });
 
-t('speed: the fast tier swaps model, token budget and timeout together', () => {
-  const cfg = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_MODEL: 'strong', KRIS_LLM_FAST_MODEL: 'fast' }));
-  const lightReq = buildRequest(cfg, 'S', [], true);
-  const heavyReq = buildRequest(cfg, 'S', [], false);
-  assert.strictEqual(lightReq.body.model, 'fast');
-  assert.strictEqual(heavyReq.body.model, 'strong');
-  assert.ok(lightReq.body.max_tokens < heavyReq.body.max_tokens);
-  assert.ok(cfg.fastTimeoutMs < cfg.timeoutMs);
+t('model: GLM-5.3-Flash on OpenRouter is the one default model, with a generous token ceiling', () => {
+  const cfg = readEnv({ KRIS_LLM_API_KEY: 'k' });
+  assert.strictEqual(cfg.provider, 'openai_compat');
+  assert.strictEqual(cfg.url, 'https://openrouter.ai/api');
+  assert.strictEqual(cfg.model, 'z-ai/glm-5.3-flash');
+  assert.ok(cfg.configured);
+  assert.ok(!readEnv({}).configured, 'no key and no URL is not configured');
+  const req = buildRequest(cfg, 'S', [], 'low');
+  assert.strictEqual(req.body.model, 'z-ai/glm-5.3-flash');
+  assert.ok(req.body.max_tokens >= 8192, 'max_tokens ' + req.body.max_tokens);
+  assert.strictEqual(req.body.temperature, undefined, 'the hosted model runs at its own recommended temperature');
+  assert.strictEqual(req.headers.Authorization, 'Bearer k');
 });
 
-t('speed: with no fast model configured, the light path still works on the main model', () => {
-  const cfg = readEnv({ KRIS_LLM_MODEL: 'only' });
-  assert.strictEqual(buildRequest(cfg, 'S', [], true).body.model, 'only');
-});
-
-t('speed: a light request that hangs is abandoned on the SHORT timeout, not the long one', async () => {
-  const env = Object.assign({}, LLM_ENV, { KRIS_LLM_FAST_TIMEOUT_MS: '150', KRIS_LLM_TIMEOUT_MS: '20000' });
+TOP.push(ta('timeout: a silent model is abandoned after KRIS_LLM_TIMEOUT_MS', async () => {
+  const env = Object.assign({}, LLM_ENV, { KRIS_LLM_TIMEOUT_MS: '150' });
   const started = Date.now();
   const out = await converse('what is CII', {
     env: env,
-    light: true,
+    onDelta: () => {},
     fetchImpl: (url, init) => new Promise((_, rej) => {
       if (init && init.signal) init.signal.addEventListener('abort', () => { const e = new Error('aborted'); e.name = 'AbortError'; rej(e); });
     }),
   });
-  const elapsed = Date.now() - started;
-  assert.ok(elapsed < 1000, 'a hanging light request took ' + elapsed + 'ms; the short timeout did not apply');
+  assert.ok(Date.now() - started < 1000, 'a hanging request was not abandoned');
   assert.ok(/couldn.t reach/.test(out.text));
-  assert.ok(/timed out after 150ms/.test(out.error || ''), 'error should name the short budget: ' + out.error);
-});
+  assert.ok(/timed out after 150ms/.test(out.error || ''), out.error);
+}));
+
+TOP.push(ta('timeout: a long answer that keeps streaming is never cut off by the idle timer', async () => {
+  const env = { KRIS_MODE: 'router', KRIS_LLM_API_KEY: 'k', KRIS_LLM_TIMEOUT_MS: '150' };
+  const sse = (o) => 'data: ' + JSON.stringify(o) + '\n\n';
+  const fetchImpl = async (url, init) => ({
+    ok: true, status: 200, headers: { get: () => 'text/event-stream' },
+    body: (async function* () {
+      // Reasoning first (never shown), then the answer; 400 ms in all, gaps of 80 ms.
+      for (let i = 0; i < 3; i++) { await new Promise((r) => setTimeout(r, 80)); yield sse({ choices: [{ delta: { reasoning: 'thinking ' } }] }); }
+      for (const w of ['Pooling lets ', 'ships share ', 'a compliance balance. ']) { await new Promise((r) => setTimeout(r, 80)); yield sse({ choices: [{ delta: { content: w } }] }); }
+      yield 'data: [DONE]\n\n';
+    })(),
+  });
+  const deltas = [];
+  const out = await converse('explain pooling', { env: env, fetchImpl: fetchImpl, onDelta: (e) => deltas.push(e) });
+  assert.ok(!out.error, 'cut off: ' + out.error);
+  assert.strictEqual(out.text, 'Pooling lets ships share a compliance balance.');
+  assert.ok(!/thinking/i.test(deltas.filter((d) => d.t === 'delta').map((d) => d.text).join('')), 'reasoning reached the user');
+  assert.strictEqual(deltas.filter((d) => d.t === 'status' && d.text === 'Thinking').length, 1, 'one throttled "Thinking" beat while it reasoned');
+}));
 
 t('speed: light messages are told to answer briefly', () => {
   assert.ok(/answer it directly in one or two sentences/.test(systemPrompt({ appName: 'X', guideSnippets: [], light: true })));
   assert.ok(!/answer it directly in one or two sentences/.test(systemPrompt({ appName: 'X', guideSnippets: [], light: false })));
 });
 
-t('speed: OpenRouter is asked for LOW-effort reasoning (not "off", which mandatory-reasoning models reject); other servers are not sent unknown fields', () => {
+t('reasoning: OpenRouter gets an effort that follows the question; other servers are not sent unknown fields', () => {
+  assert.strictEqual(effortFor('what does CII stand for', {}), 'low');
+  assert.strictEqual(effortFor('tell me about the Baltic Exchange, what it publishes and which indices matter most to dry bulk owners today', {}), 'medium');
+  assert.strictEqual(effortFor('explain FuelEU pooling step by step', {}), 'high');
+  assert.strictEqual(effortFor('explain FuelEU pooling', { KRIS_LLM_REASONING_EFFORT: 'LOW' }), 'low', 'pinned');
   const cfgOR = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'https://openrouter.ai/api' }));
-  const reqOR = buildRequest(cfgOR, 'SYS', [{ role: 'user', content: 'hi' }]);
-  assert.deepStrictEqual(reqOR.body.reasoning, { effort: 'low', exclude: true });
+  assert.deepStrictEqual(buildRequest(cfgOR, 'SYS', [{ role: 'user', content: 'hi' }], 'high').body.reasoning, { effort: 'high' });
   const cfgV = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'http://vllm.test:8000' }));
-  assert.strictEqual(buildRequest(cfgV, 'SYS', []).body.reasoning, undefined);
-  const cfgOn = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'https://openrouter.ai/api', KRIS_LLM_REASONING: 'on' }));
-  assert.strictEqual(buildRequest(cfgOn, 'SYS', []).body.reasoning, undefined);
+  assert.strictEqual(buildRequest(cfgV, 'SYS', [], 'high').body.reasoning, undefined);
 });
-t('system prompt: tells the model to answer general questions, and to disable thinking when reasoning is off', () => {
-  const p = systemPrompt({ appName: 'Shuddha now', guideSnippets: [], reasoningOff: true });
-  assert.ok(/^\/no_think/.test(p));
+t('system prompt: answers general questions, allows real structure, and keeps the chart line', () => {
+  const p = systemPrompt({ appName: 'Shuddha now', guideSnippets: [] });
+  assert.ok(!/no_think/.test(p));
   assert.ok(/Do not steer unrelated questions back to vessels/.test(p));
+  assert.ok(/a table to compare/.test(p) && !/No headings, no tables/.test(p));
   assert.ok(/CHART \{/.test(p));
 });
 t('general question: a calculation answer with numbers passes the guard end to end', async () => {
@@ -299,6 +321,7 @@ t('briefing trigger phrases are recognised', () => {
 });
 
 (async () => {
+  await Promise.all(TOP);
   if (!process.env.KRIS_TEST_URL) { finish(); return; }
   const db = new Client({ connectionString: process.env.KRIS_TEST_URL });
   await db.connect();

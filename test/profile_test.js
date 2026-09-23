@@ -98,7 +98,7 @@ const ALEX = {
 
   await ta('companion over the mock model: the profile reaches the system message', async () => {
     const mock = await startMockLLM({ firstTokenMs: 5, tokenMs: 1, reply: () => 'Good morning, Alex.' });
-    const env = { KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: mock.url, KRIS_LLM_MODEL: 'mock' };
+    const env = { KRIS_MODE: 'router', KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: mock.url, KRIS_LLM_MODEL: 'mock' };
     const out = await router.route({ text: 'chat with me for a bit', session, now: NOW, context: readContext({ profile: ALEX }) }, NO_DB, { orgId: 'o', env });
     await mock.close();
     assert.strictEqual(out.source, 'companion');
@@ -178,13 +178,13 @@ const ALEX = {
   });
 
   await ta('server: an unreachable model is an error with a named cause, and health says whether a model is configured', async () => {
-    const env = { KRIS_ENABLE_LLM: '1' };   // no KRIS_LLM_URL: the default local Ollama, which is not running
+    const env = { KRIS_ENABLE_LLM: '1' };   // no key and no URL: nothing configured, no request made
     const out = await router.route({ text: 'explain pooling to me in simple words', session, now: NOW }, NO_DB,
       { orgId: 'o', env, fetchImpl: async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:11434'); } });
     assert.strictEqual(out.status, 'error', JSON.stringify(out));
     assert.strictEqual(out.reason, 'model_unavailable');
     assert.strictEqual(out.code, 'LLM_NOT_CONFIGURED');
-    assert.ok(/KRIS_LLM_URL/.test(out.detail) && !/127\.0\.0\.1/.test(out.detail), out.detail);
+    assert.ok(/KRIS_LLM_API_KEY/.test(out.detail) && !/127\.0\.0\.1/.test(out.detail), out.detail);
     const out2 = await router.route({ text: 'explain pooling to me in simple words', session, now: NOW }, NO_DB,
       { orgId: 'o', env: { KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'https://llm.test', KRIS_LLM_MODEL: 'm' },
         fetchImpl: async () => ({ ok: false, status: 401, text: async () => 'bad key', headers: { get: () => '' } }) });

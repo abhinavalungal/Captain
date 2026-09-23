@@ -32,28 +32,26 @@
  * question is even about vessels — is the model's judgement, which is the
  * point.
  *
- * Enable with KRIS_MODE=agent. Anything else keeps the old router.
+ * This is the default mode. KRIS_MODE=router keeps the old router.
  */
 
 const engine = require('./engine');
 const rbac = require('./rbac');
 const { searchGuide, GUIDE } = require('./guide');
 const { buildBriefing } = require('./alerts');
-const { containsStatedFigure, providerRouting, SAFE_REDIRECT } = require('./companion_src');
-const { readSSE, accumulateOpenAI, SentenceGate, anySignal } = require('./stream');
+const { containsStatedFigure, providerRouting, SAFE_REDIRECT, llmConfigured, effortFor, DEFAULTS: LLM, HISTORY_TURNS, HISTORY_CHARS, MESSAGE_CHARS } = require('./companion_src');
+const { readSSE, accumulateOpenAI, SentenceGate, anySignal, hasReasoning, thinkingBeat } = require('./stream');
 const { formatNow } = require('./instant_src');
 const { profilePrompt } = require('./profile');
 const { METRICS } = require('./config');
 const { MODEL_LABEL } = require('./identity');
 
-const AGENT_BUILD = '2026-09-23.kris-5';
+const AGENT_BUILD = '2026-09-24.kris-6';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
-  timeoutMs: 45000,     // whole message budget, all steps together
-  maxTokens: 900,
-  temperature: 0.4,
-  historyTurns: 10,
+  timeoutMs: 45000,     // longest the model may stay silent (re-armed by every streamed chunk)
+  maxTokens: 8192,      // reasoning + answer share it; a ceiling, not a target
 };
 
 const UNAVAILABLE =
@@ -178,8 +176,10 @@ function systemPrompt(opts) {
   );
   lines.push(
     'You have tools for the things you cannot know: the user\'s own vessel records, their fleet briefing, and '
-    + 'the app\'s help centre. Decide for yourself when a tool is needed. Most messages need none. Use a tool '
-    + 'only when the answer genuinely depends on this user\'s data or on how the product works.'
+    + 'the app\'s help centre, plus a chart. Decide for yourself when one is needed. Use them whenever they make '
+    + 'the answer more accurate or more useful: look up the records for anything about their ships, search the '
+    + 'help centre for anything about using the app, draw a chart when numbers compare or change over time. '
+    + 'Skip them when they add nothing; general knowledge and conversation need no tool.'
   );
   lines.push(
     'THE ONE HARD RULE: never state, estimate or imply a figure about this user\'s vessels unless a tool '
@@ -193,10 +193,18 @@ function systemPrompt(opts) {
     + 'reasonably infer from the conversation.'
   );
   lines.push(
-    'Formatting: plain prose by default. Short bullet lists and **bold** are fine. No headings, no tables, '
-    + 'no links. Keep short questions to one or two sentences; do not pad, do not restate the question, do '
-    + 'not add disclaimers nobody asked for. Never mention tools, modules, function names or internal '
-    + 'machinery — the user sees K.R.1.S, not a system.'
+    'Lead with the answer. Match the depth to the question: one or two sentences for a quick question; for '
+    + 'anything substantial, a complete, well-organised answer that covers what matters and stops there. Think '
+    + 'multi-step problems through before answering and check arithmetic and logic. Be accurate rather than '
+    + 'confident: if you are unsure, or something may have changed since your training, say so briefly.'
+  );
+  lines.push(
+    'Formatting (Markdown): plain prose for short answers. For longer ones, use structure where it helps '
+    + 'reading: **bold** for key terms, bullet or numbered lists for steps and options, a table to compare '
+    + 'several items across the same attributes, ### headings only to separate the sections of a long answer, '
+    + 'fenced code blocks with a language for code. Link only to well-known official sources you are sure '
+    + 'exist. Do not pad, do not restate the question, do not add disclaimers nobody asked for. Never mention '
+    + 'tools, modules, function names or internal machinery — the user sees K.R.1.S, not a system.'
   );
   if (opts.nowLabel) {
     lines.push('Current date and time: ' + opts.nowLabel
@@ -330,18 +338,16 @@ function makeTools(input, getDb, opts) {
 
 function readEnv(env) {
   return {
-    url: (env.KRIS_LLM_URL || 'http://127.0.0.1:11434').replace(/\/+$/, ''),
-    model: env.KRIS_AGENT_MODEL || env.KRIS_LLM_MODEL || '',
+    url: (env.KRIS_LLM_URL || LLM.url).replace(/\/+$/, ''),
+    model: env.KRIS_LLM_MODEL || LLM.model,
     apiKey: env.KRIS_LLM_API_KEY || null,
     appName: env.KRIS_APP_NAME || 'this application',
     maxSteps: clampInt(env.KRIS_AGENT_MAX_STEPS, DEFAULTS.maxSteps, 1, 8),
     timeoutMs: clampInt(env.KRIS_AGENT_TIMEOUT_MS, DEFAULTS.timeoutMs, 3000, 180000),
-    maxTokens: clampInt(env.KRIS_AGENT_MAX_TOKENS, DEFAULTS.maxTokens, 128, 4096),
-    temperature: Number.isFinite(parseFloat(env.KRIS_AGENT_TEMPERATURE))
-      ? parseFloat(env.KRIS_AGENT_TEMPERATURE) : DEFAULTS.temperature,
-    // Reasoning models burn seconds before speaking. Off unless asked for.
-    reasoningOff: (env.KRIS_LLM_REASONING || 'off').toLowerCase() !== 'on',
-    reasoningEffort: (env.KRIS_LLM_REASONING_EFFORT || 'low').toLowerCase(),
+    maxTokens: clampInt(env.KRIS_AGENT_MAX_TOKENS, DEFAULTS.maxTokens, 128, 32768),
+    // Unset = the model's own recommended temperature.
+    temperature: Number.isFinite(parseFloat(env.KRIS_AGENT_TEMPERATURE)) ? parseFloat(env.KRIS_AGENT_TEMPERATURE) : undefined,
+    effort: 'medium',   // set per message by run()
     referer: env.KRIS_LLM_REFERER || null,
     title: env.KRIS_LLM_TITLE || 'K.R.1.S',
     env: env,
@@ -361,10 +367,11 @@ function buildBody(cfg, messages, stream) {
     tools: toolDefs(),
     tool_choice: 'auto',
     max_tokens: cfg.maxTokens,
-    temperature: cfg.temperature,
     stream: !!stream,
   };
-  if (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) body.reasoning = { effort: cfg.reasoningEffort || 'low', exclude: true };
+  if (cfg.temperature !== undefined) body.temperature = cfg.temperature;
+  // Reasoning streams back as a heartbeat for the idle timer; it is never shown.
+  if (/openrouter\.ai/i.test(cfg.url)) body.reasoning = { effort: cfg.effort || 'medium' };
   const routing = providerRouting(cfg.env, cfg.url);
   if (routing) body.provider = routing;
   return body;
@@ -419,7 +426,7 @@ async function callModel(cfg, messages, fetchImpl, signal) {
  * call fragments are accumulated. Resolves to the assembled message.
  * A provider that ignores stream:true and answers with JSON still works.
  */
-async function callModelStream(cfg, messages, fetchImpl, signal, onContent) {
+async function callModelStream(cfg, messages, fetchImpl, signal, onContent, onActivity) {
   const res = await postCompletion(cfg, messages, fetchImpl, signal, true);
   const ctype = String((res.headers && res.headers.get && res.headers.get('content-type')) || '');
   if (/application\/json/i.test(ctype)) {
@@ -430,7 +437,7 @@ async function callModelStream(cfg, messages, fetchImpl, signal, onContent) {
     return choice.message;
   }
   const acc = accumulateOpenAI();
-  await readSSE(res, function (chunk) { acc.push(chunk, onContent); });
+  await readSSE(res, function (chunk) { if (onActivity) onActivity(chunk); acc.push(chunk, onContent); });
   return acc.result();
 }
 
@@ -466,9 +473,10 @@ async function run(input, getDb, opts) {
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
   const streaming = typeof opts.onDelta === 'function';
 
-  if (!cfg.model) {
-    return { status: 'error', source: 'agent', reason: 'no_model', text: UNAVAILABLE, error: 'KRIS_LLM_MODEL is not set' };
+  if (!llmConfigured(env)) {
+    return { status: 'error', source: 'agent', reason: 'no_model', text: UNAVAILABLE, error: 'no model configured: set KRIS_LLM_API_KEY' };
   }
+  cfg.effort = effortFor(input.text, env);
 
   const tz = input.context && input.context.tz ? String(input.context.tz) : null;
   const system = systemPrompt({
@@ -480,11 +488,11 @@ async function run(input, getDb, opts) {
   });
 
   const messages = [{ role: 'system', content: system }];
-  (input.history || []).slice(-DEFAULTS.historyTurns).forEach(function (h) {
+  (input.history || []).slice(-HISTORY_TURNS).forEach(function (h) {
     if (!h || !h.text) return;
-    messages.push({ role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.text).slice(0, 1000) });
+    messages.push({ role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.text).slice(0, HISTORY_CHARS) });
   });
-  messages.push({ role: 'user', content: String(input.text || '').slice(0, 2000) });
+  messages.push({ role: 'user', content: String(input.text || '').slice(0, MESSAGE_CHARS) });
 
   const tools = makeTools(input, getDb, opts);
 
@@ -499,8 +507,18 @@ async function run(input, getDb, opts) {
     return Promise.race([namesP, new Promise(function (r) { const t = setTimeout(r, 400); if (t.unref) t.unref(); })]);
   };
 
+  // An idle timer: re-armed at every model turn and by every streamed chunk
+  // (reasoning included), so silence fails and a long answer does not.
+  // Unstreamed, nothing arrives until the turn is written: a longer leash.
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, cfg.timeoutMs) : null;
+  let timer = null;
+  const arm = function () {
+    if (!ctrl) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function () { ctrl.abort(); }, streaming ? cfg.timeoutMs : cfg.timeoutMs * 4);
+  };
+  const beat = thinkingBeat(streaming ? opts.onDelta : null, 5000);
+  const onActivity = function (chunk) { arm(); if (hasReasoning(chunk)) beat(); };
   const signal = anySignal([ctrl ? ctrl.signal : null, opts.signal || null]);
   const trace = [];
 
@@ -534,6 +552,7 @@ async function run(input, getDb, opts) {
     if (gate.blocked && ctrl) ctrl.abort();
   };
   const call = async function () {
+    arm();
     if (!streaming) return callModel(cfg, messages, fetchImpl, signal);
     openGate();
     namesAwaited = false;
@@ -544,7 +563,7 @@ async function run(input, getDb, opts) {
     });
     let msg;
     try {
-      msg = await callModelStream(cfg, messages, fetchImpl, signal, onContent);
+      msg = await callModelStream(cfg, messages, fetchImpl, signal, onContent, onActivity);
     } catch (err) {
       if (gate && gate.blocked) return { content: '', blocked: true };
       throw err;

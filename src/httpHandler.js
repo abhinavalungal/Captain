@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const KRIS_BUILD = '2026-09-23.kris-5';
+const KRIS_BUILD = '2026-09-24.kris-6';
 
 // Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
@@ -63,7 +63,7 @@ function recordError(where, err, extra) {
 const router = require('./router');
 const { findRenames } = require('./envcheck');
 const { LIMITS, METRICS, SOURCES } = require('./config');
-const { readEnv: llmConfig, warmLLM, llmStatus } = require('./companion_src');
+const { readEnv: llmConfig, warmLLM, llmStatus, HISTORY_TURNS, HISTORY_CHARS, MESSAGE_CHARS } = require('./companion_src');
 const { MODEL_LABEL } = require('./identity');
 const { sanitizeProfile, addressName } = require('./profile');
 const { sync } = require('./integrations/sync');
@@ -393,13 +393,13 @@ function health(env) {
     // `label` is the only model name a page should show; `model` is for whoever runs the server.
     // `reachable` is the last probe or message: true, false, or null before the first one.
     companion: llm.enabled
-      ? { provider: llm.provider, model: llm.model, label: MODEL_LABEL, url: llm.url ? '(configured)' : null, configured: !!env.KRIS_LLM_URL,
+      ? { provider: llm.provider, model: llm.model, label: MODEL_LABEL, url: llm.url ? '(configured)' : null, configured: llm.configured,
         reachable: state ? state.ok : null, problem: state && !state.ok ? state.code : undefined }
       : { enabled: false, label: MODEL_LABEL },
     sources: Object.values(SOURCES).map((s) => s.description),
     metrics: METRICS.filter((m) => !m.finerVersionOf).length,
     allowedOrigins: allowedOriginsList(env),
-    mode: String(env.KRIS_MODE || 'router'),
+    mode: String(env.KRIS_MODE || 'agent'),
     features: { stream: true, bodyToken: true, fastLane: true, profile: true },
     diagnostics: diagnosticsOn(env),
     // Settings found under another prefix than KRIS_ — names only. Non-empty
@@ -461,7 +461,7 @@ async function handleKris(req) {
   try { payload = JSON.parse(req.body || '{}'); }
   catch (_) { return reply(400, { error: 'Body must be JSON.' }); }
 
-  const text = String(payload.text || '').slice(0, 1000);
+  const text = String(payload.text || '').slice(0, MESSAGE_CHARS);
   if (!text.trim()) return reply(400, { error: 'Ask a question.' });
 
   const t0 = Date.now();
@@ -515,8 +515,8 @@ async function handleKris(req) {
         now: new Date(),
         // History arrives from the browser; trust nothing about its shape.
         history: Array.isArray(payload.history)
-          ? payload.history.filter((h) => h && typeof h === 'object').slice(-6)
-              .map((h) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', text: String(h.text || '').slice(0, 500) }))
+          ? payload.history.filter((h) => h && typeof h === 'object').slice(-HISTORY_TURNS)
+              .map((h) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', text: String(h.text || '').slice(0, HISTORY_CHARS) }))
           : null,
         context: readContext(payload.context),
       },

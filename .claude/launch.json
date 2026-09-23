@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kris",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "port": 8787,
+      "env": { "KRIS_DEV_SESSION": "1", "KRIS_LLM_URL": "http://127.0.0.1:9", "KRIS_LLM_PROVIDER": "openai_compat" }
+    }
+  ]
+}

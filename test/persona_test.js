@@ -18,7 +18,8 @@ const ta = async (n, f) => { try { await f(); passed++; } catch (e) { fails.push
 const NOW = new Date('2026-09-02T10:00:00Z');
 const NO_DB = async () => { throw new Error('no db should be needed'); };
 const NO_MODEL = async () => { throw new Error('no model should be called'); };
-const LLM_ENV = { KRIS_ENABLE_LLM: '1', KRIS_LLM_URL: 'http://llm.test:11434', KRIS_LLM_MODEL: 'llama3.1:8b', KRIS_APP_NAME: 'Shuddha now' };
+// The router over a self-hosted Ollama: the transport these stubs speak.
+const LLM_ENV = { KRIS_MODE: 'router', KRIS_ENABLE_LLM: '1', KRIS_LLM_PROVIDER: 'ollama', KRIS_LLM_URL: 'http://llm.test:11434', KRIS_LLM_MODEL: 'local', KRIS_APP_NAME: 'Shuddha now' };
 const session = { userId: 'u', orgId: 'o', vesselIds: [] };
 const route = (text, extra, opts) => router.route(
   Object.assign({ text, session, now: NOW }, extra || {}),

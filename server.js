@@ -132,7 +132,7 @@ function serveStatic(req, res, pathname) {
 async function handleApi(req, res) {
   let body = '';
   if (req.method !== 'GET' && req.method !== 'OPTIONS') {
-    try { body = await readBody(req, 64 * 1024); }
+    try { body = await readBody(req, 256 * 1024); }
     catch (e) {
       res.writeHead(413, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ status: 'error', text: 'That message is too long.' }));
