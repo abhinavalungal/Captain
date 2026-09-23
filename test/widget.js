@@ -512,6 +512,95 @@ function boot(opts, storage) {
     assert(/couldn’t confirm your sign-in/.test(last[last.length - 1].textContent), 'fallback text');
   });
 
+  await ta('theme: the header switch flips light and dark, labels itself, and is remembered for this browser', async () => {
+    const w = boot({ theme: 'light' });
+    await wait(20);
+    w.window.KRIS.open();
+    const root = w.q('.root');
+    const btn = w.q('.tool.theme');
+    assert(btn, 'no theme switch in the header');
+    assert(root.getAttribute('data-theme') === 'light', 'start ' + root.getAttribute('data-theme'));
+    assert(btn.getAttribute('aria-label') === 'Switch to dark theme', btn.getAttribute('aria-label'));
+    btn.click();
+    assert(root.getAttribute('data-theme') === 'dark', 'did not switch to dark');
+    assert(btn.getAttribute('aria-label') === 'Switch to light theme', btn.getAttribute('aria-label'));
+    assert(w.window.KRIS.getTheme() === 'dark');
+    assert(w.window.localStorage.getItem('kris:theme') === 'dark', 'pick not remembered');
+    await wait(450);
+    assert(!root.classList.contains('theming'), 'transition class left behind');
+    btn.click();
+    assert(root.getAttribute('data-theme') === 'light' && w.window.localStorage.getItem('kris:theme') === 'light');
+  });
+
+  await ta('theme: a remembered pick beats the host default; host calls apply but are not remembered', async () => {
+    const seen = [];
+    const dom = new JSDOM(HOST, { runScripts: 'dangerously', pretendToBeVisual: true, url: 'https://host.test/app' });
+    dom.window.fetch = async () => jsonResponse({ status: 'ok' });
+    dom.window.localStorage.setItem('kris:theme', 'dark');
+    dom.window.eval(SRC);
+    dom.window.KRIS.init({ endpoint: 'https://kris.test/api/kris', nudge: false, theme: 'light', onThemeChange: (t, pref) => seen.push(t + '/' + pref) });
+    await wait(20);
+    const root = dom.window.document.querySelector('[data-kris-widget]').shadowRoot.querySelector('.root');
+    assert(root.getAttribute('data-theme') === 'dark', 'remembered pick ignored');
+    assert(seen[0] === 'dark/dark', 'hook not told the starting theme: ' + seen.join());
+    assert(dom.window.KRIS.setTheme('light') === true && root.getAttribute('data-theme') === 'light');
+    assert(dom.window.localStorage.getItem('kris:theme') === 'dark', 'a host call must not overwrite the user pick');
+    assert(dom.window.KRIS.setTheme('sepia') === false && root.getAttribute('data-theme') === 'light', 'unknown theme accepted');
+    dom.window.KRIS.setTheme('auto');
+    assert(root.getAttribute('data-theme') === 'light' && root.getAttribute('data-theme-pref') === 'auto', 'auto should resolve to light without an OS preference');
+    assert(seen[seen.length - 1] === 'light/light', 'hook missed a change: ' + seen.join());
+  });
+
+  await ta('theme: auto follows the OS colour scheme, live, until the user picks', async () => {
+    const dom = new JSDOM(HOST, { runScripts: 'dangerously', pretendToBeVisual: true, url: 'https://host.test/app' });
+    dom.window.fetch = async () => jsonResponse({ status: 'ok' });
+    const listeners = [];
+    const mq = { matches: true, addEventListener: (_, f) => listeners.push(f), removeEventListener: () => {} };
+    dom.window.matchMedia = (q) => (/prefers-color-scheme: dark/.test(q) ? mq : { matches: false, addEventListener() {}, removeEventListener() {} });
+    dom.window.eval(SRC);
+    dom.window.KRIS.init({ endpoint: 'https://kris.test/api/kris', nudge: false });
+    await wait(20);
+    const sr = dom.window.document.querySelector('[data-kris-widget]').shadowRoot;
+    const root = sr.querySelector('.root');
+    assert(root.getAttribute('data-theme') === 'dark', 'default auto should follow a dark OS');
+    mq.matches = false; listeners.forEach((f) => f());
+    assert(root.getAttribute('data-theme') === 'light', 'did not follow the OS change');
+    dom.window.KRIS.open();
+    sr.querySelector('.tool.theme').click();
+    assert(root.getAttribute('data-theme') === 'dark');
+    mq.matches = false; listeners.forEach((f) => f());
+    assert(root.getAttribute('data-theme') === 'dark', 'an OS change must not override the user pick');
+  });
+
+  await ta('theme: themeToggle:false hides the switch; tables align figure columns to the right', async () => {
+    const w = boot({ themeToggle: false });
+    await wait(20);
+    assert(!w.q('.tool.theme'), 'switch shown despite themeToggle:false');
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({ status: 'answer', source: 'agent', text: '| Year | Reduction | Note |\n|---|---|---|\n| 2025 | 2% | start |\n| 2030 | 6% | |' }));
+    await w.type('table please');
+    await w.idle();
+    const ths = w.qa('.turn.assistant table.grid th');
+    assert(!ths[0].classList.contains('num'), 'label column must stay left');
+    assert(ths[1].classList.contains('num'), 'figure column header should align with its figures');
+    assert(!ths[2].classList.contains('num'), 'text column marked numeric');
+    assert(w.q('.turn.assistant table.grid tr:nth-child(2) td:nth-child(2)').classList.contains('num'));
+  });
+
+  await ta('composer foot appears only for the context chip or the counter', async () => {
+    const w = boot({ maxLength: 50 });
+    await wait(20);
+    const foot = w.q('.box .foot');
+    assert(foot && !foot.classList.contains('on'), 'foot visible with nothing to show');
+    w.window.KRIS.setContext({ vesselName: 'Aurora Trader' });
+    assert(foot.classList.contains('on'), 'foot hidden with a context chip');
+    w.window.KRIS.clearContext();
+    assert(!foot.classList.contains('on'));
+    const t = w.q('textarea');
+    t.value = 'x'.repeat(45); t.dispatchEvent(new w.window.Event('input'));
+    assert(foot.classList.contains('on'), 'foot hidden with the counter showing');
+  });
+
   await ta('destroy removes the widget and its listeners', async () => {
     const w = boot();
     await wait(20);
