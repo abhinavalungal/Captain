@@ -26,7 +26,117 @@ straight from your own database.
   vessels that did not come from your records, and says so plainly when the
   records don't hold the answer.
 
-## Upgrading an existing deployment
+## A personal assistant underneath
+
+On the surface K.R.1.S is the same small figure in the corner. Underneath,
+this release makes it a personal, context-aware assistant: it knows who it is
+talking to (when the user allows it), keeps conversations, and can be shaped
+by the user.
+
+**The menu.** The ☰ button in the header opens a drawer inside the panel:
+New chat, Chat, History (with the five most recent conversations), then
+Profile, Memory, Appearance, Settings and About, and the user's own name and
+role at the foot. Each section slides over the conversation in the same
+indigo-and-ivory design, with a "‹ Chat" back button; Esc peels back one
+layer at a time (drawer, then section, then the panel).
+
+**Two kinds of context, kept apart on purpose.**
+
+| | Conversation context | Long-term memory |
+|---|---|---|
+| What | This chat's messages, anything the user said about themselves in it, the vessel on screen | Only what the user said yes to |
+| Lifetime | Until a new chat starts (it stays with the chat in History) | Until the user edits or deletes it |
+| Where it shows | Memory → "This conversation only" | Memory → "K.R.1.S remembers", and Profile |
+
+**Asking before remembering.** When a message states something useful —
+*"I'm Alex and I work as a marine emissions analyst."* — the widget
+recognises the name and role locally (no model, no network), uses them in
+that conversation straight away, and puts a card under the reply: *"Would
+you like me to remember this for next time?"* with each value editable and
+tickable. **Remember** saves; **Not now** keeps it in this chat only and is
+never asked again for that value. Detection only ever proposes profile
+fields (name, preferred name, role, company, department, location, time
+zone, interests, answer length, tone) — random conversation content never
+becomes permanent memory. Passwords, ID and account numbers, contact details,
+and health, religious, political, sexual, marital or financial details are
+never proposed and are refused if asked for.
+
+**Talking to memory.** "Remember that I report to the fleet director
+weekly", "forget my role", "forget that", "forget everything" (asks first)
+and "what do you remember about me?" are answered in the browser, instantly.
+"S.P. means shaft power" is still vocabulary teaching and still goes to the
+server.
+
+**The user stays in control.** Memory → turn memory off (kept, not used),
+turn suggestions off, see every item with where it came from ("Learned in
+chat · 23 Sep", "Added by you", "From your account"), edit, forget (with
+Undo), add a note, clear all (two presses). Profile → edit every field; time
+zone is validated and, once set, is what "today" means.
+
+**Where it lives.** Memory and History are stored in this browser
+(localStorage), namespaced per endpoint and per user (`user.id`). With each
+message the widget sends only the approved profile, merged with this chat's
+context, as `context.profile`. The server (`src/profile.js`) whitelists and
+caps it, adds an "about the user" block to the conversation layer's system
+prompt, and keeps nothing. The profile can change how K.R.1.S talks — the
+name, the examples, the length and tone of answers — and never a figure:
+nothing in it reaches the parser, the SQL builder or the data engine, and a
+test proves a figure-shaped note cannot leak into a data answer. To follow a
+user across devices later, pass `memoryStore: { load, save }` and keep it in
+your own backend; nothing else changes.
+
+**History.** Conversations are kept on this device for 30 days (at most 40),
+listed by day, searchable, reopened exactly where they were left (their
+context included), and deletable with Undo. The empty state offers
+"Continue …" for the latest one, and its suggestions follow the user's role
+once K.R.1.S knows it (compliance prompts for an emissions analyst, engine
+prompts for a superintendent, off-hire and legs for commercial roles).
+
+**Chat.** A clock appears on the thinking line after 3 s and a plain reason
+after 12 s; a long answer stops scrolling once it fills the view so it can be
+read from its first line ("Latest" jumps to the end); your own messages can
+be copied or edited and resent (↑ in an empty composer); a failed send says
+"Not delivered" on the bubble and the error card offers Try again; toasts
+confirm changes, with Undo where it matters.
+
+**Appearance and settings.** Light / dark / system, three text sizes,
+comfortable or compact density, times on or off, reduce motion (on top of
+the OS setting), a still character; Enter-to-send or Ctrl/⌘+Enter, follow-ups
+on or off, history on or off, delete all history, keyboard shortcuts, reset,
+and delete everything on this device. About shows the server's status and
+build, and how information is handled.
+
+**On a shared machine,** call `KRIS.forget()` at sign-out, or pass the
+signed-in user's id as `user.id` so each person's memory and history stay
+apart. `KRIS.setUser({ id })` switches user without a page load.
+
+**For later.** Sections are a registry (one entry and one render function to
+add another), replies can carry section-link actions, every message carries
+`client: { v, features }` for capability negotiation, and `KRIS.on(...)`
+exposes `memory`, `settings`, `view`, `conversation`, `open`, `close` and
+`answer` events. Voice, files, tools, other models or workspace knowledge
+can be added on these seams without rebuilding the widget.
+
+### Upgrading to this release
+
+- Deploy **every** changed server file together — `src/profile.js` (new),
+  `src/httpHandler.js`, `src/router.js`, `src/companion_src.js`,
+  `src/agent.js` — plus `public/kris-widget.js`. The build stamps are all
+  `2026-09-23.kris-3`; a mixed deploy is reported on error cards as "FILES
+  OUT OF SYNC".
+- No database migration and no new environment variables.
+- A first-person introduction ("I'm Alex and I work as a marine emissions
+  analyst.") is now treated as conversation in both modes. Before, the word
+  "emissions" made it a data request, so it got a database answer or a
+  clarifying question about emissions. A request ("I'm checking shaft power
+  for Aurora Trader") is still a data question.
+- The router-mode companion now streams its answers sentence by sentence
+  (before, only agent mode streamed), and a stop from the widget now cancels
+  the model call.
+- Behaviour change: a name the user mentions is used in that conversation at
+  once but is only carried into the next one if they choose to remember it.
+
+## Upgrading from a Captain deployment (earlier release)
 
 This release renames every identifier, so an existing deployment needs four
 one-time steps, in this order:
@@ -460,9 +570,21 @@ badge, always open:
 | `position` | `'right'` | `'right'` or `'left'` (floating only) |
 | `openOnLoad` | `false` | |
 | `onOpen`, `onClose`, `onAnswer(data)` | | hooks |
+| `user` | `null` | `{ id, name, preferredName, role, company, department, location, timezone }` from your account record. `id` keeps each user's memory and history apart; the rest pre-fill the profile as "From your account" (the user can still change or remove them) |
+| `memory` | `true` | `false` removes long-term memory entirely: no Profile or Memory, nothing kept, no profile sent |
+| `memoryStore` | `null` | `{ load(): memory \| Promise, save(memory) }` — keep memory in your own backend instead of the browser |
+| `onMemoryChange(memory)` | | called whenever what K.R.1.S remembers changes |
+| `history`, `historyDays`, `historyMax` | `true`, `30`, `40` | past conversations on this device (`persist: false` also turns this off) |
+| `settings` | `null` | defaults for the user's settings: `{ textSize: 's'\|'m'\|'l', density: 'comfortable'\|'compact', timestamps, motion: 'system'\|'reduce', character, sendWithEnter, followups, history }` |
+| `hotkey` | `null` | e.g. `'mod+k'` to open and close from anywhere on the page (mod = Ctrl, or ⌘ on a Mac) |
 
-**Methods:** `open()`, `close()`, `ask(text)`, `setContext(ctx)`,
-`clearContext()`, `setTheme('light'|'dark'|'auto')`, `destroy()`.
+**Methods:** `open()`, `close()`, `ask(text)`, `newChat()`, `setContext(ctx)`,
+`clearContext()`, `setTheme('light'|'dark'|'auto')`,
+`openView('history'|'profile'|'memory'|'appearance'|'settings'|'about'|'chat')`,
+`memory.get() / set(key, value) / remove(key) / addNote(text) / clear() / enable(bool) / isEnabled()`,
+`history.list() / open(id) / remove(id) / clear()`, `settings.get() / set(key, value) / reset()`,
+`setUser(user)`, `forget()` (sign-out: removes this user's memory, history and
+open chat from the browser), `on(event, fn)` / `off(event, fn)`, `destroy()`.
 
 **Interaction details that are easy to miss but were done on purpose:**
 
@@ -569,11 +691,12 @@ guide and briefing are unaffected, and open-ended chat gets a fixed honest
 line instead of a conversation. Set `KRIS_ENABLE_LLM=0` to turn the
 companion off outright.
 
-The widget carries the last few conversational turns in memory (not persisted,
-not sent to the data endpoints) so the companion has continuity within a
-session — but a data lookup or a clarification is never added to that
-history, because there is nothing about a fuel figure the companion should
-be recalling in small talk later.
+The widget sends the last few turns of the current conversation with each
+message so the companion has continuity — but only conversational replies are
+included; a data lookup or a clarification is never added to that history,
+because there is nothing about a fuel figure the companion should be recalling
+in small talk later. What the user has chosen to have remembered travels
+separately, as `context.profile` (see "A personal assistant underneath").
 
 ## How access control works
 
@@ -624,7 +747,7 @@ a teaching cycle.
 # full suite, needs a database
 KRIS_TEST_URL='postgres://...' npm test
 
-# no database: parser, fast lane, streaming, widget, server
+# no database: parser, fast lane, streaming, widget, memory, server
 npm run test:offline
 
 # end-to-end latency (add BENCH_PG_URL=postgres://... to include data questions)
@@ -638,7 +761,16 @@ local OpenAI-compatible server with configurable latency. `test/widget.js`
 mounts the real widget in a hostile jsdom host page with a fake transport. It
 covers local replies, the no-preflight transport, streaming, XSS probes,
 clarification, errors and retry, stop, keyboard handling, persistence and
-reactions. It needs no database.
+reactions. It needs no database. `test/widget_memory.js` covers the memory
+layer the same way: detection and the consent card, "Not now", private
+details refused, local memory commands, pausing, the Memory and Profile
+sections, the drawer and Esc order, History (archive, search, reopen, delete
+with Undo), appearance and settings, edit-and-resend, sending and failure
+states, the `user` / `memoryStore` / `forget()` integration points, and XSS
+through remembered values. `test/profile_test.js` covers the server side:
+sanitising `context.profile`, the prompt block in both conversation layers,
+that a profile cannot reach a data answer, introductions routed as
+conversation, and router-mode streaming.
 
 To set up a local test database:
 

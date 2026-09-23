@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const KRIS_BUILD = '2026-09-23.kris-1';
+const KRIS_BUILD = '2026-09-23.kris-3';
 
 // Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
@@ -64,6 +64,7 @@ const router = require('./router');
 const { findRenames } = require('./envcheck');
 const { LIMITS, METRICS, SOURCES } = require('./config');
 const { readEnv: llmConfig, warmLLM } = require('./companion_src');
+const { sanitizeProfile, addressName } = require('./profile');
 const { sync } = require('./integrations/sync');
 
 /**
@@ -392,7 +393,7 @@ function health(env) {
     metrics: METRICS.filter((m) => !m.finerVersionOf).length,
     allowedOrigins: allowedOriginsList(env),
     mode: String(env.KRIS_MODE || 'router'),
-    features: { stream: true, bodyToken: true, fastLane: true },
+    features: { stream: true, bodyToken: true, fastLane: true, profile: true },
     diagnostics: diagnosticsOn(env),
     // Settings found under another prefix than KRIS_ — names only. Non-empty
     // means the server is running on defaults until they are renamed.
@@ -400,6 +401,34 @@ function health(env) {
     node: process.version,
     recentErrors: env.KRIS_DEV_SESSION === '1' ? RECENT_ERRORS : undefined,
     files: env.KRIS_DEV_SESSION === '1' ? fileFingerprints() : undefined,
+  };
+}
+
+/**
+ * The page and person context the widget sends with every message. Nothing
+ * about its shape is trusted: known keys only, every value capped. The
+ * profile is what the user has allowed K.R.1.S to remember (see
+ * src/profile.js) — it shapes how K.R.1.S talks and is never read by the
+ * data engine.
+ */
+function readContext(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  // One line each: a newline in a name would let it pose as a new prompt section.
+  const str = (v, max) => {
+    if (v == null || typeof v === 'object') return null;
+    const s = String(v).replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+    return s || null;
+  };
+  const profile = sanitizeProfile(raw.profile);
+  const userName = str(raw.userName, 60) || addressName(profile);
+  return {
+    vesselId: str(raw.vesselId, 40),
+    vesselName: str(raw.vesselName, 80),
+    userName: userName || null,
+    page: str(raw.page, 80),
+    tz: str(raw.tz, 64),
+    locale: str(raw.locale, 16),
+    profile: profile,
   };
 }
 
@@ -482,14 +511,7 @@ async function handleKris(req) {
           ? payload.history.filter((h) => h && typeof h === 'object').slice(-6)
               .map((h) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', text: String(h.text || '').slice(0, 500) }))
           : null,
-        context: payload.context && typeof payload.context === 'object'
-          ? { vesselId: payload.context.vesselId != null ? String(payload.context.vesselId).slice(0, 40) : null,
-              vesselName: payload.context.vesselName != null ? String(payload.context.vesselName).slice(0, 80) : null,
-              userName: payload.context.userName != null ? String(payload.context.userName).slice(0, 60) : null,
-              page: payload.context.page != null ? String(payload.context.page).slice(0, 80) : null,
-              tz: payload.context.tz != null ? String(payload.context.tz).slice(0, 64) : null,
-              locale: payload.context.locale != null ? String(payload.context.locale).slice(0, 16) : null }
-          : null,
+        context: readContext(payload.context),
       },
       getDb,
       {
@@ -607,4 +629,4 @@ function lowercaseKeys(obj) {
   return out;
 }
 
-module.exports = { handleKris, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList, classifyDbError, warmUp, readPoolOrNull, KRIS_BUILD };
+module.exports = { handleKris, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList, classifyDbError, warmUp, readPoolOrNull, readContext, KRIS_BUILD };

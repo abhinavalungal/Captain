@@ -180,6 +180,7 @@ ol.steps code{background:var(--surface);border:1px solid var(--line);padding:1px
 
   KRIS.init({
     getToken: token,
+    user: { id: 'prototype-user' },   // keeps this user's memory and history apart on a shared browser
     theme: 'light',
     nudgeText: 'Namaste! Ask me anything about your fleet.'
   });
@@ -206,6 +207,8 @@ ol.steps code{background:var(--surface);border:1px solid var(--line);padding:1px
     ['t', '<script src="'], ['s', origin + '/kris-widget.js'], ['t', '"><\/script>\n'],
     ['t', '<script>\n  KRIS.init({\n    getToken: function () { return window.SESSION_TOKEN; },  '],
     ['c', '// your real session token\n'],
+    ['t', '    user: { id: window.CURRENT_USER_ID },  '],
+    ['c', '// keeps each user\u2019s memory and history apart\n'],
     ['t', '    theme: '], ['s', "'auto'"], ['t', ',\n    brand: { accent: '], ['s', "'#2B3A9E'"], ['t', ' }\n  });\n<\/script>']
   ];
   var plain = '';

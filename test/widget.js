@@ -358,17 +358,24 @@ function boot(opts, storage) {
     assert(w3.qa('.turn').length === 0, 'persist:false must ignore storage');
   });
 
-  await ta('new conversation clears turns, history and pending, keeps the name', async () => {
+  await ta('new conversation clears turns, history, pending and this chat’s context; a name carries over only once remembered', async () => {
     const w = boot();
     await wait(20);
     w.window.KRIS.open();
     w.respond(async () => jsonResponse({ status: 'answer', source: 'identity', text: 'Hi Nav', remember: { userName: 'Nav' } }));
     await w.type('my name is Nav');
     await w.idle();
+    const memo = w.q('.turn.assistant .memo');
+    assert(memo && /remember your name, Nav/.test(memo.textContent), 'no consent card for the name');
     w.q('.tool.newchat').click();
     assert(w.qa('.turn').length === 0 && w.q('.welcome'), 'not reset');
     assert(w.inst().history.length === 0 && w.inst().pending === null);
-    assert(/Nav/.test(w.q('.welcome h3').textContent), 'name dropped from greeting');
+    assert(!/Nav/.test(w.q('.welcome h3').textContent), 'an unconfirmed name must not outlive its conversation');
+    await w.type('my name is Nav');
+    await w.idle();
+    w.q('.turn.assistant .memo .btn.primary').click();
+    w.q('.tool.newchat').click();
+    assert(/Nav/.test(w.q('.welcome h3').textContent), 'remembered name dropped from greeting');
   });
 
   await ta('page context shows as a chip and tailors the suggested prompts', async () => {

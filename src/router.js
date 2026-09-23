@@ -39,7 +39,7 @@ const identity = require('./identity');
 const agent = require('./agent');
 const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-23.kris-1';
+const ROUTER_BUILD = '2026-09-23.kris-3';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -88,6 +88,11 @@ async function route(input, db, opts) {
     });
   }
 
+  // "I'm Alex and I work as a marine emissions analyst." is an introduction,
+  // not a question about emissions data. It goes to conversation (the widget
+  // offers to remember it); it must not be read as a data request.
+  const intro = isIntroduction(text, input.now);
+
   // --- AI-FIRST MODE ------------------------------------------------------------
   // KRIS_MODE=agent hands the message to the model with tools. Two
   // shortcuts come first because they are strictly better than a model round
@@ -99,7 +104,7 @@ async function route(input, db, opts) {
   // If the model layer is unreachable, we fall back to the router below
   // (set KRIS_AGENT_FALLBACK=0 to disable).
   if (String(env.KRIS_MODE || '').toLowerCase() === 'agent') {
-    if (env.KRIS_AGENT_DIRECT_DATA !== '0') {
+    if (env.KRIS_AGENT_DIRECT_DATA !== '0' && !intro) {
       const direct = await directData(text, input, getDb, opts);
       if (direct) return direct;
     }
@@ -124,7 +129,7 @@ async function route(input, db, opts) {
   const userName = input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null;
 
   // --- 1. classify without the database ---------------------------------------
-  const kind = parser.classify(text, [], input.now);
+  const kind = intro ? 'other' : parser.classify(text, [], input.now);
 
   if (kind === 'data' || kind === 'teach') {
     return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
@@ -170,11 +175,14 @@ async function route(input, db, opts) {
   // on without it. A conversational message must not pay for a database
   // round-trip it almost never needs.
   const learned = await learnedFor(getDb, opts);
-  if (learned.length && parser.classify(text, learned, input.now) === 'data') {
+  if (learned.length && !intro && parser.classify(text, learned, input.now) === 'data') {
     return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
   }
 
   // --- 5. companion (no database access) ------------------------------------------
+  if (intro && env.KRIS_ENABLE_LLM === '0') {
+    return { status: 'answer', source: 'router', instant: true, text: introReply(userName) };
+  }
   if (env.KRIS_ENABLE_LLM === '0') {
     const parsed = parser.parse(text, { now: input.now, vessels: [], learned: learned });
     const suggestions = (parsed.suggestions || METRICS.filter(function (m) { return !m.finerVersionOf; }).slice(0, 6).map(function (m) { return m.label; }));
@@ -355,8 +363,15 @@ async function converseSafe(text, input, opts, env, guideSnippets, tz) {
     guideSnippets: guideSnippets,
     history: input.history,
     userName: input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null,
+    // What the user has allowed K.R.1.S to remember. Shapes the reply's
+    // tone and relevance; never a source of figures (see src/profile.js).
+    profile: input.context && input.context.profile ? input.context.profile : null,
     context: input.context && input.context.vesselName ? { vesselName: String(input.context.vesselName).slice(0, 80) } : null,
     fetchImpl: opts.fetchImpl,
+    // Stream the reply a sentence at a time (each sentence already
+    // guard-checked) and stop model work when the user presses stop.
+    onDelta: opts.onDelta,
+    signal: opts.signal,
   });
 }
 
@@ -508,6 +523,33 @@ const SMALL_TALK = new Set(['hi', 'hello', 'hey', 'hiya', 'yo', 'sup', 'thanks',
   'so', 'very', 'awesome', 'perfect', 'noted', 'alright', 'sure', 'gotcha', 'yeah', 'hmm', 'wow', 'welcome', 'appreciated', 'cya', 'later', 'see']);
 
 /** True when every word is conversational filler — nothing that could name a metric. */
+/**
+ * A first-person introduction: a name, a role, an employer, a base — with no
+ * request in it and no period to read. "I'm checking shaft power" and "I am
+ * looking for fuel consumption last month" are requests, not introductions.
+ */
+const INTRO_RE = new RegExp('^\\s*(?:(?:hi|hello|hey|namaste|good (?:morning|afternoon|evening))[,!.\\s]+)?(?:'
+  + "my name(?:'s| is)\\b"
+  + "|i(?:'m|\u2019m| am) [a-z][a-z'\u2019-]+(?: [a-z][a-z'\u2019-]+)?\\s*(?:,|\\band\\b|\\.|!|$)"
+  + '|i (?:work|am working) (?:as|at|for|in)\\b'
+  + '|my (?:role|job title|title|position|designation) is\\b'
+  + "|i(?:'m|\u2019m| am) (?:an?|the) (?:[a-z&/-]+ ){0,4}(?:analyst|engineer|manager|officer|superintendent|captain|master|chief|director|lead|head|specialist|consultant|coordinator|planner|operator|technician|auditor|inspector|trader|charterer|broker|surveyor|accountant|student|intern)\\b"
+  + "|i(?:'m|\u2019m| am) based in\\b"
+  + ')', 'i');
+const REQUEST_RE = /\?|\b(?:show|give|get|tell|what|which|how|when|where|why|check|checking|look|looking|need|want|find|compare|trend|total|average|sum|pull|fetch|list|can you|could you|please|help)\b/i;
+
+function isIntroduction(text, now) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 240 || !INTRO_RE.test(t) || REQUEST_RE.test(t)) return false;
+  const r = dates.resolveTimeRange(t, now ? new Date(now) : new Date());
+  return !(r && !r.needsDate);
+}
+
+function introReply(name) {
+  return (name ? 'Good to meet you, ' + String(name).replace(/[^\w'\u2019. -]/g, '').slice(0, 40) + '. ' : 'Good to know. ')
+    + 'Ask me about a vessel, the app, or anything else you need.';
+}
+
 function isSmallTalk(text) {
   const words = String(text).toLowerCase().replace(/[’']/g, '').replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
   if (!words.length) return true;
@@ -633,4 +675,4 @@ function prewarm() {
 /** Exposed so the learned-term cache can be cleared when vocabulary changes or in tests. */
 function clearLearnedCache() { learnedCache.clear(); legacyLearned.clear(); scopeCache.clear(); }
 
-module.exports = { route: route, prewarm: prewarm, fastLane: fastLane, agent: agent, ROUTER_BUILD: ROUTER_BUILD, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite };
+module.exports = { route: route, prewarm: prewarm, fastLane: fastLane, agent: agent, ROUTER_BUILD: ROUTER_BUILD, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite, isIntroduction: isIntroduction };

@@ -42,9 +42,10 @@ const { buildBriefing } = require('./alerts');
 const { containsStatedFigure, providerRouting, SAFE_REDIRECT } = require('./companion_src');
 const { readSSE, accumulateOpenAI, SentenceGate, anySignal } = require('./stream');
 const { formatNow } = require('./instant_src');
+const { profilePrompt } = require('./profile');
 const { METRICS } = require('./config');
 
-const AGENT_BUILD = '2026-09-23.kris-1';
+const AGENT_BUILD = '2026-09-23.kris-3';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -201,6 +202,8 @@ function systemPrompt(opts) {
     lines.push('The user is currently viewing the vessel "' + opts.vesselName
       + '" in the app, so an unqualified "the vessel" probably means that one.');
   }
+  const about = profilePrompt(opts.profile);
+  if (about) lines.push(about);
   return lines.join('\n\n');
 }
 
@@ -466,6 +469,7 @@ async function run(input, getDb, opts) {
     nowLabel: formatNow(input.now ? new Date(input.now) : new Date(), tz).label,
     userName: input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null,
     vesselName: input.context && input.context.vesselName ? String(input.context.vesselName).slice(0, 80) : null,
+    profile: input.context && input.context.profile ? input.context.profile : null,
   });
 
   const messages = [{ role: 'system', content: system }];

@@ -1,5 +1,7 @@
 'use strict';
 
+const { profilePrompt } = require('./profile');
+
 /**
  * The companion layer — conversation and app guidance, running on a model you
  * host yourself. No paid API is involved anywhere in this file.
@@ -137,6 +139,8 @@ function systemPrompt(opts) {
   const userLine = opts.userName
     ? '\n\nThe user\'s name is ' + opts.userName + '. Address them by name occasionally and naturally \u2014 not in every reply.'
     : '';
+  const about = profilePrompt(opts.profile);
+  const profileBlock = about ? '\n\n' + about : '';
 
   return think
     + 'You are K.R.1.S (say it "Kris"), the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is K.R.1.S; if asked, say so. K.R.1.S is a codename inspired by Lord Krishna, the calm charioteer who guides without taking the wheel. You are a capable general assistant in that spirit: serene, warm, clear-sighted and gently playful, never preachy. Do not quote scripture or make religious claims unless the user raises the subject, and treat it with respect when they do.\n\n'
@@ -145,8 +149,8 @@ function systemPrompt(opts) {
     + 'Charts: when a chart would genuinely help and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
     + 'CHART {"type":"bar","title":"...","labels":["A","B"],"values":[1,2],"unit":""}\n'
     + '(type is "bar" or "line"; 2 to 24 points). Do not add a chart to answers that don\'t need one.\n\n'
-    + (opts.light ? 'This is a short question: answer it directly in one or two sentences. Do not pad, do not add caveats, do not restate the question.\n\n' : '')
-    + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + nowLine + userLine + guideBlock + ctx;
+    + (opts.light && !(opts.profile && opts.profile.style && opts.profile.style.length === 'detailed') ? 'This is a short question: answer it directly in one or two sentences. Do not pad, do not add caveats, do not restate the question.\n\n' : '')
+    + 'Formatting: plain prose by default. You may use **bold**, short bullet lists ("- item") and `code`. No headings, no tables, no links.' + nowLine + userLine + profileBlock + guideBlock + ctx;
 }
 
 function readEnv(env) {
@@ -296,7 +300,7 @@ async function converse(text, opts) {
 
   const light = !!opts.light;
   const streaming = typeof opts.onDelta === 'function';
-  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff, light: light, nowLabel: opts.nowLabel, userName: opts.userName || null });
+  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff, light: light, nowLabel: opts.nowLabel, userName: opts.userName || null, profile: opts.profile || null });
   const req = buildRequest(cfg, system, messages, light, streaming);
   // No tools field in either request shape. That is the structural guarantee.
 

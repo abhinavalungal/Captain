@@ -6,54 +6,61 @@
  * spirit — a small blue-skinned figure with a peacock feather in a golden
  * crown and a flute at the chest, sitting in the corner of your app.
  *
- * Floating (default): K.R.1.S sits in the corner and opens a chat panel.
- * The API endpoint follows wherever this script was loaded from, so embedding
- * needs no configuration beyond a token:
+ * A small widget on the surface, a personal assistant underneath:
+ *
+ *   Chat       streamed answers, data readouts, follow-ups, edit & resend,
+ *              copy, regenerate, stop, clear thinking / error / retry states
+ *   History    past conversations on this device, searchable, 30-day retention
+ *   Profile    who the user is and how they like answers, editable any time
+ *   Memory     what K.R.1.S may remember across conversations — only what the
+ *              user approved, visible, editable, deletable, and pausable
+ *   Appearance light / dark / system, text size, density, motion
+ *   Settings   send key, follow-ups, history, shortcuts, reset
+ *   About      version, server status, how data is handled
+ *
+ * Two kinds of context, kept apart on purpose:
+ *   - Conversation context: the current chat (its messages, anything the user
+ *     mentioned in it, the page they are on). Gone when a new chat starts.
+ *   - Long-term memory: only what the user said yes to. When K.R.1.S notices
+ *     something useful ("I'm a marine emissions analyst") it asks first; it
+ *     never saves silently, and it refuses passwords, IDs, contact, health
+ *     and financial details outright.
+ *
+ * Embedding needs no configuration beyond a token — the API endpoint follows
+ * wherever this script was loaded from:
  *
  *   <script src="https://kris.your-domain.com/kris-widget.js"></script>
  *   <script>
- *     KRIS.init({ getToken: function () { return window.SESSION_TOKEN; } });
+ *     KRIS.init({
+ *       getToken: function () { return window.SESSION_TOKEN; },
+ *       user: { id: window.CURRENT_USER_ID }   // keeps each user's memory and history apart
+ *     });
  *   </script>
  *
- * Inline: render inside your own layout (a sidebar, a drawer):
- *   KRIS.init({ mount: '#kris-slot', theme: 'dark' });
- *
- * Page context, so "fuel consumption last month" means *this* vessel:
- *   KRIS.setContext({ vesselId: '9851701', vesselName: 'Aurora Trader', page: 'vessel' });
- *
- * Light and dark:
- *   The header carries a sun/moon switch. theme: 'auto' (the default)
- *   follows the OS until the user flips the switch; their pick is kept for
- *   this browser. The host can drive it too, and hear about changes:
- *     KRIS.init({ theme: 'auto', onThemeChange: function (t) { ... } });
- *     KRIS.setTheme('dark');  KRIS.toggleTheme();  KRIS.getTheme();
- *
- * Brand (accentDark is the accent on the dark theme, gold by default):
- *   KRIS.init({ brand: { accent: '#2B3A9E', accentDark: '#F2C14E', font: 'Inter, system-ui, sans-serif' } });
- *
- * Bring your own transport (optionally streaming via hooks.onDelta):
- *   KRIS.init({ ask: async function (text, pending, history, context, hooks) { ... return payload; } });
+ * Inline, inside your own layout:   KRIS.init({ mount: '#kris-slot' });
+ * Page context:                     KRIS.setContext({ vesselId, vesselName, page });
+ * Open a section from your own UI:  KRIS.openView('memory');
+ * Sign-out on a shared machine:     KRIS.forget();
+ * Your own memory store:            KRIS.init({ memoryStore: { load, save } });
  *
  * Speed, by design:
- *   - Greetings, thanks and goodbyes are answered locally, with no network.
+ *   - Greetings, thanks, goodbyes and memory commands ("what do you remember
+ *     about me?") are answered locally, with no network.
  *   - Every message is a CORS "simple request" (text/plain body, token in the
  *     body), so the browser never spends a round trip on a preflight.
- *   - The server connection (and, server-side, the database and model
- *     connections) are warmed when the page is idle, before the first message.
+ *   - The server connection is warmed when the page is idle.
  *   - Model answers stream in as they are written.
  *
  * Everything renders inside a Shadow DOM, so host CSS cannot reach in and the
  * widget's CSS cannot leak out. No external requests, no fonts, no images:
- * the character is inline SVG. The conversation is kept in sessionStorage
- * (this tab only) so it survives page navigation; pass persist: false to keep
- * it in memory only.
+ * the character is inline SVG.
  */
 (function (global) {
   'use strict';
 
   if (global.KRIS && global.KRIS.__loaded) return;
 
-  var VERSION = '2026-09-23.kris-2';
+  var VERSION = '2026-09-23.kris-3';
 
   // Where was this script loaded from? The API lives on the same origin.
   var SCRIPT_ORIGIN = '';
@@ -293,6 +300,26 @@
   };
   var PROMPT_ICONS = { Briefing: 'sun', Data: 'chart', Compliance: 'leaf', App: 'compass' };
 
+  // Navigation, settings and memory glyphs — same 20px grid, same stroke.
+  assign(ICON, {
+    menu: icon('<path d="M3.5 6h13"/><path d="M3.5 10h13"/><path d="M3.5 14h8"/>', 18),
+    chat: icon('<path d="M4 4.5h12a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3H4A1.5 1.5 0 0 1 2.5 12.5V6A1.5 1.5 0 0 1 4 4.5z"/>', 17),
+    history: icon('<path d="M3.6 10a6.4 6.4 0 1 0 1.9-4.5"/><path d="M3.5 3.8v2.9h2.9"/><path d="M10 6.6V10l2.4 1.6"/>', 17),
+    user: icon('<circle cx="10" cy="7" r="3.2"/><path d="M3.8 16.5c.9-3 3.3-4.6 6.2-4.6s5.3 1.6 6.2 4.6"/>', 17),
+    memory: icon('<path d="M10 2.8l1.6 3.9 3.9 1.6-3.9 1.6L10 13.8l-1.6-3.9-3.9-1.6 3.9-1.6z"/><path d="M15.6 12.6l.7 1.7 1.7.7-1.7.7-.7 1.7-.7-1.7-1.7-.7 1.7-.7z"/>', 17),
+    palette: icon('<path d="M10 3a7 7 0 1 0 0 14c1 0 1.6-.7 1.6-1.5 0-.9-.7-1.3-.7-2.1 0-.9.7-1.4 1.6-1.4h1.7A3.3 3.3 0 0 0 17 8.7C17 5.5 13.9 3 10 3z"/><circle cx="6.6" cy="9.4" r=".9"/><circle cx="8.8" cy="6.3" r=".9"/><circle cx="12.4" cy="6.4" r=".9"/>', 17),
+    gear: icon('<circle cx="10" cy="10" r="2.5"/><path d="M10 2.8v1.8M10 15.4v1.8M17.2 10h-1.8M4.6 10H2.8M15.1 4.9l-1.3 1.3M6.2 13.8l-1.3 1.3M15.1 15.1l-1.3-1.3M6.2 6.2L4.9 4.9"/>', 17),
+    info: icon('<circle cx="10" cy="10" r="7"/><path d="M10 9v4.6"/><path d="M10 6.4v.1"/>', 17),
+    back: icon('<path d="M12.5 4.5L7 10l5.5 5.5"/>', 17),
+    trash: icon('<path d="M4 6h12"/><path d="M8 6V4.5h4V6"/><path d="M5.6 6l.7 9.5h7.4l.7-9.5"/>', 15),
+    edit: icon('<path d="M12.6 4.2l3.2 3.2L7.6 15.6l-3.8.6.6-3.8z"/><path d="M11.2 5.6l3.2 3.2"/>', 15),
+    search: icon('<circle cx="9" cy="9" r="5"/><path d="M12.8 12.8L16.5 16.5"/>', 16),
+    plus: icon('<path d="M10 4.5v11"/><path d="M4.5 10h11"/>', 16),
+    shield: icon('<path d="M10 2.8l6 2.3v4.3c0 3.8-2.6 6.4-6 7.8-3.4-1.4-6-4-6-7.8V5.1z"/><path d="M7.4 10.1l1.8 1.8 3.5-3.7"/>', 16),
+    undo: icon('<path d="M6.5 7.5H12a4 4 0 0 1 0 8H8"/><path d="M9 4.5l-3 3 3 3"/>', 15),
+    pause: icon('<rect x="5.5" y="4.5" width="3" height="11" rx="1"/><rect x="11.5" y="4.5" width="3" height="11" rx="1"/>', 15)
+  });
+
   // ==========================================================================
   //  Design tokens.
   //
@@ -377,7 +404,7 @@
       '--ease:cubic-bezier(.2,.8,.2,1);--spring:cubic-bezier(.34,1.56,.64,1);' +
       '--r-panel:24px;--r-card:16px;--r-ctl:12px;' +
       'position:fixed;right:22px;bottom:22px;z-index:2147483000;' +
-      'font:400 14.5px/1.6 var(--font);color:var(--ink);letter-spacing:-.003em;' +
+      'font:400 var(--fs,14.5px)/1.6 var(--font);color:var(--ink);letter-spacing:-.003em;' +
       '-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;' +
       'display:flex;flex-direction:column;align-items:flex-end;gap:16px}',
     '.root[data-theme="dark"]{' + TOKENS_DARK + '}',
@@ -730,7 +757,7 @@
     '.box:hover{border-color:var(--line-3)}',
     '.box.focus{border-color:var(--ring-line);box-shadow:0 0 0 4px var(--ring),var(--shadow-md)}',
     '.box textarea{grid-column:1;display:block;width:100%;border:0;outline:0;resize:none;background:transparent;color:var(--ink);' +
-      'font:400 15px/1.5 var(--font);letter-spacing:-.003em;padding:13px 6px 13px 16px;height:48px;min-height:48px;max-height:180px;overflow-y:auto;scrollbar-width:thin}',
+      'font:400 calc(var(--fs,14.5px) + .5px)/1.5 var(--font);letter-spacing:-.003em;padding:13px 6px 13px 16px;height:48px;min-height:48px;max-height:180px;overflow-y:auto;scrollbar-width:thin}',
     '.box textarea::placeholder{color:var(--ink-3);opacity:1}',
     '.send{grid-column:2;margin:6px 6px 6px 0;width:36px;height:36px;border-radius:50%;border:0;background:var(--send-bg);color:var(--on-accent);cursor:pointer;display:grid;place-items:center;flex:none;' +
       'box-shadow:0 6px 14px -7px rgba(27,32,102,.8),inset 0 0 0 1px rgba(255,255,255,.18);transition:filter .15s,transform .2s var(--spring),background .15s}',
@@ -808,6 +835,383 @@
   ].join('');
 
   // ==========================================================================
+  //  Navigation, settings, memory and state styles.
+  //
+  //  Everything below reuses the same tokens, radii and type ramp as the chat,
+  //  so Profile or Appearance reads as another room of the same house, not a
+  //  settings app bolted on: gold mono eyebrows, ivory/midnight ground, white
+  //  (or half-step lighter) cards, indigo/gold accents, peacock for focus.
+  // ==========================================================================
+  CSS += [
+    '.root{--fs:14.5px;--scrim:rgba(22,26,64,.26);--toast-bg:#161A40;--toast-ink:#FFFFFF;--toast-act:#F2C14E}',
+    '.root[data-theme="dark"]{--scrim:rgba(4,5,22,.58);--toast-bg:#EDEFFF;--toast-ink:#12153B;--toast-act:#2B3A9E}',
+    '.root[data-size="s"]{--fs:13.5px}',
+    '.root[data-size="l"]{--fs:16px}',
+
+    // --- header: the menu button sits before the portrait ----------------------
+    '.head{padding-left:8px}',
+    '.head .tool.menu{margin-right:-4px}',
+    '.tool.menu[aria-expanded="true"]{background:rgba(255,255,255,.16);color:#FFFFFF}',
+
+    // --- stage: everything under the header ------------------------------------
+    '.stage{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}',
+    '.panel.in-view .body,.panel.in-view .composer{visibility:hidden}',
+
+    // --- drawer ------------------------------------------------------------------
+    '.scrim{position:absolute;inset:0;z-index:8;background:var(--scrim);opacity:0;pointer-events:none;transition:opacity .22s var(--ease)}',
+    '.drawer{position:absolute;top:0;bottom:0;left:0;z-index:9;width:min(300px,86%);display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--line);' +
+      'box-shadow:24px 0 48px -28px rgba(22,26,64,.45);transform:translateX(-102%);visibility:hidden;transition:transform .24s var(--ease),visibility 0s linear .24s}',
+    '.root[data-theme="dark"] .drawer{background:#10133A;box-shadow:24px 0 48px -24px rgba(0,0,0,.75)}',
+    '.panel.drawer-open .drawer{transform:none;visibility:visible;transition:transform .28s var(--ease),visibility 0s}',
+    '.panel.drawer-open .scrim{opacity:1;pointer-events:auto}',
+    '.dscroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:12px 10px 10px;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}',
+    '.dnew{width:100%;display:flex;align-items:center;gap:10px;height:42px;padding:0 10px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg);color:var(--ink);cursor:pointer;font-size:13.5px;font-weight:600;transition:border-color .15s,box-shadow .18s}',
+    '.dnew:hover{border-color:var(--gold-2);box-shadow:var(--shadow-lift)}',
+    '.dnew .ic{width:24px;height:24px;border-radius:8px;display:grid;place-items:center;background:var(--send-bg);color:var(--on-accent)}',
+    '.dnav{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:1px}',
+    '.ditem{width:100%;display:flex;align-items:center;gap:11px;height:38px;padding:0 10px;border:0;border-radius:10px;background:transparent;color:var(--ink-2);cursor:pointer;font-size:13.5px;font-weight:550;text-align:left;transition:background .15s,color .15s}',
+    '.ditem:hover{background:var(--hover);color:var(--ink)}',
+    '.ditem svg{flex:none;color:var(--ink-3);transition:color .15s}',
+    '.ditem[aria-current="page"]{background:var(--gold-soft);color:var(--ink)}',
+    '.ditem[aria-current="page"] svg{color:var(--gold)}',
+    '.ditem .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.pill{flex:none;font:600 9.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:4px 7px;border-radius:999px;background:var(--peacock-soft);color:var(--peacock)}',
+    '.pill.off{background:var(--surface-3);color:var(--ink-3)}',
+    '.pill.gold{background:var(--gold-soft);color:var(--gold)}',
+    '.dlabel{margin:14px 10px 4px;font:600 10px/1.3 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}',
+    '.drecent{list-style:none;margin:0;padding:0}',
+    '.drecent button{width:100%;display:flex;align-items:baseline;gap:8px;padding:7px 10px;border:0;border-radius:9px;background:transparent;color:var(--ink-2);cursor:pointer;text-align:left;font-size:13px;line-height:1.35}',
+    '.drecent button:hover{background:var(--hover);color:var(--ink)}',
+    '.drecent button[aria-current="true"]{color:var(--ink);background:var(--surface-2)}',
+    '.drecent .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.drecent .w{flex:none;font:400 10.5px/1 var(--mono);color:var(--ink-3)}',
+    '.dempty{margin:2px 10px;font-size:12.5px;line-height:1.45;color:var(--ink-3)}',
+    '.dsep{height:1px;margin:12px 6px 10px;background:var(--line)}',
+    '.dfoot{flex:none;padding:8px 10px 10px;border-top:1px solid var(--line)}',
+    '.duser{width:100%;display:flex;align-items:center;gap:10px;padding:8px;border:0;border-radius:12px;background:transparent;cursor:pointer;text-align:left;color:var(--ink);transition:background .15s}',
+    '.duser:hover{background:var(--hover)}',
+    '.duser .txt,.pcard .txt{flex:1;min-width:0}',
+    '.duser .nm,.duser .sb{display:block}',
+    '.duser .nm{font-size:13.5px;font-weight:600;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.duser .sb{font-size:12px;line-height:1.35;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.uavatar{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#0F8F8A,#2B3A9E);color:#FFFFFF;font:700 12.5px/1 var(--display);letter-spacing:.03em;box-shadow:inset 0 0 0 1.5px rgba(242,193,78,.75)}',
+    '.uavatar svg{width:17px;height:17px}',
+    '.ditem:focus-visible,.drecent button:focus-visible,.dnew:focus-visible,.duser:focus-visible{outline:2px solid var(--peacock);outline-offset:-2px}',
+
+    // --- views (History, Profile, Memory, Appearance, Settings, About) -----------
+    '.views{position:absolute;inset:0;z-index:3;display:none;flex-direction:column;background:var(--glow),var(--bg)}',
+    '.panel.in-view .views{display:flex;animation:viewIn .22s var(--ease)}',
+    '@keyframes viewIn{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}',
+    '.vpane{display:none;flex:1;min-height:0;flex-direction:column}',
+    '.vpane.on{display:flex}',
+    '.vhead{display:flex;align-items:center;gap:4px;padding:10px 14px 10px 8px;flex:none;border-bottom:1px solid var(--line)}',
+    '.vback{display:inline-flex;align-items:center;gap:2px;height:32px;padding:0 10px 0 4px;border:0;border-radius:10px;background:transparent;color:var(--ink-2);cursor:pointer;font-size:13px;font-weight:550;transition:background .15s,color .15s}',
+    '.vback:hover{background:var(--hover);color:var(--ink)}',
+    '.vback:focus-visible{outline:2px solid var(--peacock);outline-offset:-2px}',
+    '.vhead h3{margin:0 0 0 4px;flex:1;min-width:0;font:650 16px/1.2 var(--display);letter-spacing:-.01em;color:var(--ink);outline:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.vbody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px 16px 26px;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}',
+    '.vbody::-webkit-scrollbar{width:10px}',
+    '.vbody::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:10px;border:3px solid var(--bg)}',
+    '.sec{margin:0 0 22px}',
+    '.sec:last-child{margin-bottom:0}',
+    '.sec > h4{margin:0 2px 8px;display:flex;align-items:center;gap:8px;font:600 10.5px/1.3 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}',
+    '.sec > h4 .count{margin-left:auto;font:500 11px/1 var(--mono);letter-spacing:.02em;text-transform:none;color:var(--ink-3)}',
+    '.sec > .lead{margin:-2px 2px 10px;font-size:12.5px;line-height:1.5;color:var(--ink-3)}',
+    '.sec > .foot-note{margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-3)}',
+    '.group{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-sm);overflow:hidden}',
+    '.row{display:flex;align-items:center;gap:12px;padding:12px 14px;min-height:54px}',
+    '.row + .row,.field + .field,.row + .field,.field + .row{border-top:1px solid var(--line)}',
+    '.row .rt{flex:1;min-width:0}',
+    '.row .rl{font-size:13.5px;font-weight:550;line-height:1.35;color:var(--ink)}',
+    '.row .rd{margin-top:2px;font-size:12.5px;line-height:1.45;color:var(--ink-3)}',
+    '.row.stack{flex-direction:column;align-items:stretch;gap:9px}',
+    '.row.disabled .rl,.row.disabled .rd{opacity:.55}',
+
+    // switch
+    '.switch{position:relative;flex:none;width:40px;height:24px;margin:0;padding:0;border:0;border-radius:999px;cursor:pointer;background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--line-2);transition:background .2s var(--ease),box-shadow .2s}',
+    '.switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#FFFFFF;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:transform .22s var(--spring)}',
+    '.switch[aria-checked="true"]{background:var(--accent);box-shadow:none}',
+    '.switch[aria-checked="true"]::after{transform:translateX(16px)}',
+    '.root[data-theme="dark"] .switch[aria-checked="true"]::after{background:#171A45}',
+    '.switch:focus-visible{outline:2px solid var(--peacock);outline-offset:2px}',
+    '.switch:disabled{opacity:.45;cursor:default}',
+
+    // segmented control
+    '.seg{display:inline-flex;flex:none;padding:3px;gap:2px;border-radius:11px;background:var(--surface-2);border:1px solid var(--line)}',
+    '.seg.full{display:flex}',
+    '.seg.full button{flex:1}',
+    '.seg button{border:0;background:transparent;color:var(--ink-2);height:30px;padding:0 12px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:550;white-space:nowrap;transition:background .15s,color .15s,box-shadow .15s}',
+    '.seg button:hover{color:var(--ink)}',
+    '.seg button[aria-checked="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(22,26,64,.12),0 0 0 1px var(--line-2)}',
+    '.root[data-theme="dark"] .seg button[aria-checked="true"]{background:var(--surface-3);box-shadow:none}',
+    '.seg button:focus-visible{outline:2px solid var(--peacock);outline-offset:-1px}',
+
+    // fields
+    '.field{padding:12px 14px}',
+    '.flabel{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:12.5px;font-weight:600;color:var(--ink-2)}',
+    '.flabel label{cursor:pointer}',
+    '.src{flex:none;font:500 10.5px/1 var(--font);padding:3px 7px;border-radius:999px;background:var(--peacock-soft);color:var(--peacock);white-space:nowrap}',
+    '.src.app{background:var(--gold-soft);color:var(--gold)}',
+    '.saved{margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:550;color:var(--ok);opacity:0;transition:opacity .2s}',
+    '.saved.on{opacity:1}',
+    '.input,.textarea{display:block;width:100%;margin:0;border:1px solid var(--line-2);border-radius:10px;background:var(--bg);color:var(--ink);font:400 14px/1.4 var(--font);padding:9px 11px;outline:0;transition:border-color .15s,box-shadow .15s}',
+    '.textarea{resize:vertical;min-height:78px;line-height:1.5}',
+    '.input::placeholder,.textarea::placeholder{color:var(--ink-4);opacity:1}',
+    '.input:hover,.textarea:hover{border-color:var(--line-3)}',
+    '.input:focus,.textarea:focus{border-color:var(--ring-line);box-shadow:0 0 0 3px var(--ring)}',
+    '.input[aria-invalid="true"]{border-color:var(--danger)}',
+    '.fhint{margin-top:6px;font-size:12px;line-height:1.45;color:var(--ink-3)}',
+    '.fhint.err{color:var(--danger)}',
+
+    // buttons
+    '.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 14px;margin:0;border-radius:10px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap;transition:border-color .15s,background .15s,color .15s,transform .15s,filter .15s}',
+    '.btn:hover{border-color:var(--gold-2)}',
+    '.btn:active{transform:scale(.98)}',
+    '.btn:focus-visible{outline:2px solid var(--peacock);outline-offset:2px}',
+    '.btn.primary{border-color:transparent;background:var(--send-bg);color:var(--on-accent);box-shadow:0 6px 14px -8px rgba(27,32,102,.7)}',
+    '.btn.primary:hover{filter:brightness(1.07)}',
+    '.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-2)}',
+    '.btn.ghost:hover{background:var(--hover);color:var(--ink)}',
+    '.btn.danger{color:var(--danger)}',
+    '.btn.danger:hover{border-color:var(--danger)}',
+    '.btn.danger.armed{background:var(--danger);border-color:var(--danger);color:#FFFFFF}',
+    '.root[data-theme="dark"] .btn.danger.armed{color:#240C16}',
+    '.btn.sm{height:30px;padding:0 11px;font-size:12.5px;border-radius:9px}',
+    '.btn:disabled{opacity:.5;cursor:default;transform:none}',
+    '.iconbtn{width:30px;height:30px;flex:none;margin:0;padding:0;border:0;border-radius:9px;background:transparent;color:var(--ink-3);cursor:pointer;display:grid;place-items:center;transition:background .15s,color .15s,opacity .15s}',
+    '.iconbtn:hover{background:var(--hover);color:var(--ink)}',
+    '.iconbtn.del:hover{color:var(--danger)}',
+    '.iconbtn:focus-visible{outline:2px solid var(--peacock);outline-offset:-2px}',
+    '.linkbtn{border:0;background:none;padding:0;margin:0;color:var(--link);cursor:pointer;font:inherit;font-weight:600;text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}',
+    '.linkbtn:hover{text-decoration-thickness:2px}',
+    '.linkbtn:focus-visible{outline:2px solid var(--peacock);outline-offset:2px;border-radius:3px}',
+    '.check{flex:none;appearance:none;-webkit-appearance:none;width:18px;height:18px;margin:0;border-radius:5px;border:1.5px solid var(--line-3);background:var(--surface);cursor:pointer;display:grid;place-items:center;transition:background .15s,border-color .15s}',
+    '.check:checked{background:var(--accent);border-color:var(--accent)}',
+    '.check:checked::after{content:"";width:5px;height:9px;border:solid var(--on-accent);border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg)}',
+    '.check:focus-visible{outline:2px solid var(--peacock);outline-offset:2px}',
+
+    // banners, empty states
+    '.banner{display:flex;align-items:center;gap:10px;margin:0 0 16px;padding:10px 10px 10px 12px;border-radius:12px;background:var(--warn-soft);color:var(--ink-2);font-size:12.5px;line-height:1.45}',
+    '.banner svg{flex:none;color:var(--gold)}',
+    '.banner .txt{flex:1;min-width:0}',
+    '.empty{text-align:center;padding:26px 18px;color:var(--ink-3);font-size:13px;line-height:1.55}',
+    '.empty .lotus{color:var(--lotus);display:grid;place-items:center;margin-bottom:8px}',
+    '.empty b{display:block;margin-bottom:3px;color:var(--ink);font-size:14px;font-weight:600}',
+    '.empty .btn{margin-top:12px}',
+
+    // profile
+    '.pcard{display:flex;align-items:center;gap:12px;margin:0 0 20px;padding:14px;border-radius:var(--r-card);background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-sm)}',
+    '.pcard .uavatar{width:46px;height:46px;font-size:16px}',
+    '.pcard .uavatar svg{width:22px;height:22px}',
+    '.pcard .nm{font:650 15.5px/1.25 var(--display);color:var(--ink);overflow-wrap:anywhere}',
+    '.pcard .sb{margin-top:2px;font-size:12.5px;line-height:1.4;color:var(--ink-3)}',
+
+    // memory list
+    '.mrow{display:flex;align-items:flex-start;gap:10px;padding:11px 8px 11px 14px}',
+    '.mrow + .mrow{border-top:1px solid var(--line)}',
+    '.mrow .mt{flex:1;min-width:0}',
+    '.mk{font:600 10px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}',
+    '.mv{margin-top:2px;font-size:13.5px;line-height:1.45;color:var(--ink);overflow-wrap:anywhere}',
+    '.mm{margin-top:3px;font-size:11.5px;color:var(--ink-3)}',
+    '.mbtns{display:flex;gap:2px;flex:none}',
+    '.medit{display:flex;gap:6px;margin-top:6px}',
+    '.medit .input{padding:7px 10px}',
+    '.addrow{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line);background:var(--surface-2)}',
+    '.addrow .input{background:var(--surface);padding-top:8px;padding-bottom:8px}',
+    '.addrow .btn{height:auto}',
+
+    // history
+    '.search{position:relative;margin:0 0 16px}',
+    '.search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--ink-3);pointer-events:none}',
+    '.search .input{padding-left:34px;background:var(--surface)}',
+    '.hlist{list-style:none;margin:0;padding:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);overflow:hidden;box-shadow:var(--shadow-sm)}',
+    '.hrow{display:flex;align-items:center;gap:2px;padding-right:6px}',
+    '.hrow + .hrow{border-top:1px solid var(--line)}',
+    '.hopen{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;margin:0;padding:10px 8px 10px 14px;border:0;background:transparent;color:var(--ink);cursor:pointer;text-align:left}',
+    '.hopen:focus-visible{outline:2px solid var(--peacock);outline-offset:-2px;border-radius:12px}',
+    '.ht{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;line-height:1.35;min-width:0}',
+    '.ht span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.hopen:hover .ht span{color:var(--accent)}',
+    '.hs{font-size:12px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.hrow .iconbtn{opacity:0}',
+    '.hrow:hover .iconbtn,.hrow:focus-within .iconbtn{opacity:1}',
+
+    // appearance
+    '.themes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}',
+    '.tcard{display:flex;flex-direction:column;gap:8px;margin:0;padding:7px 7px 9px;border:1.5px solid var(--line);border-radius:14px;background:var(--surface);cursor:pointer;color:var(--ink-2);font-size:12.5px;font-weight:600;text-align:left;transition:border-color .15s,box-shadow .15s,transform .2s var(--spring)}',
+    '.tcard:hover{border-color:var(--line-3);transform:translateY(-1px)}',
+    '.tcard[aria-checked="true"]{border-color:var(--gold-2);color:var(--ink);box-shadow:0 0 0 3px var(--gold-soft)}',
+    '.tcard:focus-visible{outline:2px solid var(--peacock);outline-offset:2px}',
+    '.tcard .tl{display:flex;align-items:center;justify-content:space-between;padding:0 3px}',
+    '.tcard .tl svg{color:var(--gold);opacity:0;transition:opacity .15s}',
+    '.tcard[aria-checked="true"] .tl svg{opacity:1}',
+    '.tprev{position:relative;height:58px;border-radius:9px;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(0,0,0,.07)}',
+    '.tprev i{position:absolute;display:block}',
+    '.tprev .band{left:0;right:0;top:0;height:15px}',
+    '.tprev .b1{right:8px;top:23px;width:42%;height:8px;border-radius:5px}',
+    '.tprev .b2{left:8px;top:37px;width:58%;height:7px;border-radius:5px}',
+    '.tprev .b3{left:8px;top:48px;width:36%;height:5px;border-radius:5px}',
+    '.tprev.light{background:#FAF7F0}',
+    '.tprev.light .band{background:linear-gradient(125deg,#1A2066,#2B3A9E 58%,#127A7C)}',
+    '.tprev.light .b1{background:#2B3A9E}',
+    '.tprev.light .b2,.tprev.light .b3{background:#E4DCCB}',
+    '.tprev.dark{background:#0D0F2E}',
+    '.tprev.dark .band{background:linear-gradient(125deg,#10144A,#1C2370 60%,#0E4C5A)}',
+    '.tprev.dark .b1{background:#3A4CC4}',
+    '.tprev.dark .b2,.tprev.dark .b3{background:#2A2F6E}',
+    '.tprev.auto{background:linear-gradient(118deg,#FAF7F0 50%,#0D0F2E 50%)}',
+    '.tprev.auto .band{background:linear-gradient(125deg,#1A2066,#1C2370 60%,#0E4C5A)}',
+    '.tprev.auto .b1{background:#3A4CC4}',
+    '.tprev.auto .b2,.tprev.auto .b3{background:#8C90B8}',
+    '.sample{margin:0;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px dashed var(--line-2);color:var(--ink-2);font-size:var(--fs);line-height:1.55}',
+
+    // shortcuts + about
+    '.vbody kbd{display:inline-block;font:500 10.5px/1 var(--mono);color:var(--ink-2);padding:3px 6px 4px;border:1px solid var(--line-2);border-bottom-width:2px;border-radius:5px;background:var(--surface)}',
+    '.keys{list-style:none;margin:0;padding:0}',
+    '.keys li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;font-size:13px;color:var(--ink-2)}',
+    '.keys li + li{border-top:1px solid var(--line)}',
+    '.keys li span:last-child{flex:none;display:inline-flex;gap:4px;align-items:center;color:var(--ink-3)}',
+    '.about{text-align:center;padding:4px 0 20px}',
+    '.about .hero{width:84px;height:84px;margin:4px auto 12px}',
+    '.about h3{margin:0;font:700 20px/1.2 var(--display);letter-spacing:.14em;color:var(--ink)}',
+    '.about .say{margin:5px 0 12px;font:500 10.5px/1.3 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}',
+    '.about .meaning{margin:0 auto;max-width:31em;font-size:13.5px;line-height:1.6;color:var(--ink-2)}',
+    '.kv{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:10px 14px;font-size:13px}',
+    '.kv + .kv{border-top:1px solid var(--line)}',
+    '.kv span{flex:none;color:var(--ink-3)}',
+    '.kv b{min-width:0;font:500 12px/1.4 var(--mono);color:var(--ink);text-align:right;overflow-wrap:anywhere}',
+    '.kv b.okc{color:var(--ok)}',
+    '.kv b.badc{color:var(--danger)}',
+    '.plist{margin:0;padding:12px 16px 12px 32px;font-size:13px;line-height:1.55;color:var(--ink-2)}',
+    '.plist li + li{margin-top:7px}',
+    '.plist li::marker{color:var(--gold)}',
+
+    // --- chat additions ----------------------------------------------------------
+    // "remember this?" — the same gold→peacock→indigo edge as the first-visit
+    // bubble: it is K.R.1.S speaking up, and it should look like it
+    '.memo{margin-top:12px;padding:12px 14px;border-radius:14px;border:1px solid transparent;' +
+      'background:linear-gradient(var(--surface),var(--surface)) padding-box,linear-gradient(120deg,var(--gold-2),var(--peacock),var(--accent)) border-box;box-shadow:var(--shadow-md);animation:fadeUp .28s var(--ease) both}',
+    '.memo .mh{display:flex;align-items:flex-start;gap:9px;font-size:13.5px;font-weight:600;line-height:1.45;color:var(--ink)}',
+    '.memo .mh .lotus{flex:none;color:var(--lotus);margin-top:1px}',
+    '.memo ul{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}',
+    '.memo li{display:flex;align-items:center;gap:9px}',
+    '.memo .k{flex:none;width:78px;font:600 10px/1.2 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}',
+    '.memo input.v{flex:1;min-width:0;margin:0;border:1px solid transparent;border-radius:8px;background:var(--surface-2);color:var(--ink);font:500 13.5px/1.3 var(--font);padding:6px 9px;outline:0;transition:border-color .15s,box-shadow .15s}',
+    '.memo input.v:hover{border-color:var(--line-2)}',
+    '.memo input.v:focus{border-color:var(--ring-line);box-shadow:0 0 0 3px var(--ring);background:var(--surface)}',
+    '.memo input.v:disabled{opacity:.5}',
+    '.memo .ma{display:flex;align-items:center;gap:6px;margin-top:12px;flex-wrap:wrap}',
+    '.memo .mf{margin-left:auto;font-size:11.5px;color:var(--ink-3)}',
+    '.memo.done{padding:8px 12px;border:0;background:var(--peacock-soft);box-shadow:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-2)}',
+    '.memo.done .ok{color:var(--ok);display:grid;place-items:center}',
+    '.memo.done b{font-weight:600;color:var(--ink)}',
+    '.memo.done .sp{flex:1}',
+
+    // action chips (local replies: "Manage memory", "Turn memory on")
+    '.chips.actions .chip{display:inline-flex;align-items:center;gap:6px;border-color:var(--line-2);background:var(--surface);color:var(--ink)}',
+    '.chips.actions .chip svg{color:var(--gold)}',
+    '.chips.actions .chip.danger{color:var(--danger)}',
+    '.chips.actions .chip.danger.armed{background:var(--danger);border-color:var(--danger);color:#FFFFFF}',
+    '.root[data-theme="dark"] .chips.actions .chip.danger.armed{color:#240C16}',
+
+    // your own messages: copy, edit, and the sending / not-delivered state
+    '.turn.user{flex-direction:row-reverse;align-items:flex-end;justify-content:flex-start;gap:4px}',
+    '.uact{flex:none;display:flex;align-items:center;gap:1px;margin-bottom:3px;opacity:0;transition:opacity .15s}',
+    '.turn.user:hover .uact,.turn.user:focus-within .uact,.turn.user.sending .uact,.turn.user.failed .uact{opacity:1}',
+    '.uact .act{width:28px;height:28px;border-radius:8px}',
+    '.ustate{font:400 11px/1 var(--mono);color:var(--ink-3);margin-right:6px;white-space:nowrap}',
+    '.ustate:empty{display:none}',
+    '.turn.user.sending .bubble{opacity:.8}',
+    '.turn.user.failed .bubble{box-shadow:0 0 0 2px var(--danger-soft),var(--user-shadow)}',
+    '.turn.user.failed .ustate{color:var(--danger)}',
+    '.turn.user.editing .bubble{opacity:.5}',
+    '.turn.user:not(.lastu) .uact .act.edit,.root.busy .uact .act.edit{display:none}',
+
+    // editing a sent message
+    '.editbar{display:none;align-items:center;gap:8px;margin:0 2px 7px;padding:5px 5px 5px 10px;border-radius:10px;background:var(--gold-soft);color:var(--ink-2);font-size:12.5px;font-weight:550}',
+    '.editbar svg{color:var(--gold)}',
+    '.editbar .sp{flex:1}',
+    '.composer.editing .editbar{display:flex}',
+    '.composer.editing .box{border-color:var(--gold-2)}',
+
+    '.msg .codeblock + p,.msg .codeblock + ul,.msg .codeblock + ol,.msg .codeblock + .codeblock,.msg .tablewrap + ul,.msg ul + .codeblock,.msg p + .codeblock{margin-top:10px}',
+
+    // thinking: elapsed time and the patient hint
+    '.thinking .secs{font:400 11.5px/1 var(--mono);color:var(--ink-3)}',
+    '.slowhint{margin-top:6px;font-size:12.5px;line-height:1.45;color:var(--ink-3);animation:fadeIn .3s ease both}',
+
+    // pick up where you left off
+    '.resume{display:flex;align-items:center;gap:10px;width:100%;margin:14px 0 0;padding:10px 12px;border:1px dashed var(--line-3);border-radius:var(--r-card);background:transparent;color:var(--ink-2);cursor:pointer;text-align:left;font-size:13px;line-height:1.35;transition:border-color .15s,background .15s,color .15s}',
+    '.resume:hover{border-color:var(--gold-2);background:var(--surface);color:var(--ink)}',
+    '.resume:focus-visible{outline:2px solid var(--peacock);outline-offset:2px}',
+    '.resume svg{flex:none;color:var(--gold)}',
+    '.resume .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.resume .t b{font-weight:600;color:var(--ink)}',
+    '.resume .w{flex:none;font:400 11px/1 var(--mono);color:var(--ink-3)}',
+
+    // toasts
+    '.toasts{position:absolute;left:12px;right:12px;bottom:16px;z-index:12;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}',
+    '.toast{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;max-width:100%;padding:8px 8px 8px 14px;min-height:38px;border-radius:12px;background:var(--toast-bg);color:var(--toast-ink);font-size:13px;font-weight:500;line-height:1.35;box-shadow:0 14px 30px -12px rgba(0,0,0,.45);animation:toastIn .26s var(--spring) both}',
+    '.toast.solo{padding-right:14px}',
+    '.toast.out{animation:toastOut .18s ease-in forwards}',
+    '.toast button{flex:none;border:0;background:transparent;color:var(--toast-act);font:600 13px/1 var(--font);padding:7px 9px;border-radius:8px;cursor:pointer}',
+    '.toast button:hover{background:rgba(127,127,160,.18)}',
+    '.toast button:focus-visible{outline:2px solid var(--toast-act);outline-offset:1px}',
+    '@keyframes toastIn{from{opacity:0;transform:translateY(8px) scale(.96)}to{opacity:1;transform:none}}',
+    '@keyframes toastOut{to{opacity:0;transform:translateY(6px)}}',
+
+    // --- density, text size, times -----------------------------------------------
+    '.root[data-density="compact"] .log{gap:10px;padding-top:14px}',
+    '.root[data-density="compact"] .bubble{padding:7px 13px}',
+    '.root[data-density="compact"] .card{padding:12px 14px 10px}',
+    '.root[data-density="compact"] .meta{min-height:26px;margin-top:2px}',
+    '.root[data-density="compact"] .chips{margin-top:7px}',
+    '.root[data-density="compact"] .row{min-height:46px;padding-top:9px;padding-bottom:9px}',
+    '.root[data-times="off"] .meta .time{display:none}',
+    '.chip,.prompts button,.resume{font-size:calc(var(--fs) - 1.2px)}',
+
+    // --- motion preferences: the user's choice, on top of the OS setting ----------
+    '.root.calm,.root.calm *,.root.calm *::before,.root.calm *::after{animation-duration:.001ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.001ms!important;transition-delay:0s!important}',
+    '.root.calm .thinking .label{color:var(--ink-3);background:none}',
+    '.root.calm.busy .notes i{opacity:0}',
+    '.root.still .badge .aura,.root.still .hero .ring,.root.still .fig,.root.still .k-plume,.root.still .blinking .k-eye,' +
+      '.root.still .idle-drift .k-iris,.root.still .idle-drift .k-pupil,.root.still .idle-drift .k-glint,.root.still.busy .notes i,.root.still .laugh-shake .k-char,.root.still .sad-sink .k-char,.root.still .mood-pop{animation:none!important}',
+    '.root.still.busy .notes i{opacity:0}',
+
+    // --- small panels, phones, touch ---------------------------------------------------
+    '.panel.chatting .titles h2 .sub{display:none}',
+    '@container kris (min-width:540px){.panel.chatting .titles h2 .sub{display:inline}}',
+    '@container kris (max-width:420px){.memo .k{width:62px}}',
+    '@container kris (max-width:380px){' +
+      '.titles h2 .sub{display:none}' +
+      '.memo .k{width:64px}' +
+      '.themes{gap:6px}' +
+      '.seg button{padding:0 9px}' +
+    '}',
+    '@media (max-width:520px){' +
+      '.drawer{width:min(320px,88%)}' +
+      '.vbody{padding:14px 12px calc(20px + env(safe-area-inset-bottom,0px))}' +
+      '.input,.textarea,.memo input.v{font-size:16px}' +
+      '.toasts{bottom:calc(16px + env(safe-area-inset-bottom,0px))}' +
+    '}',
+    '@media (hover:none){.turn.user.lastu .uact,.hrow .iconbtn{opacity:1}}',
+    '@media (pointer:coarse){' +
+      '.act,.iconbtn{width:36px;height:36px}' +
+      '.ditem{height:44px}' +
+      '.seg button{height:34px}' +
+    '}',
+    '@media (forced-colors:active){' +
+      '.switch,.seg,.btn,.tcard,.check,.dnew,.memo,.group,.hlist,.toast,.resume{border:1px solid CanvasText}' +
+      '.switch[aria-checked="true"]{background:Highlight}' +
+      '.seg button[aria-checked="true"],.tcard[aria-checked="true"]{outline:2px solid Highlight}' +
+    '}',
+    '@media (prefers-reduced-motion:reduce){' +
+      '.drawer,.scrim,.switch,.switch::after,.tcard,.btn{transition:none!important}' +
+      '.panel.in-view .views,.memo,.toast,.toast.out,.slowhint{animation:none!important}' +
+    '}'
+  ].join('');
+
+  // ==========================================================================
   //  Local instant replies — no network at all.
   //  Only the unambiguous: greetings, thanks, goodbyes, "how are you". Anything
   //  that could possibly be a question goes to the server.
@@ -846,6 +1250,436 @@
   }
 
   // ==========================================================================
+  //  Memory: what K.R.1.S may know about the user.
+  //
+  //  One schema drives everything — the Profile form, the Memory list, the
+  //  "remember this?" card, what is sent to the server, and what detection is
+  //  allowed to look for. Detection can only ever propose one of these fields
+  //  (or a note the user explicitly asked for), so random conversation content
+  //  never becomes permanent memory.
+  // ==========================================================================
+  var FIELDS = [
+    { key: 'name', label: 'Name', group: 'you', max: 60, hint: 'Your full name.', ph: 'e.g. Alex Morgan' },
+    { key: 'preferredName', label: 'Preferred name', long: 'What should K.R.1.S call you?', group: 'you', max: 40, ph: 'Leave empty to use your first name' },
+    { key: 'role', label: 'Role', group: 'work', max: 80, ph: 'e.g. Marine emissions analyst' },
+    { key: 'company', label: 'Company', group: 'work', max: 80, ph: 'e.g. GeoServe' },
+    { key: 'department', label: 'Department', long: 'Department or team', group: 'work', max: 60, ph: 'e.g. Emissions team' },
+    { key: 'location', label: 'Location', group: 'work', max: 80, ph: 'e.g. Mumbai' },
+    { key: 'timezone', label: 'Time zone', group: 'work', max: 64, ph: '' },
+    { key: 'interests', label: 'Interests', long: 'Professional interests', group: 'interests', max: 300, ph: 'e.g. FuelEU Maritime, EU ETS, CII', hint: 'Separate with commas. K.R.1.S uses these to pick examples and suggestions.' },
+    { key: 'length', label: 'Answer length', group: 'style', choices: [['brief', 'Brief'], ['balanced', 'Balanced'], ['detailed', 'Thorough']] },
+    { key: 'tone', label: 'Tone', group: 'style', choices: [['warm', 'Warm'], ['neutral', 'Neutral'], ['formal', 'Formal']] },
+    { key: 'instructions', label: 'Custom instructions', long: 'Anything else about how K.R.1.S should answer?', group: 'style', max: 600, ph: 'e.g. Use metric tonnes. Put the figure first, then the context.', multi: true }
+  ];
+  var FIELD = {};
+  FIELDS.forEach(function (f) { FIELD[f.key] = f; });
+  var NOTE_MAX = 200, NOTES_MAX = 12;
+
+  function choiceLabel(key, value) {
+    var f = FIELD[key];
+    if (!f || !f.choices) return value;
+    for (var i = 0; i < f.choices.length; i++) if (f.choices[i][0] === value) return f.choices[i][1];
+    return value;
+  }
+
+  /** One tidy line, capped. Newlines would let a value pose as a new prompt section. */
+  function oneLine(v, max) {
+    if (v == null || typeof v === 'object') return '';
+    var s = String(v).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return max ? s.slice(0, max) : s;
+  }
+
+  // --- sensitive or unnecessary: never stored, whoever asks --------------------
+  // Credentials and identifiers, contact details, and the special categories
+  // (health, religion, orientation, family status, money, criminal record).
+  var SENSITIVE_RE = new RegExp('\\b(?:' + [
+    'pass(?:word|code|phrase)s?', 'pwd', 'pw', 'passwd', 'login', 'username', 'user name', 'pin(?: code| number)?', 'otp', 'one[- ]time (?:code|password)',
+    'api[- ]?keys?', 'secret', 'access token', 'auth token', 'bearer', 'private key', 'credit card', 'debit card', 'card (?:number|no)', 'cvv', 'cvc',
+    'iban', 'swift code', 'routing number', '(?:bank )?(?:account|acct|a/c) (?:number|no|is)', 'acct', 'sort code', 'ssn', 'social security', 'passport', 'aadhaa?r',
+    'pan (?:card|number|no)', 'national id', '(?:phone|mobile|cell) (?:number|no|is)', 'wi-?fi (?:key|password|code)', 'driv(?:er\'?s?|ing) licen[cs]e', 'tax id', '(?:home |postal |street |my )address', 'date of birth', 'dob', 'birthday', 'born on',
+    'diagnos\\w*', 'disease', 'illness', 'medical', 'medication', 'prescription', 'therapy', 'therapist', 'pregnan\\w*', 'disabilit\\w*', 'disabled',
+    'mental health', 'depress\\w*', 'antidepress\\w*', 'anxiety', 'adhd', 'autis\\w*', 'diabet\\w*', 'cancer', 'hiv', 'asthma', 'epilep\\w*',
+    'religio\\w*', 'muslim', 'hindu', 'christian', 'jewish', 'sikh', 'buddhist', 'atheist', 'catholic', 'caste',
+    'gay', 'lesbian', 'bisexual', 'transgender', 'trans', 'queer', 'sexual\\w*', 'orientation',
+    'married', 'divorced', 'widow\\w*', 'politic\\w*', 'vot(?:e|ed|er|ing)', 'union member\\w*', 'trade union',
+    'salary', 'income', 'i earn', 'net worth', 'bank balance', 'debts?', 'criminal', 'convict\\w*', 'arrest\\w*'
+  ].join('|') + ')\\b', 'i');
+
+  /** Numbers, keys and contact details that should never sit in memory. */
+  function looksLikeSecret(text) {
+    var t = String(text || '');
+    if (/(?:\d[ -]?){12,19}/.test(t)) return true;                                  // card and account numbers
+    var runs = t.match(/[A-Za-z0-9_.\-]{24,}/g) || [];                             // keys and tokens: a long random
+    for (var r = 0; r < runs.length; r++) {                                         // segment, not hyphenated words
+      var segs = runs[r].split(/[-_.]/);
+      for (var q = 0; q < segs.length; q++) if (segs[q].length >= 16 && /\d/.test(segs[q]) && /[A-Za-z]/.test(segs[q])) return true;
+    }
+    if (/[\w.+-]+@[\w-]+\.[\w.]+/.test(t)) return true;                             // email addresses
+    var phones = t.match(/\+?\d[\d ()-]{8,}\d/g) || [];                             // phone numbers (not dates)
+    for (var i = 0; i < phones.length; i++) if (phones[i].replace(/\D/g, '').length >= 10) return true;
+    return false;
+  }
+  function isSensitive(text) {
+    var t = String(text || '');
+    return SENSITIVE_RE.test(t) || looksLikeSecret(t);
+  }
+
+  // --- detection ---------------------------------------------------------------
+  // Deterministic and local: microseconds, no network, no model. It only looks
+  // for the fields above, in first-person statements, and it proposes — the
+  // user decides.
+  var ROLE_HEADS = 'analyst|engineer|manager|officer|superintendent|super|captain|master|mate|chief|director|lead|head|specialist|consultant|developer|coordinator|executive|planner|operator|technician|auditor|inspector|scientist|student|intern|advisor|adviser|architect|administrator|designer|owner|founder|ceo|cto|cfo|coo|vp|president|broker|surveyor|controller|accountant|trader|charterer|buyer|economist|researcher|associate|assistant|supervisor|programmer|strategist|partner|representative|expert|leader|secretary|clerk|trainee|cadet|electrician|fitter|bosun|purser|pilot|navigator';
+  var ROLE_HEAD_RE = new RegExp('\\b(?:' + ROLE_HEADS + ')s?\\b', 'i');
+  // Words that follow "I'm …" far more often than a name, a role or a place does.
+  var NOT_WORDS = ('fine good great ok okay well tired bored busy sorry sure not so very here back done confused lost hungry happy sad angry new just still also ' +
+    'curious ready looking trying asking wondering thinking testing going doing working interested glad stuck a an the all always never really kind kinda afraid unsure ' +
+    'having getting checking waiting unable no yes yeah nope none nothing nobody anonymous yesterday today tomorrow week month year quarter power fuel speed distance ' +
+    'consumption shaft rpm help hello hi hey thanks thank kris krishna in at on from with for of to by based located living staying currently now about into responsible part ' +
+    'one certain aware able planning hoping using calling writing reading there this that it what who how why when where fairly pretty quite bit little more less your ' +
+    'my our his her their them us you me him sick unwell feeling excited worried concerned late early off away out free available leaving joining only actually basically ' +
+    'literally definitely probably maybe totally honestly seriously usually sometimes charge onboard aboard frustrated impressed travelling traveling finished home ' +
+    'dr mr mrs ms miss prof sir madam capt lucky sorry myself alone around nearby somewhere everywhere doing well badly').split(' ');
+  var NOT_ROLE = toSet(NOT_WORDS);
+  var NOT_NAME = toSet(NOT_WORDS.concat(ROLE_HEADS.split('|')));
+  var STOP_AFTER = '(?=\\s+(?:and|but|so|at|for|in|with|on|since|where|who|from|as|here|btw|by the way)\\b|\\s*[,.;:!?()\\n]|\\s*$)';
+  var PHRASE = "([^,.;:!?()\\n]{2,60}?)";
+  var PREP_RE = /\b(?:of|for|with|about|to|into|from|than|like)\b/i;
+  var PLACE_WORD_RE = /\b(?:office|site|port|terminal|yard|vessel|ship|desk|headquarters|hq|branch|building|floor)$/i;
+
+  // "my name is X" and "call me X" are always introductions; a bare "I'm X"
+  // counts only when X looks like a name (capitalised, or the whole message
+  // is a short introduction), so "I'm frustrated" never becomes a nametag.
+  var NAME_RE = new RegExp("\\b(my name(?:'s| is)|name's|call me|you can call me|please call me|i am|i'm|i’m|im)\\s+([a-z][a-z'’-]{0,29}(?:\\s+[a-z][a-z'’-]{0,29}){0,2}?)" + STOP_AFTER, 'i');
+  var ROLE_RES = [
+    new RegExp("\\bi(?: work| am working|'m working|’m working| currently work| now work) as (?:an? |the )?" + PHRASE + STOP_AFTER, 'i'),
+    new RegExp("\\bmy (?:role|job title|title|position|designation) is (?:an? |the )?" + PHRASE + STOP_AFTER, 'i'),
+    new RegExp("\\b(?:i am|i'm|i’m|im)\\s+(?:an?|the)\\s+((?:[a-z&/-]+\\s+){0,4}(?:" + ROLE_HEADS + "))\\b", 'i')
+  ];
+  var MYJOB_RE = new RegExp("\\bmy job is (?:an? |the )?" + PHRASE + STOP_AFTER, 'i');
+  var APPOSITIVE_ROLE_RE = new RegExp('^\\s*,\\s*(?:the|an?)\\s+((?:[a-z&/-]+\\s+){0,4}(?:' + ROLE_HEADS + '))\\b', 'i');
+  var AFTER_ROLE_COMPANY_RE = new RegExp("^\\s+(?:at|with)\\s+(?:the\\s+)?" + PHRASE + STOP_AFTER, 'i');
+  var COMPANY_RES = [
+    new RegExp("\\bi(?: work| am working|'m working|’m working| currently work) (?:at|for|with) (?:the\\s+)?" + PHRASE + STOP_AFTER, 'i'),
+    new RegExp("\\bmy (?:company|employer|organi[sz]ation|firm) is (?:the\\s+)?" + PHRASE + STOP_AFTER, 'i')
+  ];
+  var DEPT_RES = [
+    /\bi(?: work| am|'m|’m) (?:in|on|with) (?:the )?([a-z][^,.;:!?()\n]{1,40}?) (team|department|dept|division|desk|unit|group)\b/i,
+    new RegExp("\\bmy (?:department|team|dept|division|desk) is (?:the\\s+)?" + PHRASE + STOP_AFTER, 'i')
+  ];
+  var LOC_RES = [
+    new RegExp("\\b(?:i am|i'm|i’m|im)\\s+(?:currently\\s+|now\\s+)?(?:based|located|stationed) (?:in|at|out of) " + PHRASE + STOP_AFTER, 'i'),
+    new RegExp("\\bi live in " + PHRASE + STOP_AFTER, 'i'),
+    new RegExp("\\bour office is in " + PHRASE + STOP_AFTER, 'i')
+  ];
+  var NOT_PLACE = toSet('home office the office a meeting meetings transit a hurry the loop the middle the zone'.split(' '));
+  var INTEREST_RES = [
+    /\bi(?:'m|’m| am)? (?:really |mostly |mainly |particularly |especially |currently )?(?:interested in|focus(?:ed|ing)? on|specialis(?:e|ing) in|specializ(?:e|ing) in|work mostly on|mostly work on)\s+([^.;!?\n]{2,120}?)\s*(?=[.;!?\n]|$)/i,
+    /\bmy (?:focus|main focus|interests?|area) (?:is|are) (?:on )?([^.;!?\n]{2,120}?)\s*(?=[.;!?\n]|$)/i
+  ];
+  var NOT_INTEREST_RE = /\b(?:why|how|what|whether|when|where|who|if)\b|^(?:knowing|learning|understanding|finding|seeing|getting|making|doing|hearing|reading|talking|chatting|asking|trying|helping)\b/i;
+  var TZ_RE = /\bmy time ?zone is ([A-Za-z_\/+\-0-9: ]{2,40}?)\s*(?=[.,;!?]|$)/i;
+  // Abbreviations that mean one zone to GeoServe's users. Ambiguous ones
+  // (CST: China or US Central) are left for the user to spell out.
+  var TZ_ABBR = { ist: 'Asia/Kolkata', sgt: 'Asia/Singapore', gst: 'Asia/Dubai', jst: 'Asia/Tokyo', kst: 'Asia/Seoul', hkt: 'Asia/Hong_Kong', est: 'America/New_York', edt: 'America/New_York', pst: 'America/Los_Angeles', pdt: 'America/Los_Angeles', bst: 'Europe/London', gmt: 'Europe/London', cet: 'Europe/Paris', cest: 'Europe/Paris', eet: 'Europe/Athens', aest: 'Australia/Sydney', utc: 'UTC' };
+  var STYLE_RES = [
+    ['length', 'brief', /\b(?:keep (?:it|them|answers|replies|responses|things) (?:short|brief|concise|crisp|tight)|(?:i )?prefer (?:short|brief|concise|quick|shorter) (?:answers|replies|responses)|be (?:more )?(?:brief|concise|succinct)|(?:short|brief|concise) (?:answers|replies) please|no long (?:answers|replies|essays))\b/i],
+    ['length', 'detailed', /\b(?:(?:i )?(?:prefer|like|want) (?:detailed|thorough|in-depth|longer|comprehensive|fuller) (?:answers|replies|responses|explanations)|be (?:more )?(?:detailed|thorough)|(?:detailed|thorough) (?:answers|explanations) please)\b/i],
+    ['tone', 'warm', /\b(?:no need to be (?:so )?formal|(?:be|keep it) (?:casual|informal|friendly|relaxed)|don'?t be (?:so )?formal)\b/i],
+    ['tone', 'formal', /\b(?:(?:please )?(?:be|keep it|stay) (?:formal|professional)|(?:i )?prefer a (?:formal|professional) tone)\b/i]
+  ];
+
+  function toSet(arr) { var o = {}; arr.forEach(function (w) { if (w) o[w.toLowerCase()] = 1; }); return o; }
+  function capFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  function lowerFirst(s) { return s && !/^[A-Z]{2,}/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s; }
+  function titleWord(w) { return w === w.toLowerCase() ? w.charAt(0).toUpperCase() + w.slice(1) : w; }
+  function titleCaseName(s) { return String(s).trim().split(/\s+/).map(titleWord).join(' '); }
+  function tidyPhrase(s) { return String(s).replace(/^(?:the|a|an)\s+/i, '').replace(/\s+/g, ' ').trim(); }
+  function tidyProper(s) { var t = tidyPhrase(s); return t === t.toLowerCase() ? titleCaseName(t) : t; }
+  function tidyRole(s) { var t = tidyPhrase(s); return t === t.toLowerCase() ? capFirst(t) : t; }
+  function firstWord(s) { return String(s).trim().split(/\s+/)[0].toLowerCase().replace(/[^a-z]/g, ''); }
+
+  function validTz(tz) {
+    if (!tz) return false;
+    try { new Intl.DateTimeFormat('en-GB', { timeZone: tz }); return true; } catch (_) { return false; }
+  }
+  function normaliseTz(raw) {
+    var t = oneLine(raw, 64);
+    if (!t) return null;
+    if (TZ_ABBR[t.toLowerCase()]) return TZ_ABBR[t.toLowerCase()];
+    return validTz(t) ? t : null;
+  }
+  function detectedTz() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) { return ''; } }
+
+  function nameOk(candidate, bare, text) {
+    var words = String(candidate).trim().split(/\s+/);
+    if (!words.length || words.length > 3) return false;
+    for (var i = 0; i < words.length; i++) {
+      var w = words[i].toLowerCase().replace(/[^a-z]/g, '');
+      if (!w || NOT_NAME[w]) return false;
+      if (bare && /(?:ed|ing|ful|ly|ous|ive|able|ible|less|ish|ic)$/.test(w) && w.length > 4) return false;
+    }
+    if (isSensitive(candidate)) return false;
+    // "I'm alex" is an introduction when that is the whole message; inside a
+    // longer sentence a bare name has to look like one.
+    if (bare && !/^[A-Z]/.test(words[0]) && String(text).trim().split(/\s+/).length > 4) return false;
+    return true;
+  }
+
+  /** A department or company value that reads as a thing, not a sentence. */
+  function orgOk(v) {
+    var t = tidyPhrase(v);
+    if (!t || t.split(/\s+/).length > 6) return false;
+    if (NOT_ROLE[firstWord(t)]) return false;
+    if (PREP_RE.test(t)) return false;
+    return true;
+  }
+
+  /**
+   * Facts the user stated about themselves in `text`, as [{ key, value }].
+   * Questions, long pasted text and anything sensitive propose nothing.
+   */
+  function detectFacts(text) {
+    var t = String(text || '').trim();
+    var out = [];
+    if (!t || t.length > 400 || t.split('\n').length > 4) return out;
+    if (/\?\s*$/.test(t) || /^\s*(?:what|who|where|when|which|why|how|is|are|am|do|does|did|can|could|would|should|will)\b/i.test(t)) return out;
+    if (isSensitive(t)) return out;
+    var seen = {};
+    var add = function (key, value) {
+      value = oneLine(value, FIELD[key] && FIELD[key].max);
+      if (!value || seen[key]) return;
+      seen[key] = 1;
+      out.push({ key: key, value: value });
+    };
+    var m, i;
+
+    // "call me X" is how they want to be addressed; the other forms are a name.
+    m = t.match(NAME_RE);
+    var nameEnd = -1;
+    if (m) {
+      var intro = /^(?:my name|name's|call me|you can call me|please call me)/i.test(m[1]);
+      if (nameOk(m[2], !intro, t)) {
+        add(/call me/i.test(m[1]) ? 'preferredName' : 'name', titleCaseName(m[2]));
+        nameEnd = m.index + m[0].length;
+      }
+    }
+
+    var roleEnd = -1;
+    var roleOk = function (r) { return r && r.split(/\s+/).length <= 6 && !NOT_ROLE[r.toLowerCase()] && !NOT_ROLE[firstWord(r)] && /[a-z]/i.test(r) && !/^(?:to|about)\b/i.test(r); };
+    if (nameEnd >= 0) {
+      m = t.slice(nameEnd).match(APPOSITIVE_ROLE_RE);
+      if (m && roleOk(tidyRole(m[1]))) { add('role', tidyRole(m[1])); roleEnd = nameEnd + m.index + m[0].length; }
+    }
+    for (i = 0; i < ROLE_RES.length && !seen.role; i++) {
+      m = t.match(ROLE_RES[i]);
+      if (m && roleOk(tidyRole(m[1]))) { add('role', tidyRole(m[1])); roleEnd = m.index + m[0].length; }
+    }
+    // "my job is …" is as often a duty as a title: only a title counts.
+    if (!seen.role) {
+      m = t.match(MYJOB_RE);
+      if (m && ROLE_HEAD_RE.test(m[1]) && roleOk(tidyRole(m[1]))) { add('role', tidyRole(m[1])); roleEnd = m.index + m[0].length; }
+    }
+    if (roleEnd >= 0) {
+      m = t.slice(roleEnd).match(AFTER_ROLE_COMPANY_RE);
+      if (m && orgOk(m[1]) && !PLACE_WORD_RE.test(m[1].trim())) {
+        if (/\b(team|department|dept|division|desk|unit|group)$/i.test(m[1].trim())) add('department', tidyRole(m[1]));
+        else add('company', tidyProper(m[1]));
+      }
+    }
+    for (i = 0; i < DEPT_RES.length && !seen.department; i++) {
+      m = t.match(DEPT_RES[i]);
+      if (!m) continue;
+      var dept = m[1] + (m[2] && /team|desk|unit|group/i.test(m[2]) ? ' ' + m[2].toLowerCase() : '');
+      if (orgOk(m[1])) add('department', tidyRole(dept));
+    }
+    for (i = 0; i < COMPANY_RES.length && !seen.company; i++) {
+      m = t.match(COMPANY_RES[i]);
+      if (!m || !orgOk(m[1]) || PLACE_WORD_RE.test(m[1].trim())) continue;
+      if (/\b(team|department|dept|division|desk|unit|group)$/i.test(m[1].trim())) { if (!seen.department) add('department', tidyRole(m[1])); }
+      else add('company', tidyProper(m[1]));
+    }
+    for (i = 0; i < LOC_RES.length && !seen.location; i++) {
+      m = t.match(LOC_RES[i]);
+      if (m && !NOT_PLACE[tidyPhrase(m[1]).toLowerCase()] && orgOk(m[1])) add('location', tidyProper(m[1]));
+    }
+    m = t.match(TZ_RE);
+    if (m) { var tz = normaliseTz(m[1]); if (tz) add('timezone', tz); }
+    for (i = 0; i < INTEREST_RES.length && !seen.interests; i++) {
+      m = t.match(INTEREST_RES[i]);
+      if (!m || NOT_INTEREST_RE.test(m[1].trim())) continue;
+      var items = m[1].split(/\s*(?:,|;|\band\b|&|\/)\s*/i).map(tidyPhrase).filter(function (x) { return x && x.length <= 60 && !NOT_NAME[x.toLowerCase()]; }).slice(0, 6);
+      if (items.length) add('interests', items.map(function (x) { return x !== x.toLowerCase() ? x : x.length <= 4 ? x.toUpperCase() : capFirst(x); }).join(', '));
+    }
+    STYLE_RES.forEach(function (s) { if (!seen[s[0]] && s[2].test(t)) add(s[0], s[1]); });
+    return out;
+  }
+
+  // --- explicit memory commands --------------------------------------------------
+  // "remember that …", "forget my role", "what do you remember about me?"
+  // "X means Y" is vocabulary teaching and belongs to the server.
+  var TEACH_RE = /\b(means|stands for|is short for|refers to|is the same as|is an? (?:abbreviation|acronym) for)\b/i;
+  var REMEMBER_RE = /^\s*(?:(?:hey |ok |okay )?kris[,:]?\s+)?(?:please\s+|can you\s+|could you\s+)?(?:remember|memori[sz]e|keep in mind|don'?t forget|make a note)\s*(?:that\s+|this:?\s+|of\s+)?([\s\S]{3,300}?)\s*[.!]*\s*$/i;
+  var FORGET_RE = /^\s*(?:(?:hey |ok |okay )?kris[,:]?\s+)?(?:please\s+|can you\s+|could you\s+)?(?:forget|stop remembering|don'?t remember|unlearn|erase)\s+(?:about\s+)?([\s\S]{1,120}?)\s*[.!]*\s*$/i;
+  var RECALL_RE = /^\s*(?:so\s+|and\s+|ok\s+|okay\s+)?(?:what (?:do|did) you (?:know|remember) about me|what (?:do|did|else do) you remember|what(?:'s| is) in (?:your )?memory|what have you (?:saved|remembered|stored|learned|learnt)(?: about me)?|show (?:me )?(?:my |your )?(?:saved )?memor(?:y|ies)|what do you know of me|what are you remembering)\s*[?.!]*\s*$/i;
+  var FORGET_ALL_RE = /^(?:everything|all|it all|all of (?:it|that|this)|all about me|everything about me|me|what you (?:know|remember)(?: about me)?|my (?:data|details|profile|memory))$/i;
+  var FORGET_LAST_RE = /^(?:that|this|the last (?:one|thing)|what i just (?:said|told you))$/i;
+  // Most specific first: "my company name" is the company, not the user's name.
+  var FORGET_FIELDS = [
+    [/\b(?:preferred name|nickname|what to call me|what you call me)\b/i, ['preferredName']],
+    [/\b(?:company|employer|organi[sz]ation|firm|where i work)\b/i, ['company']],
+    [/\b(?:department|team|dept|division|desk)\b/i, ['department']],
+    [/\b(?:role|job|title|position|designation|what i do)\b/i, ['role']],
+    [/\b(?:location|city|where i (?:live|am|'m) based|where i live|where i am)\b/i, ['location']],
+    [/\btime ?zone\b/i, ['timezone']],
+    [/\binterests?\b/i, ['interests']],
+    [/\b(?:style|preferences?|tone|length)\b/i, ['length', 'tone']],
+    [/\binstructions?\b/i, ['instructions']],
+    [/^(?:(?:my )?(?:full )?name|who i am)$/i, ['name', 'preferredName']]
+  ];
+
+  function parseMemoryCommand(text) {
+    var t = String(text || '').trim();
+    if (!t || t.length > 320) return null;
+    if (RECALL_RE.test(t)) return { type: 'recall' };
+    var m = t.match(REMEMBER_RE);
+    if (m && !TEACH_RE.test(m[1]) && !/\?\s*$/.test(t) && !/^[,;]/.test(m[1]) && !/^(?:to|when|what|how|where|who|if|the (?:last|first) time)\b/i.test(m[1])) return { type: 'remember', content: m[1].trim() };
+    m = t.match(FORGET_RE);
+    // "Forget that, show me …" is a new request, not a memory command.
+    if (m && !/\?\s*$/.test(t) && !/[,;:]/.test(m[1]) && m[1].trim().split(/\s+/).length <= 8) {
+      return { type: 'forget', target: m[1].trim().replace(/^(?:my|the|about)\s+/i, ''), raw: t };
+    }
+    return null;
+  }
+
+  /** "I'm a superintendent" → "You're a superintendent" — for a note read back to the user. */
+  function secondPerson(s) {
+    return String(s).replace(/^i am\b/i, 'You are').replace(/^i'm\b/i, 'You’re').replace(/^i’m\b/i, 'You’re').replace(/^i\b/i, 'You').replace(/\bmy\b/g, 'your').replace(/\bme\b/g, 'you');
+  }
+
+  function article(s) { return /^[aeiou]/i.test(s) && !/^(?:uni|use|eu)/i.test(s) ? 'an' : 'a'; }
+
+  /** The question on the "remember this?" card for one fact. */
+  function askFor(f) {
+    var v = f.value;
+    switch (f.key) {
+      case 'name': return 'Would you like me to remember your name, ' + v + '?';
+      case 'preferredName': return 'Should I call you ' + v + ' from now on?';
+      case 'role': return 'Would you like me to remember that you’re ' + article(v) + ' ' + lowerFirst(v) + '?';
+      case 'company': return 'Should I remember that you work at ' + v + '?';
+      case 'department': return 'Should I remember that you’re in ' + v + '?';
+      case 'location': return 'Should I remember that you’re based in ' + v + '?';
+      case 'timezone': return 'Should I use ' + v + ' as your time zone?';
+      case 'interests': return 'Should I remember that you’re interested in ' + v + '?';
+      case 'length': return v === 'brief' ? 'Should I keep my answers brief from now on?' : v === 'detailed' ? 'Should I give fuller, more detailed answers from now on?' : 'Should I remember your answer-length preference?';
+      case 'tone': return v === 'formal' ? 'Should I keep a formal tone from now on?' : 'Should I keep things relaxed and conversational from now on?';
+      default: return 'Should I remember this for next time?';
+    }
+  }
+
+  /** How a fact reads back in a sentence: "that you're a marine emissions analyst". */
+  function sayFact(key, value) {
+    switch (key) {
+      case 'name': return 'your name is ' + value;
+      case 'preferredName': return 'you’d like me to call you ' + value;
+      case 'role': return 'you’re ' + article(value) + ' ' + lowerFirst(value);
+      case 'company': return 'you work at ' + value;
+      case 'department': return 'you’re in ' + value;
+      case 'location': return 'you’re based in ' + value;
+      case 'timezone': return 'your time zone is ' + value;
+      case 'interests': return 'you’re interested in ' + value;
+      case 'length': return 'you prefer ' + choiceLabel('length', value).toLowerCase() + ' answers';
+      case 'tone': return 'you prefer a ' + choiceLabel('tone', value).toLowerCase() + ' tone';
+      case 'instructions': return 'your instructions: “' + value + '”';
+      default: return value;
+    }
+  }
+
+  // --- role-aware suggestions for the empty state ---------------------------------
+  // Only phrasings the data parser already understands; no vessel is named, so
+  // the page context (or a clarifying question) supplies it.
+  var PERSONA_PROMPTS = [
+    { re: /emission|compliance|environment|sustainab|esg|decarbon|carbon|fueleu|ets|\bcii\b|regulat|green/i, prompts: [
+      { tag: 'Briefing', text: 'Anything I should know today?' },
+      { tag: 'Compliance', text: 'Compliance balance this quarter' },
+      { tag: 'Compliance', text: 'GHG intensity this year' },
+      { tag: 'Data', text: 'Leg CO2 last month' }
+    ] },
+    { re: /technical|superintend|engineer|chief|machinery|fleet manager|marine super|maintenance|performance/i, prompts: [
+      { tag: 'Briefing', text: 'Anything I should know today?' },
+      { tag: 'Data', text: 'Shaft power trend last 30 days' },
+      { tag: 'Data', text: 'ME consumption last month' },
+      { tag: 'Data', text: 'Average speed last week' }
+    ] },
+    { re: /commercial|charter|operat|voyage|broker|trader|freight|post.?fixture|claims/i, prompts: [
+      { tag: 'Briefing', text: 'Anything I should know today?' },
+      { tag: 'Data', text: 'Off hire hours this year' },
+      { tag: 'Data', text: 'Leg distance last month' },
+      { tag: 'Data', text: 'Fuel consumption last month' }
+    ] }
+  ];
+
+  // --- time labels ---------------------------------------------------------------
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  function dayStart(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime(); }
+  function whenLabel(at, now) {
+    now = now || Date.now();
+    var d = new Date(at);
+    var diff = now - at;
+    if (diff < 60000) return 'Just now';
+    if (diff < 3600000) return Math.round(diff / 60000) + ' min ago';
+    var today = dayStart(now);
+    if (at >= today) return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    if (at >= today - 86400000) return 'Yesterday';
+    if (at >= today - 6 * 86400000) return DAYS[d.getDay()];
+    return d.getDate() + ' ' + MONTHS[d.getMonth()] + (d.getFullYear() !== new Date(now).getFullYear() ? ' ' + d.getFullYear() : '');
+  }
+  function dateLabel(at) { var d = new Date(at); return d.getDate() + ' ' + MONTHS[d.getMonth()]; }
+  function bucketOf(at, now) {
+    var today = dayStart(now || Date.now());
+    if (at >= today) return 'Today';
+    if (at >= today - 86400000) return 'Yesterday';
+    if (at >= today - 6 * 86400000) return 'Previous 7 days';
+    if (at >= today - 29 * 86400000) return 'Previous 30 days';
+    return 'Older';
+  }
+
+  function hashStr(s) {
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  }
+  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+  /** A conversation's title: its first real question, not "hi". { title, real } */
+  function titleFor(turns) {
+    var first = null, real = false;
+    for (var i = 0; i < turns.length; i++) {
+      if (turns[i].role !== 'user') continue;
+      var t = oneLine(turns[i].text);
+      if (!first) first = t;
+      if (t.split(' ').length >= 3 && !localReply(t, null)) { first = t; real = true; break; }
+    }
+    if (!first) return { title: 'New conversation', real: false };
+    first = capFirst(first.replace(/[?.!]+$/, ''));
+    return { title: first.length > 60 ? first.slice(0, 57).replace(/\s+\S*$/, '') + '…' : first, real: real };
+  }
+
+  // --- user settings -------------------------------------------------------------
+  // Browser-wide, not personal: kept apart from memory, and reset on their own.
+  var SETTINGS_KEY = 'kris:settings';
+  var SETTING_DEFAULTS = {
+    textSize: 'm',           // 's' | 'm' | 'l'
+    density: 'comfortable',  // 'comfortable' | 'compact'
+    timestamps: true,
+    motion: 'system',        // 'system' | 'reduce'
+    character: true,         // the character's idle animation
+    sendWithEnter: true,
+    followups: true,
+    history: true
+  };
+
+  // ==========================================================================
   //  Widget
   // ==========================================================================
   var DEFAULTS = {
@@ -876,8 +1710,8 @@
     brand: null,            // { accent, accentDark, accent2, font }
     nudge: true,            // first-visit speech bubble on the badge
     nudgeText: 'Namaste! Ask me anything about your fleet.',
-    followups: true,        // contextual next-question chips after a data answer
-    persist: true,          // keep the conversation for this tab (sessionStorage)
+    followups: true,        // contextual next-question chips after a data answer (the user can change it)
+    persist: true,          // keep the conversation for this tab (sessionStorage); false also turns history off
     localReplies: true,     // answer pure greetings/thanks instantly, offline
     warm: true,             // warm the server connection when the page is idle
     maxLength: 1000,
@@ -886,34 +1720,71 @@
     onClose: null,
     onAnswer: null,
     onReaction: null,       // fn({reaction,question,answer,source,status,at})
-    reactionEndpoint: null  // optional URL to POST reaction feedback to
+    reactionEndpoint: null, // optional URL to POST reaction feedback to
+
+    // --- people -------------------------------------------------------------
+    user: null,             // { id, name, preferredName, role, company, department, location, timezone }
+                            // from your own account record. `id` keeps each user's memory and history
+                            // apart on a shared browser; the other fields pre-fill the profile
+                            // ("From your account") and the user can still edit or remove them.
+    memory: true,           // false: no long-term memory at all — no Profile or Memory, nothing kept
+    memoryStore: null,      // { load(): memory|Promise, save(memory): void|Promise } to keep memory in
+                            // your own backend instead of this browser (e.g. to follow the user across devices)
+    onMemoryChange: null,   // fn(memory) whenever what K.R.1.S remembers changes
+    history: true,          // keep past conversations on this device (localStorage)
+    historyDays: 30,        // …for this long
+    historyMax: 40,         // …and at most this many
+    settings: null,         // defaults for the user's settings: { textSize, density, timestamps, motion,
+                            // character, sendWithEnter, followups, history }
+    hotkey: null            // e.g. 'mod+k': open / close from anywhere on the page (mod = Ctrl, or ⌘ on a Mac)
   };
 
   var THEMES = ['light', 'dark', 'auto'];
   var THEME_KEY = 'kris:theme';
   var NUDGE_KEY = 'kris:nudge';
+  var VIEW_TITLES = { history: 'History', profile: 'Profile', memory: 'Memory', appearance: 'Appearance', settings: 'Settings', about: 'About' };
+  var CLIENT = { v: VERSION, features: ['stream', 'profile', 'memory', 'actions'] };
+  var NAME_MEANING = 'K.R.1.S is a codename inspired by Lord Krishna — the calm charioteer who guided Arjuna without ever taking the reins from him. That is the idea here: I guide you through your fleet’s records and the app, and you stay in charge.';
 
   function Widget(options) {
     this.opts = assign({}, DEFAULTS, options || {});
     if (options && options.examples && !options.examples.length) this.opts.examples = [];
+    this._customExamples = !!(options && Array.isArray(options.examples));
     this.pending = null;
     this.history = [];
-    this.turns = [];          // persisted transcript: { role, text, data, at, ms }
+    this.turns = [];          // this conversation: { role, text, data, at, ms, send, memo }
     this.context = null;
-    this.profile = { userName: null };
+    this.convId = uid();
+    this.convFacts = {};      // conversation context: what the user said about themselves in THIS chat
+    this.suggested = {};      // "key|value" already offered for memory in this chat
     this.busy = false;
     this.open = false;
     this.inline = false;
+    this.view = 'chat';
     this.currentMood = 'idle';
     this.submitTimes = [];
     this.turnCount = 0;
     this._lastNorm = null;
     this._stick = true;
     this._conn = 'connecting';
-    this._reducedMotion = mediaMatches('(prefers-reduced-motion: reduce)');
-    this._storeKey = 'kris:v1:' + this.opts.endpoint;
+    this._listeners = {};
+    this._osReducedMotion = mediaMatches('(prefers-reduced-motion: reduce)');
+    this._reducedMotion = this._osReducedMotion;
+    this._hotkey = parseHotkey(this.opts.hotkey);
+    this._hostFollowups = this.opts.followups !== false;   // the host's default, kept apart from the user's choice
+    this.setIdentity(this.opts.user);
+    this.settings = this.loadSettings();
+    this.memLoad();
     this.mount();
   }
+
+  /** Storage namespaces: per endpoint, and per user when the host says who. */
+  Widget.prototype.setIdentity = function (user) {
+    var u = user && typeof user === 'object' ? user : null;
+    this._userId = u && u.id != null ? String(u.id).slice(0, 200) : '';
+    this._ns = 'kris:v2:' + hashStr(this.opts.endpoint + '|' + this._userId);
+    this._storeKey = 'kris:v1:' + this.opts.endpoint + (this._userId ? '|' + hashStr(this._userId) : '');
+  };
 
   // --- storage (every access guarded; storage can be absent or throw) --------
   function store(kind) {
@@ -922,27 +1793,104 @@
   }
   function readLocal(key) { try { var s = store('local'); return s ? s.getItem(key) : null; } catch (_) { return null; } }
   function writeLocal(key, value) {
-    try { var s = store('local'); if (!s) return; if (value == null) s.removeItem(key); else s.setItem(key, value); } catch (_) { /* private mode */ }
+    try { var s = store('local'); if (!s) return false; if (value == null) s.removeItem(key); else s.setItem(key, value); return true; } catch (_) { return false; }
   }
+  function readJSON(key) { var raw = readLocal(key); if (!raw) return null; try { return JSON.parse(raw); } catch (_) { return null; } }
+  function writeJSON(key, obj) { return writeLocal(key, obj == null ? null : JSON.stringify(obj)); }
 
-  Widget.prototype.save = function () {
-    if (!this.opts.persist) return;
-    var s = store('session'); if (!s) return;
-    try {
-      var turns = this.turns.slice(-40);
-      var blob = JSON.stringify({ v: 1, turns: turns, userName: this.profile.userName, pending: this.pending, open: this.open, wide: this.root.classList.contains('wide'), at: Date.now() });
-      if (blob.length > 400000) blob = JSON.stringify({ v: 1, turns: turns.slice(-10), userName: this.profile.userName, pending: this.pending, open: this.open, at: Date.now() });
-      s.setItem(this._storeKey, blob);
-    } catch (_) { /* quota or privacy mode: memory only */ }
+  // --- events: KRIS.on('memory' | 'settings' | 'view' | 'conversation' | 'open' | 'close' | 'answer', fn)
+  Widget.prototype.on = function (evt, fn) { (this._listeners[evt] = this._listeners[evt] || []).push(fn); };
+  Widget.prototype.off = function (evt, fn) {
+    var l = this._listeners[evt]; if (!l) return;
+    var i = l.indexOf(fn); if (i >= 0) l.splice(i, 1);
   };
+  Widget.prototype.emit = function (evt, payload) {
+    var l = (this._listeners[evt] || []).concat(this._listeners['*'] || []);
+    for (var i = 0; i < l.length; i++) { try { l[i](payload, evt); } catch (_) { /* host hook */ } }
+  };
+
+  // --- settings ----------------------------------------------------------------
+  Widget.prototype.loadSettings = function () {
+    var s = assign({}, SETTING_DEFAULTS);
+    if (!this._hostFollowups) s.followups = false;
+    var host = this.opts.settings;
+    var k;
+    if (host && typeof host === 'object') for (k in SETTING_DEFAULTS) if (typeof host[k] === typeof SETTING_DEFAULTS[k]) s[k] = host[k];
+    var saved = readJSON(SETTINGS_KEY);
+    if (saved && typeof saved === 'object') for (k in SETTING_DEFAULTS) if (typeof saved[k] === typeof SETTING_DEFAULTS[k]) s[k] = saved[k];
+    return s;
+  };
+
+  Widget.prototype.setSetting = function (key, value) {
+    if (!(key in SETTING_DEFAULTS) || typeof value !== typeof SETTING_DEFAULTS[key]) return false;
+    this.settings[key] = value;
+    var saved = readJSON(SETTINGS_KEY);
+    if (!saved || typeof saved !== 'object') saved = {};
+    saved[key] = value;
+    writeJSON(SETTINGS_KEY, saved);
+    this.applySettings();
+    if (key === 'history' && value) this.save();
+    this.emit('settings', assign({}, this.settings));
+    return true;
+  };
+
+  Widget.prototype.resetSettings = function () {
+    writeJSON(SETTINGS_KEY, null);
+    if (this.opts.rememberTheme) writeLocal(THEME_KEY, null);
+    this.settings = this.loadSettings();
+    this._themePref = THEMES.indexOf(this.opts.theme) >= 0 ? this.opts.theme : 'auto';
+    this.applyTheme(true);
+    this.applySettings();
+    this.emit('settings', assign({}, this.settings));
+  };
+
+  Widget.prototype.applySettings = function () {
+    var s = this.settings, r = this.root;
+    if (!r) return;
+    r.setAttribute('data-size', s.textSize === 's' || s.textSize === 'l' ? s.textSize : 'm');
+    r.setAttribute('data-density', s.density === 'compact' ? 'compact' : 'comfortable');
+    r.setAttribute('data-times', s.timestamps ? 'on' : 'off');
+    var calm = s.motion === 'reduce';
+    r.classList.toggle('calm', calm);
+    r.classList.toggle('still', !s.character);
+    this._reducedMotion = this._osReducedMotion || calm;
+    this._still = !s.character || this._reducedMotion;
+    this.opts.followups = !!s.followups;
+    if (this._still && this.badgeFace) this.clearEyeOffset();
+    if (this.input) this.input.setAttribute('enterkeyhint', s.sendWithEnter ? 'send' : 'enter');
+    this.updateHint();
+  };
+
+  // --- this tab's working copy of the conversation (sessionStorage) -------------
+  // The same conversation is also archived to History (localStorage) when
+  // history is on; this copy is what makes a page navigation seamless.
+  Widget.prototype.save = function () {
+    if (this._restoring) return;
+    if (this.opts.persist) {
+      var s = store('session');
+      if (s) {
+        try {
+          var turns = this.turns.slice(-40);
+          var rec = { v: 2, id: this.convId, turns: turns, facts: this.convFacts, suggested: this.suggested, pending: this.pending, open: this.open, wide: this.root.classList.contains('wide'), at: Date.now() };
+          var blob = JSON.stringify(rec);
+          if (blob.length > 400000) { rec.turns = turns.slice(-10); blob = JSON.stringify(rec); }
+          s.setItem(this._storeKey, blob);
+        } catch (_) { /* quota or privacy mode: memory only */ }
+      }
+    }
+    this.histSaveCurrent();
+  };
+
   Widget.prototype.load = function () {
     if (!this.opts.persist) return null;
     var s = store('session'); if (!s) return null;
     try {
       var raw = s.getItem(this._storeKey);
       var d = raw ? JSON.parse(raw) : null;
-      if (!d || d.v !== 1 || !Array.isArray(d.turns)) return null;
+      if (!d || (d.v !== 1 && d.v !== 2) || !Array.isArray(d.turns)) return null;
       if (Date.now() - (d.at || 0) > 12 * 3600 * 1000) return null;
+      // An older build kept only the name, for this tab: it is conversation context.
+      if (d.v === 1 && d.userName) d.facts = { name: String(d.userName).slice(0, 60) };
       return d;
     } catch (_) { return null; }
   };
@@ -968,6 +1916,7 @@
 
   // --- mount -------------------------------------------------------------------
   Widget.prototype.mount = function () {
+    var self = this;
     var host = document.createElement('div');
     host.setAttribute('data-kris-widget', '');
     var shadow = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
@@ -1008,11 +1957,27 @@
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-label', this.opts.title);
     panel.setAttribute('aria-modal', 'false');
+    panel.setAttribute('data-view', 'chat');
     panel.id = 'kris-panel';
     this.panel = panel;
     panel.appendChild(this.buildHeader());
-    panel.appendChild(this.buildBody());
-    panel.appendChild(this.buildComposer());
+
+    // Everything under the header lives on one stage: the conversation and
+    // composer, the section views that slide over them, the drawer, toasts.
+    var stage = el('div', 'stage');
+    this.stage = stage;
+    stage.appendChild(this.buildBody());
+    stage.appendChild(this.buildComposer());
+    this.viewsEl = el('div', 'views');
+    this.panes = {};
+    stage.appendChild(this.viewsEl);
+    stage.appendChild(this.buildDrawer());
+    this.toasts = el('div', 'toasts');
+    this.toasts.setAttribute('role', 'status');
+    this.toasts.setAttribute('aria-live', 'polite');
+    stage.appendChild(this.toasts);
+    panel.appendChild(stage);
+
     this.live = el('div', 'sr');
     this.live.setAttribute('aria-live', 'polite');
     this.live.setAttribute('role', 'status');
@@ -1023,26 +1988,43 @@
     if (nudge) root.appendChild(nudge);
     root.appendChild(this.buildLauncher());
     shadow.appendChild(root);
+    this.applySettings();
 
-    var self = this;
+    // Esc peels back one layer at a time: drawer, then section, then the panel.
     this._onKeydown = function (e) {
-      if (e.key === 'Escape' && self.open && !self.inline && !self.busy) {
-        var path = e.composedPath ? e.composedPath() : [];
-        if (path.indexOf(self.host) >= 0 || document.activeElement === self.host) self.close();
-      }
+      if (self._hotkey && hotkeyMatch(self._hotkey, e)) { e.preventDefault(); self.toggle(); return; }
+      if (e.key !== 'Escape' || !self.open) return;
+      var path = e.composedPath ? e.composedPath() : [];
+      if (path.indexOf(self.host) < 0 && document.activeElement !== self.host) return;
+      if (self.panel.classList.contains('drawer-open')) { self.toggleDrawer(false); return; }
+      if (self.view !== 'chat') { self.showView('chat'); return; }
+      if (self.busy) { self.stop(); return; }
+      if (!self.inline) self.close();
     };
     document.addEventListener('keydown', this._onKeydown);
+    root.addEventListener('keydown', function (e) { self.trapDrawerFocus(e); });
+
+    // Another tab changed what K.R.1.S remembers: follow it.
+    this._onStorage = function (e) {
+      if (!e || e.key !== self._ns + ':mem' || self.opts.memoryStore) return;
+      self.memLoad();
+      self.memChanged({ save: false, from: 'profile' });
+    };
+    if (global.addEventListener) global.addEventListener('storage', this._onStorage);
 
     (mountEl || document.body || document.documentElement).appendChild(host);
 
     // Restore this tab's conversation (page navigations inside the app).
     var saved = this.load();
     if (saved) this.restore(saved);
+    this.histPrune();
+    if (!saved || !saved.turns.length) this.refreshWelcome();
 
     if (this.inline || this.opts.openOnLoad || (saved && saved.open)) this.openPanel(saved && saved.open ? 'restored' : null);
 
     this.setupLife();
     this.scheduleWarm();
+    this.memLoadAsync();
   };
 
   Widget.prototype.buildHeader = function () {
@@ -1051,6 +2033,14 @@
     var eye = el('span', 'eye');
     eye.innerHTML = FEATHER_EYE;
     head.appendChild(eye);
+
+    var bMenu = toolButton('tool menu', ICON.menu, 'Menu');
+    bMenu.title = 'Menu: history, profile, memory and settings';
+    bMenu.setAttribute('aria-expanded', 'false');
+    bMenu.setAttribute('aria-controls', 'kris-drawer');
+    bMenu.addEventListener('click', function () { self.toggleDrawer(); });
+    this.menuBtn = bMenu;
+    head.appendChild(bMenu);
 
     var avatar = el('div', 'avatar blinking');
     var hp = portrait(avatar, 'h', false);
@@ -1078,7 +2068,7 @@
     }
     var bNew = toolButton('tool newchat', ICON.newchat, 'New conversation');
     bNew.hidden = true;
-    bNew.addEventListener('click', function () { self.reset(); self.input.focus(); });
+    bNew.addEventListener('click', function () { self.newChat(); });
     this.newBtn = bNew;
     var bExpand = toolButton('tool expand', ICON.expand, 'Expand');
     bExpand.setAttribute('aria-pressed', 'false');
@@ -1115,6 +2105,7 @@
 
     body.appendChild(log);
     body.appendChild(jump);
+    this.bodyEl = body;
     this.buildWelcome();
     return body;
   };
@@ -1122,6 +2113,19 @@
   Widget.prototype.buildComposer = function () {
     var self = this;
     var composer = el('div', 'composer');
+    this.composerEl = composer;
+
+    // Shown while an already-sent message is being edited.
+    var editbar = el('div', 'editbar');
+    editbar.innerHTML = ICON.edit;
+    editbar.appendChild(el('span', null, 'Editing your message — send to ask again'));
+    editbar.appendChild(el('span', 'sp'));
+    var cancel = el('button', 'btn ghost sm', 'Cancel');
+    cancel.type = 'button';
+    cancel.addEventListener('click', function () { self.cancelEdit(true); self.input.focus(); });
+    editbar.appendChild(cancel);
+    composer.appendChild(editbar);
+
     var form = el('form', 'box');
     form.setAttribute('novalidate', '');
 
@@ -1155,11 +2159,8 @@
     composer.appendChild(form);
 
     var hint = el('div', 'hint');
-    var keys = el('span', 'keys');
-    keys.appendChild(el('kbd', null, 'Enter')); keys.appendChild(document.createTextNode(' to send · '));
-    keys.appendChild(el('kbd', null, 'Shift')); keys.appendChild(document.createTextNode(' + '));
-    keys.appendChild(el('kbd', null, 'Enter')); keys.appendChild(document.createTextNode(' for a new line'));
-    hint.appendChild(keys);
+    this.hintKeys = el('span', 'keys');
+    hint.appendChild(this.hintKeys);
     composer.appendChild(hint);
 
     this.input = ta; this.sendBtn = send; this.form = form;
@@ -1172,26 +2173,136 @@
       ta.value = '';
       self.autosize();
       self.updateComposer();
-      self.submit(v);
+      if (self._editing) self.commitEdit(v); else self.submit(v);
     });
     ta.addEventListener('input', function () { self.autosize(); self.updateComposer(); });
     ta.addEventListener('focus', function () { form.classList.add('focus'); });
     ta.addEventListener('blur', function () { form.classList.remove('focus'); });
     ta.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+        var mod = e.ctrlKey || e.metaKey;
+        var sendNow = self.settings.sendWithEnter ? !e.shiftKey : mod;
+        if (!sendNow) return;            // a new line
         e.preventDefault();
         if (self.busy) return;
         if (form.requestSubmit) form.requestSubmit(); else form.dispatchEvent(new Event('submit', { cancelable: true }));
       } else if (e.key === 'ArrowUp' && !ta.value && !self.busy) {
-        var last = self.lastUserText();
-        if (last) { e.preventDefault(); ta.value = last; self.autosize(); self.updateComposer(); ta.setSelectionRange(last.length, last.length); }
+        if (self.beginEdit()) e.preventDefault();
       } else if (e.key === 'Escape') {
         if (self.busy) { e.stopPropagation(); self.stop(); }
+        else if (self._editing) { e.stopPropagation(); self.cancelEdit(true); }
       }
     });
     // Clicking anywhere in the box that is not a control puts the caret in.
     form.addEventListener('click', function (e) { if (e.target === form || e.target === foot) ta.focus(); });
     return composer;
+  };
+
+  /** The key hint under the composer follows the send-key setting. */
+  Widget.prototype.updateHint = function () {
+    var keys = this.hintKeys;
+    if (!keys) return;
+    keys.textContent = '';
+    var k = function (t) { keys.appendChild(el('kbd', null, t)); };
+    var tx = function (t) { keys.appendChild(document.createTextNode(t)); };
+    if (this.settings.sendWithEnter) { k('Enter'); tx(' to send · '); k('Shift'); tx(' + '); k('Enter'); tx(' for a new line'); }
+    else { k(isMac() ? '⌘' : 'Ctrl'); tx(' + '); k('Enter'); tx(' to send · '); k('Enter'); tx(' for a new line'); }
+  };
+
+  // --- drawer: where everything beyond the chat lives -------------------------------
+  Widget.prototype.buildDrawer = function () {
+    var self = this;
+    var frag = document.createDocumentFragment();
+    var scrim = el('div', 'scrim');
+    scrim.addEventListener('click', function () { self.toggleDrawer(false); });
+    var d = el('nav', 'drawer');
+    d.id = 'kris-drawer';
+    d.setAttribute('aria-label', this.opts.title + ' menu');
+    var sc = el('div', 'dscroll');
+
+    var nb = el('button', 'dnew');
+    nb.type = 'button';
+    var nic = el('span', 'ic'); nic.innerHTML = ICON.newchat; nb.appendChild(nic);
+    nb.appendChild(el('span', null, 'New chat'));
+    nb.addEventListener('click', function () { self.toggleDrawer(false, true); self.newChat(); });
+    sc.appendChild(nb);
+
+    this.navItems = {};
+    var addItem = function (list, name, label, svg) {
+      var li = el('li');
+      var b = el('button', 'ditem');
+      b.type = 'button';
+      b.innerHTML = svg;
+      b.appendChild(el('span', 'lbl', label));
+      b.addEventListener('click', function () { self.showView(name); });
+      li.appendChild(b);
+      list.appendChild(li);
+      self.navItems[name] = b;
+      return b;
+    };
+    var nav = el('ul', 'dnav');
+    addItem(nav, 'chat', 'Chat', ICON.chat);
+    if (this.historyAllowed()) addItem(nav, 'history', 'History', ICON.history);
+    sc.appendChild(nav);
+    if (this.historyAllowed()) {
+      sc.appendChild(el('div', 'dlabel', 'Recent'));
+      this.drecent = el('ul', 'drecent');
+      sc.appendChild(this.drecent);
+    }
+    sc.appendChild(el('div', 'dsep'));
+    var nav2 = el('ul', 'dnav');
+    if (this.memoryAllowed()) {
+      addItem(nav2, 'profile', 'Profile', ICON.user);
+      var mb = addItem(nav2, 'memory', 'Memory', ICON.memory);
+      this.memPill = el('span', 'pill');
+      mb.appendChild(this.memPill);
+    }
+    addItem(nav2, 'appearance', 'Appearance', ICON.palette);
+    addItem(nav2, 'settings', 'Settings', ICON.gear);
+    addItem(nav2, 'about', 'About', ICON.info);
+    sc.appendChild(nav2);
+    d.appendChild(sc);
+
+    if (this.memoryAllowed()) {
+      var foot = el('div', 'dfoot');
+      this.duser = el('button', 'duser');
+      this.duser.type = 'button';
+      this.duser.addEventListener('click', function () { self.showView('profile'); });
+      foot.appendChild(this.duser);
+      d.appendChild(foot);
+    }
+    this.drawer = d;
+    this.scrim = scrim;
+    frag.appendChild(scrim);
+    frag.appendChild(d);
+    return frag;
+  };
+
+  Widget.prototype.toggleDrawer = function (open, noFocus) {
+    if (!this.drawer) return;
+    if (open == null) open = !this.panel.classList.contains('drawer-open');
+    if (open && !this.open) this.openPanel();
+    this.panel.classList.toggle('drawer-open', !!open);
+    this.menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      this.refreshDrawer();
+      var first = this.drawer.querySelector('.dnew');
+      setTimeout(function () { try { first.focus({ preventScroll: true }); } catch (_) { /* ignore */ } }, 30);
+    } else if (!noFocus) {
+      try { this.menuBtn.focus({ preventScroll: true }); } catch (_) { /* ignore */ }
+    }
+  };
+
+  /** While the drawer is open, Tab cycles inside it (and the menu button that closes it). */
+  Widget.prototype.trapDrawerFocus = function (e) {
+    if (e.key !== 'Tab' || !this.panel.classList.contains('drawer-open')) return;
+    var f = [this.menuBtn].concat(Array.prototype.slice.call(this.drawer.querySelectorAll('button:not([disabled])')));
+    if (!f.length) return;
+    var active = this.shadow.activeElement;
+    var i = f.indexOf(active);
+    var next = e.shiftKey ? (i <= 0 ? f.length - 1 : i - 1) : (i < 0 || i === f.length - 1 ? 0 : i + 1);
+    e.preventDefault();
+    try { f[next].focus(); } catch (_) { /* ignore */ }
   };
 
   Widget.prototype.buildLauncher = function () {
@@ -1292,6 +2403,7 @@
   };
 
   Widget.prototype.syncThemeButton = function () {
+    if (this.panes && this.view === 'appearance') this.refreshView('appearance');
     var b = this.themeBtn;
     if (!b) return;
     var dark = this.root.getAttribute('data-theme') === 'dark';
@@ -1300,9 +2412,8 @@
     b.title = label;
   };
 
-  // --- welcome ---------------------------------------------------------------
+  // --- welcome -----------------------------------------------------------------
   Widget.prototype.buildWelcome = function () {
-    var self = this;
     var w = el('div', 'welcome');
     var hero = el('div', 'hero blinking');
     hero.appendChild(el('span', 'ring'));
@@ -1321,30 +2432,13 @@
     this.welcomeCtx = ctxl;
     w.appendChild(ctxl);
 
-    if (this.opts.examples && this.opts.examples.length) {
-      var ul = el('ul', 'prompts');
-      ul.setAttribute('aria-label', 'Suggested questions');
-      this.promptButtons = [];
-      this.opts.examples.forEach(function (ex) {
-        var item = typeof ex === 'string' ? { tag: 'Ask', text: ex } : ex;
-        var li = el('li');
-        var b = el('button');
-        b.type = 'button';
-        var tag = el('span', 'tag');
-        var ic = el('span', 'ic');
-        ic.innerHTML = ICON[PROMPT_ICONS[item.tag] || 'arrow'];
-        tag.appendChild(ic);
-        tag.appendChild(document.createTextNode(item.tag || 'Ask'));
-        b.appendChild(tag);
-        var q = el('span', 'q', item.text);
-        b.appendChild(q);
-        var go = el('span', 'go'); go.innerHTML = ICON.arrow; b.appendChild(go);
-        b.addEventListener('click', function () { self.submit(q.textContent); });
-        li.appendChild(b); ul.appendChild(li);
-        self.promptButtons.push({ item: item, q: q });
-      });
-      w.appendChild(ul);
+    if (!(this._customExamples && !this.opts.examples.length)) {
+      this.promptList = el('ul', 'prompts');
+      this.promptList.setAttribute('aria-label', 'Suggested questions');
+      w.appendChild(this.promptList);
     }
+    this.resumeWrap = el('div');
+    w.appendChild(this.resumeWrap);
 
     var trust = el('div', 'trust');
     var lot = el('span', 'lotus'); lot.innerHTML = LOTUS; trust.appendChild(lot);
@@ -1352,22 +2446,102 @@
     w.appendChild(trust);
     this.welcome = w;
     this.log.appendChild(w);
+    this.refreshPrompts();
   };
 
   Widget.prototype.greetingText = function () {
     if (this.opts.greeting) return this.opts.greeting;
-    return timeGreeting() + (this.profile.userName ? ', ' + this.profile.userName : '') + '.';
+    var name = this.addressName();
+    return timeGreeting() + (name ? ', ' + name : '') + '.';
+  };
+
+  /**
+   * The suggestions on the empty state. A host's own examples are used as
+   * given; the built-in set leans towards the user's role or interests once
+   * K.R.1.S knows them, and names the vessel on screen.
+   */
+  Widget.prototype.promptSet = function () {
+    if (this._customExamples) return this.opts.examples || [];
+    var p = this.profileView();
+    var hay = [p.role, p.department, p.interests].filter(Boolean).join(' ');
+    if (hay) {
+      for (var i = 0; i < PERSONA_PROMPTS.length; i++) if (PERSONA_PROMPTS[i].re.test(hay)) return PERSONA_PROMPTS[i].prompts;
+    }
+    return this.opts.examples || [];
+  };
+
+  Widget.prototype.refreshPrompts = function () {
+    var self = this;
+    var ul = this.promptList;
+    if (!ul) return;
+    ul.textContent = '';
+    var name = this.context && (this.context.vesselName || this.context.vesselId);
+    this.promptSet().slice(0, 4).forEach(function (ex) {
+      var item = typeof ex === 'string' ? { tag: 'Ask', text: ex } : ex;
+      var t = String(item.text || '');
+      if (name && /^(fuel consumption|me consumption|shaft power|speed|average speed|distance|leg co2|leg distance|off hire hours|ghg intensity|compliance balance)\b/i.test(t) && !/\bfor\b/i.test(t)) {
+        t = t.replace(/^(.+?)( last| this| today| yesterday)/i, '$1 for ' + name + '$2');
+      }
+      var li = el('li');
+      var b = el('button');
+      b.type = 'button';
+      var tag = el('span', 'tag');
+      var ic = el('span', 'ic');
+      ic.innerHTML = ICON[PROMPT_ICONS[item.tag] || 'arrow'];
+      tag.appendChild(ic);
+      tag.appendChild(document.createTextNode(item.tag || 'Ask'));
+      b.appendChild(tag);
+      var q = el('span', 'q', t);
+      b.appendChild(q);
+      var go = el('span', 'go'); go.innerHTML = ICON.arrow; b.appendChild(go);
+      b.addEventListener('click', function () { self.submit(q.textContent); });
+      li.appendChild(b);
+      ul.appendChild(li);
+    });
+  };
+
+  /** "Continue …" — the most recent other conversation from the past week. */
+  Widget.prototype.renderResume = function () {
+    var self = this;
+    var wrap = this.resumeWrap;
+    if (!wrap) return;
+    wrap.textContent = '';
+    if (!this.historyAllowed()) return;
+    var now = Date.now();
+    var items = this.histIndex().items.filter(function (it) { return it.id !== self.convId && now - it.updated < 7 * 86400000; });
+    if (!items.length) return;
+    var it = items[0];
+    var b = el('button', 'resume');
+    b.type = 'button';
+    b.innerHTML = ICON.history;
+    var t = el('span', 't');
+    t.appendChild(document.createTextNode('Continue '));
+    t.appendChild(el('b', null, it.title));
+    b.appendChild(t);
+    b.appendChild(el('span', 'w', whenLabel(it.updated)));
+    b.title = 'Continue “' + it.title + '”';
+    b.addEventListener('click', function () { self.openConversation(it.id); });
+    wrap.appendChild(b);
+  };
+
+  Widget.prototype.refreshWelcome = function () {
+    if (!this.welcome) return;
+    if (this.welcomeTitle) this.welcomeTitle.textContent = this.greetingText();
+    this.refreshPrompts();
+    this.renderResume();
   };
 
   Widget.prototype.showWelcome = function () {
     if (this.welcome && !this.welcome.parentNode) this.log.appendChild(this.welcome);
-    if (this.welcomeTitle) this.welcomeTitle.textContent = this.greetingText();
+    this.refreshWelcome();
     this.newBtn.hidden = true;
+    this.panel.classList.remove('chatting');
   };
 
   Widget.prototype.hideWelcome = function () {
     if (this.welcome && this.welcome.parentNode) this.welcome.parentNode.removeChild(this.welcome);
     this.newBtn.hidden = false;
+    if (this.panel) this.panel.classList.add('chatting');
   };
 
   Widget.prototype.hideNudge = function (forever) {
@@ -1471,7 +2645,7 @@
     var slow = setTimeout(function () { if (self._conn === 'connecting') self.setConn('waking'); }, 1500);
     this._warming = fetch(this.opts.endpoint, { method: 'GET', credentials: 'omit', cache: 'no-store' })
       .then(function (r) { clearTimeout(slow); self.setConn(r.ok ? 'online' : 'offline'); return r.ok ? r.json() : null; })
-      .then(function (h) { self.health = h || null; })
+      .then(function (h) { self.health = h || null; if (self.view === 'about') self.refreshView('about'); })
       .catch(function () { clearTimeout(slow); self.setConn('offline'); })
       .then(function () { self._warming = null; });
     return this._warming;
@@ -1499,9 +2673,10 @@
     setTimeout(function () {
       self.root.classList.remove('restored');
       self.scrollDown();
-      if (how !== 'restored' || !('ontouchstart' in global)) { try { self.input.focus({ preventScroll: true }); } catch (_) { self.input.focus(); } }
+      if (self.view === 'chat' && (how !== 'restored' || !('ontouchstart' in global))) { try { self.input.focus({ preventScroll: true }); } catch (_) { self.input.focus(); } }
     }, 30);
     if (typeof this.opts.onOpen === 'function') this.opts.onOpen();
+    this.emit('open');
     this.save();
   };
 
@@ -1509,6 +2684,9 @@
     var self = this;
     if (this.inline || !this.open) return;
     this.open = false;
+    this.panel.classList.remove('drawer-open');
+    this.menuBtn.setAttribute('aria-expanded', 'false');
+    if (this.view !== 'chat') this.showView('chat', true);
     this.badge.setAttribute('aria-expanded', 'false');
     this.badge.setAttribute('aria-label', 'Open ' + this.opts.title);
     if (this._bodyOverflow !== undefined) { document.body.style.overflow = this._bodyOverflow; this._bodyOverflow = undefined; }
@@ -1520,18 +2698,61 @@
     }
     try { this.badge.focus({ preventScroll: true }); } catch (_) { /* ignore */ }
     if (typeof this.opts.onClose === 'function') this.opts.onClose();
+    this.emit('close');
     this.save();
   };
 
-  /** Start a fresh conversation. The user's name is kept. */
+  /**
+   * Start a fresh conversation. The one just finished is already in History;
+   * what the user said about themselves in it (conversation context) stays
+   * with it. Only what they chose to have remembered carries over.
+   */
   Widget.prototype.reset = function () {
     this.stop(true);
+    this.cancelEdit(false);
+    this.save();
     this.turns = []; this.history = []; this.pending = null;
-    var kids = Array.prototype.slice.call(this.log.childNodes);
-    for (var i = 0; i < kids.length; i++) if (kids[i] !== this.welcome) this.log.removeChild(kids[i]);
+    this.convId = uid();
+    this.convFacts = {};
+    this.suggested = {};
+    this._histSig = null;
+    this.clearLog();
     this.showWelcome();
     this.setMood('idle');
     this.save();
+    this.emit('conversation', { id: this.convId, fresh: true });
+  };
+
+  Widget.prototype.newChat = function () {
+    if (this.view !== 'chat') this.showView('chat', true);
+    this.reset();
+    try { this.input.focus({ preventScroll: true }); } catch (_) { this.input.focus(); }
+  };
+
+  Widget.prototype.clearLog = function () {
+    var kids = Array.prototype.slice.call(this.log.childNodes);
+    for (var i = 0; i < kids.length; i++) if (kids[i] !== this.welcome) this.log.removeChild(kids[i]);
+  };
+
+  /** Reopen a conversation from History, exactly where it was left. */
+  Widget.prototype.openConversation = function (id) {
+    if (this.busy) this.stop(true);
+    if (id === this.convId) { this.showView('chat'); return true; }
+    var rec = this.histLoad(id);
+    if (!rec) { this.toast('That conversation is no longer on this device.'); return false; }
+    this.cancelEdit(false);
+    this.save();
+    this.clearLog();
+    this.turns = []; this.history = []; this.pending = null;
+    this._histSig = null;
+    this.restore({ id: rec.id, turns: rec.turns, facts: rec.facts, suggested: rec.suggested, pending: rec.pending || null });
+    this._histSig = this.histSig();   // opening a conversation is not a change to it
+    if (!this.turns.length) this.showWelcome();
+    this.showView('chat');
+    this.scrollDown();
+    this.save();
+    this.emit('conversation', { id: this.convId, fresh: false });
+    return true;
   };
 
   /** Tell K.R.1.S what the user is looking at. Pass null to clear. */
@@ -1550,12 +2771,95 @@
       this.welcomeCtx.hidden = !name;
       this.welcomeCtxText.textContent = name ? 'Questions default to ' + name + ' unless you name another vessel' : '';
     }
-    if (this.promptButtons) {
-      this.promptButtons.forEach(function (p) {
-        var t = p.item.text;
-        if (name && /^(fuel consumption|shaft power|speed|distance)\b/i.test(t) && !/\bfor\b/i.test(t)) t = t.replace(/^(.+?)( last| this| today| yesterday)/i, '$1 for ' + name + '$2');
-        p.q.textContent = t;
-      });
+    this.refreshPrompts();
+    if (this.view === 'memory') this.refreshView('memory');
+  };
+
+  // --- sections ----------------------------------------------------------------
+  /**
+   * Show a section over the conversation ('history', 'profile', 'memory',
+   * 'appearance', 'settings', 'about') or go back to it ('chat'). Sections
+   * are built the first time they are opened. The conversation underneath
+   * keeps its scroll position and is made inert while covered.
+   */
+  Widget.prototype.showView = function (name, quiet) {
+    if (name !== 'chat' && !VIEW_TITLES[name]) return false;
+    if ((name === 'profile' || name === 'memory') && !this.memoryAllowed()) return false;
+    if (name === 'history' && !this.historyAllowed()) return false;
+    if (!this.open && !quiet) this.openPanel();
+    this.panel.classList.remove('drawer-open');
+    this.menuBtn.setAttribute('aria-expanded', 'false');
+    var prev = this.view;
+    this.view = name;
+    var inView = name !== 'chat';
+    this.panel.classList.toggle('in-view', inView);
+    this.panel.setAttribute('data-view', name);
+    setInert(this.bodyEl, inView);
+    setInert(this.composerEl, inView);
+    if (inView) {
+      var pane = this.panes[name] || this.buildPane(name);
+      for (var k in this.panes) this.panes[k].el.classList.toggle('on', k === name);
+      this.refreshView(name);
+      if (prev !== name) pane.body.scrollTop = 0;
+      if (!quiet) setTimeout(function () { try { pane.h.focus({ preventScroll: true }); } catch (_) { /* ignore */ } }, 20);
+    } else if (!quiet && this.open) {
+      var self = this;
+      setTimeout(function () { try { self.input.focus({ preventScroll: true }); } catch (_) { /* ignore */ } }, 20);
+    }
+    if (prev !== name) this.emit('view', name);
+    return true;
+  };
+
+  Widget.prototype.buildPane = function (name) {
+    var self = this;
+    var pane = el('section', 'vpane');
+    pane.setAttribute('aria-labelledby', 'kris-v-' + name);
+    var head = el('div', 'vhead');
+    var back = el('button', 'vback');
+    back.type = 'button';
+    back.innerHTML = ICON.back;
+    back.appendChild(document.createTextNode('Chat'));
+    back.setAttribute('aria-label', 'Back to chat');
+    back.addEventListener('click', function () { self.showView('chat'); });
+    var h = el('h3', null, VIEW_TITLES[name]);
+    h.id = 'kris-v-' + name;
+    h.tabIndex = -1;
+    head.appendChild(back);
+    head.appendChild(h);
+    var body = el('div', 'vbody');
+    pane.appendChild(head);
+    pane.appendChild(body);
+    this.viewsEl.appendChild(pane);
+    var rec = { el: pane, body: body, h: h };
+    this.panes[name] = rec;
+    return rec;
+  };
+
+  /**
+   * Re-render a section. Focus is carried across by data-fk, so a switch
+   * that was just flipped keeps the keyboard. The Profile form is never
+   * re-rendered by its own edits (the user may be mid-way through it).
+   */
+  Widget.prototype.refreshView = function (name, from) {
+    var pane = this.panes[name];
+    if (!pane || name !== this.view) return;
+    if (from && from === name && name === 'profile') return;
+    var active = this.shadow && this.shadow.activeElement;
+    var fk = active && active.getAttribute ? active.getAttribute('data-fk') : null;
+    var hadFocus = !!(active && pane.el.contains(active));
+    var top = pane.body.scrollTop;
+    pane.body.textContent = '';
+    var render = {
+      history: this.renderHistory, profile: this.renderProfile, memory: this.renderMemory,
+      appearance: this.renderAppearance, settings: this.renderSettings, about: this.renderAbout
+    }[name];
+    if (render) render.call(this, pane.body);
+    pane.body.scrollTop = top;
+    // Keep the keyboard where it was; if that control is gone (a deleted
+    // row), fall back to the section heading rather than losing focus.
+    if (hadFocus || fk) {
+      var again = fk ? pane.body.querySelector('[data-fk="' + fk + '"]') : null;
+      try { (again || pane.h).focus({ preventScroll: true }); } catch (_) { /* ignore */ }
     }
   };
 
@@ -1564,10 +2868,9 @@
    * idle look-around when the mouse has been still, a subtle breathing loop
    * (pure CSS, always on). None of this touches the network or the request
    * pipeline — it is cosmetic only, throttled to one recompute per animation
-   * frame, and skipped entirely under prefers-reduced-motion.
+   * frame, and idle whenever motion is reduced or the character is set still.
    */
   Widget.prototype.setupLife = function () {
-    if (this._reducedMotion) return;
     var self = this;
     var rafId = null;
     var mx = null, my = null;
@@ -1576,7 +2879,7 @@
       rafId = null;
       // Some moods own the eyes — thought looks away, a laugh shuts them, a
       // blush drops the gaze. Tracking must not fight them.
-      if (NO_TRACK[self.currentMood]) return;
+      if (self._still || NO_TRACK[self.currentMood]) return;
       if (mx == null) return;
       [self.badgeFace, self.headFace].forEach(function (svg) {
         if (!svg) return;
@@ -1625,7 +2928,7 @@
 
   /** A brief, one-shot bounce — used for excited/surprised, never looping. */
   Widget.prototype.pulse = function () {
-    if (this._reducedMotion) return;
+    if (this._reducedMotion || this._still) return;
     [this.badge, this.headFaceWrap].forEach(function (elx) {
       if (!elx) return;
       elx.classList.remove('mood-pop');
@@ -1717,7 +3020,7 @@
 
   /** One-shot body gesture: a laugh shake, a disappointed sink. */
   Widget.prototype.gesture = function (cls, ms) {
-    if (this._reducedMotion) return;
+    if (this._reducedMotion || this._still) return;
     var targets = [this.badge, this.headFaceWrap];
     targets.forEach(function (elx) {
       if (!elx) return;
@@ -1804,34 +3107,42 @@
     return recent.length >= 4 || this.turnCount >= 15;
   };
 
-
   Widget.prototype.teardown = function () {
     if (this._onMove) document.removeEventListener('mousemove', this._onMove);
     if (this._visHandler) document.removeEventListener('visibilitychange', this._visHandler);
     if (this._onKeydown) document.removeEventListener('keydown', this._onKeydown);
     if (this._onOnline && global.removeEventListener) global.removeEventListener('online', this._onOnline);
-    if (this._idleT) clearTimeout(this._idleT);
-    if (this._moodT) clearTimeout(this._moodT);
-    if (this._nudgeT) clearTimeout(this._nudgeT);
+    if (this._onStorage && global.removeEventListener) global.removeEventListener('storage', this._onStorage);
+    [this._idleT, this._moodT, this._nudgeT, this._themeT, this._toastT, this._closeT].forEach(function (t) { if (t) clearTimeout(t); });
+    if (this._tick) clearInterval(this._tick);
     if (this._rafCancel) this._rafCancel();
-    if (this._themeT) clearTimeout(this._themeT);
     if (this._mqDark && this._onScheme) {
       if (this._mqDark.removeEventListener) this._mqDark.removeEventListener('change', this._onScheme);
       else if (this._mqDark.removeListener) this._mqDark.removeListener(this._onScheme);
     }
     if (this._bodyOverflow !== undefined) document.body.style.overflow = this._bodyOverflow;
     this.stop(true);
+    this._listeners = {};
   };
 
   // ==========================================================================
   //  Transport
   // ==========================================================================
+  /**
+   * Sent with every message. `profile` is what the user has allowed K.R.1.S
+   * to remember, merged with what they said about themselves in this chat;
+   * the server uses it for tone and relevance only, and keeps none of it.
+   */
   Widget.prototype.buildContext = function () {
-    return assign({}, this.context || {}, {
-      tz: (function () { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (_) { return null; } })(),
+    var p = this.profileForServer();
+    var tz = p && p.timezone && validTz(p.timezone) ? p.timezone : (detectedTz() || null);
+    var ctx = assign({}, this.context || {}, {
+      tz: tz,
       locale: (typeof navigator !== 'undefined' && navigator.language) || null,
-      userName: this.profile.userName || null
+      userName: this.addressName() || null
     });
+    if (p) ctx.profile = p;
+    return ctx;
   };
 
   /**
@@ -1849,7 +3160,7 @@
     catch (e) { tokenP = Promise.resolve(null); }
 
     return tokenP.then(function (token) {
-      var payload = { text: text, pending: pending, history: history, context: context, stream: true };
+      var payload = { text: text, pending: pending, history: history, context: context, stream: true, client: CLIENT };
       // text/plain + token in the body = a CORS "simple request": no preflight.
       var headers = { 'Content-Type': 'text/plain;charset=UTF-8' };
       if (token && typeof token === 'string') {
@@ -1919,13 +3230,17 @@
     if (!body) return;
     opts = opts || {};
     var self = this;
+    // A chip or suggestion sent mid-edit abandons the edit.
+    if (this._editing && !opts.fromEdit) this.cancelEdit(true);
 
+    if (this.view !== 'chat') this.showView('chat', !this.open);
     this.hideWelcome();
     this.busy = true;
     this.updateComposer();
-    if (!opts.retry) this.addUserTurn(String(displayText));
-    var turnRec = { role: 'user', text: String(displayText), send: body, at: Date.now() };
-    if (!opts.retry) this.turns.push(turnRec);
+    var userEl = opts.retry ? this.lastUserEl() : this.addUserTurn(String(displayText));
+    if (!opts.retry) this.turns.push({ role: 'user', text: String(displayText), send: body, at: Date.now() });
+    if (userEl) { userEl.classList.remove('failed'); setUserState(userEl, ''); }
+    this.markLastUser();
     this._stick = true;
     this.scrollDown(true);
 
@@ -1937,16 +3252,40 @@
 
     var started = performanceNow();
     var carried = this.pending;
+    var cmd = !carried && this.memoryAllowed() ? parseMemoryCommand(body) : null;
+    // Conversation context: whatever the user just said about themselves
+    // belongs to THIS chat at once, so the reply can already use it. ("Forget
+    // that I work at Maersk" is not a statement that they do.)
+    var facts = carried || cmd ? [] : this.noticeFacts(body);
     var historySnapshot = this.history.slice(-8);
     this.pending = null;
 
-    // ---- local: greetings and thanks never touch the network ---------------
-    var local = this.opts.localReplies && !carried && typeof this.opts.ask !== 'function' ? localReply(body, this.profile.userName) : null;
+    // ---- local: memory commands and greetings never touch the network --------
+    var local = null;
+    if (cmd) local = this.runMemoryCommand(cmd);
+    if (!local && this.opts.localReplies && !carried && typeof this.opts.ask !== 'function') {
+      var hello = localReply(body, this.addressName());
+      if (hello) local = { status: 'answer', source: 'local', instant: true, text: hello };
+    }
     if (local) {
       var slotL = this.addAssistantTurn();
-      this.finishTurn(slotL, { status: 'answer', source: 'local', instant: true, text: local }, body, reactiveMood, started, historySnapshot);
+      this.finishTurn(slotL, local, body, reactiveMood, started, historySnapshot, cmd ? [] : facts);
       return;
     }
+
+    // ---- sending: only worth showing when the server is not known to be up
+    // (waking, reconnecting). Otherwise the message is on its way at once and
+    // the thinking indicator says the rest.
+    var unsure = this._conn !== 'online';
+    if (userEl && unsure) userEl.classList.add('sending');
+    var sendingT = unsure ? setTimeout(function () { setUserState(userEl, 'Sending…'); }, 450) : null;
+    var delivered = false;
+    var markDelivered = function () {
+      if (delivered) return;
+      delivered = true;
+      clearTimeout(sendingT);
+      if (userEl) { userEl.classList.remove('sending'); setUserState(userEl, ''); }
+    };
 
     var slot = this.addAssistantTurn();
     var thinking = el('div', 'thinking');
@@ -1954,57 +3293,88 @@
     thinking.appendChild(dots);
     var label = el('span', 'label', waitLabelFor(body));
     thinking.appendChild(label);
+    var secs = el('span', 'secs');
+    thinking.appendChild(secs);
     slot.msg.appendChild(thinking);
     this.scrollDown();
     this._busyLabel = waitLabelFor(body) + '…';
     this.setStatusText(this._busyLabel);
 
+    // Waiting is easier with a clock, and with a reason once it runs long.
+    var t0 = Date.now();
+    var slowShown = false;
+    clearInterval(this._tick);
+    this._tick = setInterval(function () {
+      var s = Math.round((Date.now() - t0) / 1000);
+      if (s >= 3) secs.textContent = s + 's';
+      if (s >= 12 && !slowShown && thinking.parentNode) {
+        slowShown = true;
+        slot.msg.appendChild(el('div', 'slowhint', self._conn === 'waking'
+          ? 'The server is waking up — the first reply can take up to a minute.'
+          : 'Still working on it. Long questions can take a little while.'));
+        self.stick();
+      }
+    }, 1000);
+    var stopClock = function () { clearInterval(self._tick); self._tick = null; };
+
     var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     var timedOut = false;
     var timer = setTimeout(function () { timedOut = true; if (ctrl) ctrl.abort(); }, this.opts.timeoutMs);
     var stream = new Typewriter(this, slot);
-    this._active = { ctrl: ctrl, stream: stream, slot: slot, body: body };
+    // A reply belongs to the conversation that asked for it. New chat, opening
+    // another conversation or a change of user abandons it (gen moves on), and
+    // whatever arrives later is dropped instead of landing in the wrong chat.
+    var gen = this._gen = (this._gen || 0) + 1;
+    var stale = function () { return gen !== self._gen; };
+    this._active = { ctrl: ctrl, stream: stream, slot: slot, body: body, timer: timer, gen: gen };
 
     var hooks = {
       signal: ctrl ? ctrl.signal : undefined,
       onDelta: function (evt) {
-        if (!evt) return;
+        if (!evt || stale()) return;
+        markDelivered();
         if (evt.t === 'status') { label.textContent = evt.text || label.textContent; self.setStatusText((evt.text || '') + '…'); return; }
         if (evt.t === 'delta' || evt.t === 'replace') {
-          if (!stream.started) { stream.start(); self.setStatusText('Replying…'); if (self.currentMood === 'thinking') self.setMood('idle'); }
+          if (!stream.started) { stopClock(); stream.start(); self.setStatusText('Replying…'); if (self.currentMood === 'thinking') self.setMood('idle'); }
           if (evt.t === 'replace') stream.replace(evt.text || ''); else stream.push(evt.text || '');
         }
       }
     };
 
     this.transport(body, carried, historySnapshot, hooks).then(function (data) {
-      clearTimeout(timer);
+      if (stale()) return;
+      clearTimeout(timer); stopClock(); markDelivered();
       if (!data || typeof data !== 'object') data = { status: 'error', text: 'The server sent an empty response.' };
       return stream.finish(data).then(function () {
-        self.finishTurn(slot, data, body, reactiveMood, started, historySnapshot);
+        if (stale()) return;
+        self.finishTurn(slot, data, body, reactiveMood, started, historySnapshot, facts);
       });
     }, function (err) {
-      clearTimeout(timer);
+      if (stale()) return;
+      clearTimeout(timer); stopClock(); clearTimeout(sendingT);
+      if (userEl) userEl.classList.remove('sending');
       var aborted = err && err.name === 'AbortError';
       if (aborted && !timedOut) {
         // The user pressed stop: keep what was written, say so quietly.
+        setUserState(userEl, '');
         var partial = stream.text();
         stream.cancel();
         var data = partial
           ? { status: 'answer', source: 'stopped', text: partial, stopped: true }
           : { status: 'stopped', source: 'stopped', text: '' };
-        self.finishTurn(slot, data, body, 'idle', started, historySnapshot);
+        self.finishTurn(slot, data, body, 'idle', started, historySnapshot, facts);
         return;
       }
       stream.cancel();
       var offline = global.navigator && navigator.onLine === false;
       if (!aborted) self.setConn('offline');
+      if (userEl) { userEl.classList.add('failed'); setUserState(userEl, aborted ? 'No reply' : 'Not delivered'); }
       self.finishTurn(slot, {
         status: 'error', reason: aborted ? 'timeout' : offline ? 'offline' : 'network',
         text: aborted ? 'That took longer than I could wait. Nothing was changed — try again.'
           : offline ? 'You’re offline. Check your connection and try again.'
           : 'I couldn’t reach the server just now. Nothing was changed — try again in a moment.'
-      }, body, 'sad', started, historySnapshot);
+      }, body, 'sad', started, historySnapshot, facts);
     });
   };
 
@@ -2012,11 +3382,24 @@
   Widget.prototype.stop = function (silent) {
     var a = this._active;
     if (!a) return;
+    if (silent) {
+      // Abandon it: whatever the transport does next is ignored.
+      this._gen = (this._gen || 0) + 1;
+      clearTimeout(a.timer);
+      if (a.ctrl) a.ctrl.abort();
+      a.stream.cancel();
+      this._active = null;
+      this.busy = false;
+      this._busyLabel = null;
+      this.setConn(this._conn);
+      if (this._tick) { clearInterval(this._tick); this._tick = null; }
+      this.updateComposer();
+      return;
+    }
     if (a.ctrl) a.ctrl.abort();
-    if (silent) { a.stream.cancel(); this._active = null; this.busy = false; this.updateComposer(); }
   };
 
-  Widget.prototype.finishTurn = function (slot, data, body, reactiveMood, started, historySnapshot) {
+  Widget.prototype.finishTurn = function (slot, data, body, reactiveMood, started, historySnapshot, facts) {
     var self = this;
     this._active = null;
     var ms = Math.max(0, Math.round(performanceNow() - started));
@@ -2031,17 +3414,27 @@
     this.renderMeta(slot, data, body, ms);
 
     if (data.pending) this.pending = data.pending;
-    if (data.remember && data.remember.userName) this.profile.userName = String(data.remember.userName).slice(0, 60);
+
+    // What the server heard ("my name is …") joins this chat's context now;
+    // it only becomes long-term memory if the user says yes below.
+    var heard = serverFacts(data);
+    for (var i = 0; i < heard.length; i++) this.convFacts[heard[i].key] = heard[i].value;
 
     // Every USER turn goes into history: that is what lets the server turn
     // "and last week?" into the previous question over a new period.
     // Assistant turns are kept only for conversational sources.
     this.history.push({ role: 'user', text: body });
-    if (/^(companion|guide|identity|agent|router|local|instant)$/.test(String(data.source || '')) && data.text) {
-      this.history.push({ role: 'assistant', text: String(data.text).slice(0, 1200) });
-    }
+    if (isConversational(data) && data.text) this.history.push({ role: 'assistant', text: String(data.text).slice(0, 1200) });
     this.history = this.history.slice(-10);
-    this.turns.push({ role: 'assistant', text: data.text || '', data: slimForStore(data), at: Date.now(), ms: ms, send: body });
+
+    var rec = { role: 'assistant', text: data.text || '', data: slimForStore(data), at: Date.now(), ms: ms, send: body };
+    var offer = data.status === 'error' ? [] : this.memoryOffer((facts || []).concat(heard));
+    if (offer.length) {
+      rec.memo = { state: 'asked', items: offer.map(function (f) { return { key: f.key, value: f.value, on: true }; }) };
+      offer.forEach(function (f) { self.suggested[factSig(f.key, f.value)] = 1; });
+      this.renderMemo(slot.el, rec);
+    }
+    this.turns.push(rec);
     this.markLast(slot.el);
 
     if (data.status !== 'error' && data.status !== 'stopped' && this._conn !== 'online') this.setConn('online');
@@ -2056,14 +3449,19 @@
     this.setConn(this._conn);
     this.updateComposer();
     if (!this.open && !this.inline) this.badge.classList.add('unread');
-    this.live.textContent = String(data.text || '').slice(0, 400);
-    this.scrollDown();
-    if (this.open && document.activeElement !== this.input && !('ontouchstart' in global)) {
+    this.live.textContent = String(data.text || '').slice(0, 400) + (offer.length ? ' ' + (offer.length === 1 ? askFor(offer[0]) : 'Would you like me to remember this for next time?') : '');
+    this.reveal(slot.el);
+    if (this.open && this.view === 'chat' && document.activeElement !== this.input && !('ontouchstart' in global)) {
       try { this.input.focus({ preventScroll: true }); } catch (_) { /* ignore */ }
     }
     this.save();
+    this.emit('answer', data);
     if (typeof this.opts.onAnswer === 'function') { try { this.opts.onAnswer(data); } catch (_) { /* host hook */ } }
   };
+
+  function isConversational(data) {
+    return /^(companion|guide|identity|agent|router|local|instant)$/.test(String(data.source || ''));
+  }
 
   Widget.prototype.markLast = function (turnEl) {
     var prev = this.log.querySelectorAll('.turn.assistant.last');
@@ -2071,6 +3469,34 @@
     turnEl.classList.add('last');
     var retries = this.log.querySelectorAll('.act.retry');
     for (var j = 0; j < retries.length; j++) retries[j].hidden = !turnEl.contains(retries[j]);
+  };
+
+  Widget.prototype.markLastUser = function () {
+    var users = this.log.querySelectorAll('.turn.user');
+    for (var i = 0; i < users.length; i++) users[i].classList.toggle('lastu', i === users.length - 1);
+  };
+
+  Widget.prototype.lastUserEl = function () {
+    var users = this.log.querySelectorAll('.turn.user');
+    return users.length ? users[users.length - 1] : null;
+  };
+
+  Widget.prototype.lastUserIndex = function () {
+    for (var i = this.turns.length - 1; i >= 0; i--) if (this.turns[i].role === 'user') return i;
+    return -1;
+  };
+
+  /** Rebuild the model-facing history from the turns on screen. */
+  Widget.prototype.rebuildHistory = function () {
+    var h = [];
+    this.turns.forEach(function (tr) {
+      if (tr.role === 'user') h.push({ role: 'user', text: tr.send || tr.text });
+      else {
+        var data = tr.data || { text: tr.text };
+        if (isConversational(data) && data.text) h.push({ role: 'assistant', text: String(data.text).slice(0, 1200) });
+      }
+    });
+    this.history = h.slice(-10);
   };
 
   /** Re-ask the last question, replacing the last answer. */
@@ -2089,6 +3515,361 @@
     var lastNode = nodes[nodes.length - 1];
     if (lastNode) lastNode.parentNode.removeChild(lastNode);
     this.submit(u.text, u.send || u.text, { retry: true });
+  };
+
+  // --- editing the last message ---------------------------------------------------
+  Widget.prototype.beginEdit = function () {
+    if (this.busy) return false;
+    var idx = this.lastUserIndex();
+    if (idx < 0) return false;
+    this.cancelEdit(false);
+    var tr = this.turns[idx];
+    var node = this.lastUserEl();
+    this._editing = { index: idx, el: node };
+    this.composerEl.classList.add('editing');
+    if (node) node.classList.add('editing');
+    var ta = this.input;
+    ta.value = tr.text;
+    this.autosize();
+    this.updateComposer();
+    try { ta.focus({ preventScroll: true }); } catch (_) { ta.focus(); }
+    try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (_) { /* ignore */ }
+    return true;
+  };
+
+  Widget.prototype.cancelEdit = function (clear) {
+    if (!this._editing) return;
+    if (this._editing.el) this._editing.el.classList.remove('editing');
+    this._editing = null;
+    this.composerEl.classList.remove('editing');
+    if (clear) { this.input.value = ''; this.autosize(); this.updateComposer(); }
+  };
+
+  /** Replace the edited question (and everything after it), then ask again. */
+  Widget.prototype.commitEdit = function (text) {
+    var ed = this._editing;
+    this.cancelEdit(false);
+    if (!ed || !this.turns[ed.index] || this.turns[ed.index].role !== 'user') { this.submit(text); return; }
+    this.turns.splice(ed.index);
+    var node = ed.el;
+    while (node) {
+      var next = node.nextSibling;
+      if (node.classList && node.classList.contains('turn')) this.log.removeChild(node);
+      node = next;
+    }
+    this.rebuildHistory();
+    // A clarification the removed answer asked no longer stands; the one
+    // before it, if any, does.
+    var prev = this.turns[this.turns.length - 1];
+    this.pending = prev && prev.role === 'assistant' && prev.data && prev.data.pending ? prev.data.pending : null;
+    this.submit(text);
+  };
+
+  // --- memory in the conversation ---------------------------------------------------
+  /** Facts in an outgoing message: straight into conversation context. */
+  Widget.prototype.noticeFacts = function (text) {
+    var facts = detectFacts(text);
+    for (var i = 0; i < facts.length; i++) this.convFacts[facts[i].key] = facts[i].value;
+    return facts;
+  };
+
+  /** Which of these facts are worth asking about: new, not declined, not already known. */
+  Widget.prototype.memoryOffer = function (facts) {
+    if (!this.memoryAllowed() || !this.memory.enabled || !this.memory.suggest) return [];
+    var self = this, byKey = {}, order = [];
+    (facts || []).forEach(function (f) {
+      if (!f || !FIELD[f.key] || !f.value) return;
+      var sig = factSig(f.key, f.value);
+      if (self.suggested[sig] || self.memory.declined.indexOf(sig) >= 0) return;
+      var cur = self.memGet(f.key);
+      if (cur != null && String(cur).toLowerCase() === String(f.value).toLowerCase()) return;
+      if (!byKey[f.key]) order.push(f.key);
+      byKey[f.key] = f;          // one value per field; a later source (the server) wins
+    });
+    return order.map(function (k) { return byKey[k]; }).slice(0, 4);
+  };
+
+  /** The "remember this?" card under a reply, in whichever state it is in. */
+  Widget.prototype.renderMemo = function (turnEl, rec) {
+    var self = this;
+    var old = turnEl.querySelector('.memo');
+    if (old) old.parentNode.removeChild(old);
+    var memo = rec.memo;
+    if (!memo || memo.state === 'dismissed') return;
+    if (memo.state === 'saved') { turnEl.appendChild(this.memoDone(turnEl, rec)); return; }
+    if (!this.memoryAllowed()) return;
+
+    var items = memo.items || [];
+    var card = el('div', 'memo');
+    card.setAttribute('role', 'group');
+    var head = el('div', 'mh');
+    var lot = el('span', 'lotus'); lot.innerHTML = LOTUS; head.appendChild(lot);
+    var q = el('span', null, items.length === 1 ? askFor(items[0]) : 'Would you like me to remember this for next time?');
+    q.id = 'kris-memo-' + uid();
+    head.appendChild(q);
+    card.setAttribute('aria-labelledby', q.id);
+    card.appendChild(head);
+
+    var ul = el('ul');
+    var rows = [];
+    items.forEach(function (it) {
+      var f = FIELD[it.key];
+      if (!f) return;
+      var li = el('li');
+      var cb = null;
+      if (items.length > 1) {
+        cb = el('input', 'check');
+        cb.type = 'checkbox';
+        cb.checked = it.on !== false;
+        cb.setAttribute('aria-label', 'Remember ' + f.label.toLowerCase());
+        li.appendChild(cb);
+      }
+      li.appendChild(el('span', 'k', f.label));
+      var inp = el('input', 'v');
+      inp.type = 'text';
+      inp.value = f.choices ? choiceLabel(it.key, it.value) : it.value;
+      inp.maxLength = f.max || 80;
+      inp.readOnly = !!f.choices;
+      inp.setAttribute('aria-label', f.label + (f.choices ? '' : ' (you can correct it before saving)'));
+      if (cb) cb.addEventListener('change', function () { inp.disabled = !cb.checked; it.on = cb.checked; });
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); yes.click(); } });
+      li.appendChild(inp);
+      ul.appendChild(li);
+      rows.push({ it: it, cb: cb, inp: inp, f: f });
+    });
+    card.appendChild(ul);
+
+    var acts = el('div', 'ma');
+    var yes = el('button', 'btn primary sm', 'Remember');
+    yes.type = 'button';
+    var no = el('button', 'btn ghost sm', 'Not now');
+    no.type = 'button';
+    acts.appendChild(yes); acts.appendChild(no);
+    acts.appendChild(el('span', 'mf', 'You can change this any time in Memory.'));
+    card.appendChild(acts);
+
+    yes.addEventListener('click', function () {
+      if (!self.memory.enabled) {
+        self.toast('Memory is paused, so nothing can be saved.', { label: 'Turn on', fn: function () { self.memEnable(true); } });
+        return;
+      }
+      var saved = [], undo = [], refused = false;
+      rows.forEach(function (r) {
+        if (r.cb && !r.cb.checked) { self.memDecline(r.it.key, r.it.value); return; }
+        var v = r.f.choices ? r.it.value : oneLine(r.inp.value, r.f.max);
+        if (!v) return;
+        var prev = self.memory.fields[r.it.key] ? assign({}, self.memory.fields[r.it.key]) : null;
+        var res = self.memSet(r.it.key, v, 'chat');
+        if (res.ok) {
+          r.it.value = res.value;
+          r.it.prev = prev;
+          saved.push(r.it.key);
+          undo.push({ key: r.it.key, value: res.value, prev: prev });
+          self.convFacts[r.it.key] = res.value;
+        } else if (res.reason === 'sensitive') refused = true;
+      });
+      if (undo.length) self._lastSaved = { at: Date.now(), fields: undo };
+      memo.state = saved.length ? 'saved' : 'dismissed';
+      memo.saved = saved;
+      self.renderMemo(turnEl, rec);
+      if (saved.length) { self.setMood('happy', MOOD_HOLD.happy); self.live.textContent = 'Saved to memory.'; }
+      if (refused) self.toast('Private details like passwords, IDs or contact information aren’t saved.');
+      self.refreshWelcome();
+      self.save();
+      try { self.input.focus({ preventScroll: true }); } catch (_) { /* ignore */ }
+    });
+    no.addEventListener('click', function () {
+      items.forEach(function (it) { self.memDecline(it.key, it.value); });
+      memo.state = 'dismissed';
+      self.renderMemo(turnEl, rec);
+      self.toast('Okay — that stays in this conversation only.');
+      self.save();
+      try { self.input.focus({ preventScroll: true }); } catch (_) { /* ignore */ }
+    });
+    turnEl.appendChild(card);
+  };
+
+  Widget.prototype.memoDone = function (turnEl, rec) {
+    var self = this;
+    var memo = rec.memo;
+    var keys = (memo.saved || []).filter(function (k) { return FIELD[k]; });
+    var d = el('div', 'memo done');
+    var ok = el('span', 'ok'); ok.innerHTML = ICON.check; d.appendChild(ok);
+    var t = el('span');
+    t.appendChild(document.createTextNode('Saved to memory: '));
+    t.appendChild(el('b', null, keys.map(function (k) { return FIELD[k].label.toLowerCase(); }).join(', ') || 'details'));
+    d.appendChild(t);
+    d.appendChild(el('span', 'sp'));
+    var undo = el('button', 'linkbtn', 'Undo');
+    undo.type = 'button';
+    undo.addEventListener('click', function () {
+      (memo.items || []).forEach(function (it) {
+        if (keys.indexOf(it.key) < 0) return;
+        var cur = self.memGet(it.key);
+        // Only if it still holds what this card saved: put back what was there.
+        if (cur != null && String(cur) === String(it.value)) {
+          if (it.prev) self.memPut(it.key, it.prev); else self.memRemove(it.key);
+        }
+        self.memDecline(it.key, it.value);
+      });
+      self._lastSaved = null;
+      memo.state = 'dismissed';
+      self.renderMemo(turnEl, rec);
+      self.toast('Removed from memory.');
+      self.save();
+    });
+    var manage = el('button', 'linkbtn', 'Manage');
+    manage.type = 'button';
+    manage.addEventListener('click', function () { self.showView('memory'); });
+    d.appendChild(undo);
+    d.appendChild(manage);
+    return d;
+  };
+
+  /**
+   * "What do you remember about me?", "remember that …", "forget my role".
+   * Answered here, instantly, and never by a model: what K.R.1.S stores
+   * about a person should not depend on a model's reading of a sentence.
+   * Returns a reply, or null to let the message go to the server.
+   */
+  Widget.prototype.runMemoryCommand = function (cmd) {
+    var self = this;
+    var paused = !this.memory.enabled;
+    var reply = function (text, actions) { return { status: 'answer', source: 'local', instant: true, text: text, actions: actions || undefined }; };
+    var manage = { label: 'Manage memory', run: 'view:memory', icon: 'memory' };
+    var turnOn = { label: 'Turn memory on', run: 'memory:enable', icon: 'memory' };
+
+    if (cmd.type === 'recall') {
+      var items = this.memItems();
+      var only = this.convOnlyFacts();
+      if (paused) {
+        return reply('Memory is paused, so I’m not using anything I’ve saved' + (items.length
+          ? ' — ' + items.length + (items.length === 1 ? ' detail is' : ' details are') + ' kept until you delete ' + (items.length === 1 ? 'it' : 'them') + '.'
+          : '.'), [turnOn, manage]);
+      }
+      if (!items.length && !only.length) {
+        return reply('I haven’t saved anything about you yet. Tell me about your role or your team and I’ll ask before remembering it — or add details to your profile yourself.', [{ label: 'Open profile', run: 'view:profile', icon: 'user' }]);
+      }
+      var lines = [];
+      if (items.length) {
+        lines.push('Here’s what I remember about you:', '');
+        items.forEach(function (it) { lines.push('- **' + it.label + ':** ' + it.display); });
+      } else {
+        lines.push('I haven’t saved anything about you yet.');
+      }
+      if (only.length) {
+        lines.push('', 'Only for this conversation: ' + only.map(function (f) { return FIELD[f.key].label.toLowerCase() + ' ' + (FIELD[f.key].choices ? choiceLabel(f.key, f.value).toLowerCase() : f.value); }).join('; ') + '.');
+      }
+      lines.push('', 'You can change or delete any of it in Memory.');
+      return reply(lines.join('\n'), [manage]);
+    }
+
+    if (cmd.type === 'remember') {
+      var content = oneLine(cmd.content, 320);
+      if (isSensitive(content)) {
+        return reply('That looks like private information — a password, an ID or account number, contact details, or something about health or money — so I won’t save it to memory. It stays in this conversation only.');
+      }
+      if (paused) return reply('Memory is paused, so I can’t keep that beyond this conversation. Turn it on and ask me again.', [turnOn]);
+      var facts = detectFacts(content);
+      if (facts.length) {
+        var saved = [];
+        facts.forEach(function (f) {
+          var prevRec = self.memory.fields[f.key] ? assign({}, self.memory.fields[f.key]) : null;
+          var r = self.memSet(f.key, f.value, 'chat');
+          if (r.ok) { saved.push({ key: f.key, value: r.value, prev: prevRec }); self.convFacts[f.key] = r.value; }
+        });
+        if (saved.length) {
+          this._lastSaved = { at: Date.now(), fields: saved };
+          this.toast('Saved to memory', { label: 'Undo', fn: function () { self.undoFields(saved); } });
+          return reply('Done — I’ll remember that ' + joinAnd(saved.map(function (f) { return sayFact(f.key, f.value); })) + '.', [manage]);
+        }
+      }
+      if (content.length > NOTE_MAX) return reply('That’s a little long for me to keep. Could you put it in a sentence or two?');
+      var note = capFirst(content.replace(/[.!]+$/, ''));
+      var res = this.memAddNote(note, 'chat');
+      if (!res.ok) {
+        return reply(res.reason === 'full'
+          ? 'My memory for notes is full. Delete one in Memory and ask me again.'
+          : 'I couldn’t save that one.', [manage]);
+      }
+      if (res.existed) return reply('I already remember that.', [manage]);
+      this._lastSaved = { at: Date.now(), note: res.id };
+      this.toast('Saved to memory', { label: 'Undo', fn: function () { self.memRemoveNote(res.id); self.toast('Removed from memory.'); } });
+      return reply('Got it. I’ll remember: “' + secondPerson(note) + '.”', [manage]);
+    }
+
+    if (cmd.type === 'forget') {
+      var target = cmd.target;
+      if (FORGET_ALL_RE.test(target)) {
+        var n = this.memItems().length;
+        if (!n) return reply('There’s nothing saved to forget — I don’t remember anything about you yet.');
+        return reply('This clears everything I remember about you (' + n + (n === 1 ? ' detail' : ' details') + '). Your conversations stay as they are.',
+          [{ label: 'Clear all memory', run: 'memory:clear', danger: true, icon: 'trash' }, { label: 'Keep it', run: 'dismiss' }]);
+      }
+      if (FORGET_LAST_RE.test(target)) {
+        var ls = this._lastSaved;
+        if (!ls || Date.now() - ls.at > 30 * 60000) return null;
+        this._lastSaved = null;
+        if (ls.note) this.memRemoveNote(ls.note);
+        if (ls.fields) this.undoFields(ls.fields, true);
+        return reply('Done — I’ve forgotten that.', [manage]);
+      }
+      var named = detectFacts(target.replace(/^that\s+/i, ''));
+      if (named.length) {
+        var nk = named.map(function (f) { return f.key; });
+        nk.forEach(function (k) { delete self.convFacts[k]; });
+        var saved2 = nk.filter(function (k) { return self.memGet(k) != null; });
+        if (!saved2.length) return reply('I hadn’t saved that, so there’s nothing to forget. It won’t be used beyond this message.');
+        var before2 = saved2.map(function (k) { return { key: k, rec: assign({}, self.memory.fields[k]) }; });
+        saved2.forEach(function (k) { self.memRemove(k); });
+        this.toast('Removed from memory', { label: 'Undo', fn: function () { before2.forEach(function (b) { self.memPut(b.key, b.rec); }); self.toast('Restored.'); } });
+        return reply('Done — I’ve forgotten your ' + joinAnd(saved2.map(function (k) { return FIELD[k].label.toLowerCase(); })) + '.', [manage]);
+      }
+      for (var i = 0; i < FORGET_FIELDS.length; i++) {
+        if (!FORGET_FIELDS[i][0].test(target)) continue;
+        var keys = FORGET_FIELDS[i][1];
+        keys.forEach(function (k) { delete self.convFacts[k]; });
+        var have = keys.filter(function (k) { return self.memGet(k) != null; });
+        if (!have.length) return reply('I don’t have your ' + FIELD[keys[0]].label.toLowerCase() + ' saved, so there’s nothing to forget.');
+        var before = have.map(function (k) { return { key: k, rec: assign({}, self.memory.fields[k]) }; });
+        have.forEach(function (k) { self.memRemove(k); });
+        this.toast('Removed from memory', { label: 'Undo', fn: function () { before.forEach(function (b) { self.memPut(b.key, b.rec); }); self.toast('Restored.'); } });
+        return reply('Done — I’ve forgotten your ' + joinAnd(have.map(function (k) { return FIELD[k].label.toLowerCase(); })) + '.', [manage]);
+      }
+      var hit = this.findNote(target);
+      if (hit) {
+        var at = this.memory.notes.indexOf(hit);
+        this.memRemoveNote(hit.id);
+        this.toast('Removed from memory', { label: 'Undo', fn: function () { self.memInsertNote(hit, at); self.toast('Restored.'); } });
+        return reply('Done — I’ve forgotten “' + hit.text + '”.', [manage]);
+      }
+      if (/^\s*(?:please\s+)?(?:forget|stop remembering)\s+(?:about\s+)?(?:my|mine|what you know about me)\b/i.test(cmd.raw || '') && target.split(/\s+/).length <= 4) {
+        return reply('I couldn’t find anything like that in what I remember.', [manage]);
+      }
+      return null;
+    }
+    return null;
+  };
+
+  /** Put back what a "remember" replaced (or remove what it added). */
+  Widget.prototype.undoFields = function (saved, quiet) {
+    var self = this;
+    saved.forEach(function (f) {
+      if (f.prev) self.memPut(f.key, f.prev); else self.memRemove(f.key);
+      delete self.convFacts[f.key];
+    });
+    if (!quiet) this.toast('Removed from memory.');
+  };
+
+  /** Buttons inside a reply. Only section links may come from the server. */
+  Widget.prototype.runAction = function (a, wrap) {
+    var run = String(a && a.run || '');
+    var lock = function () { var b = wrap ? wrap.querySelectorAll('button') : []; for (var i = 0; i < b.length; i++) b[i].disabled = true; };
+    var m = run.match(/^view:(\w+)$/);
+    if (m) { this.showView(m[1]); return; }
+    if (run === 'memory:enable') { this.memEnable(true); this.toast('Memory is on.'); lock(); return; }
+    if (run === 'memory:clear') { this.memClear(); this.toast('Memory cleared.'); lock(); return; }
+    if (run === 'dismiss') { lock(); if (this.input) this.input.focus(); }
   };
 
   // ==========================================================================
@@ -2160,15 +3941,58 @@
     log.scrollTop = log.scrollHeight;
   };
 
-  /** Keep pinned to the bottom while content grows — unless the user scrolled up. */
+  /**
+   * Where the view should rest so an answer can be read from its first line:
+   * the bottom, unless the answer is taller than the view — then its top,
+   * with the tail of the question still showing above it.
+   */
+  Widget.prototype.restingTop = function (turnEl) {
+    var log = this.log;
+    var bottom = log.scrollHeight - log.clientHeight;
+    if (!turnEl || !log.clientHeight || !turnEl.getBoundingClientRect) return bottom;
+    var lr = log.getBoundingClientRect(), ar = turnEl.getBoundingClientRect();
+    if (!ar.height) return bottom;
+    var top = ar.top - lr.top + log.scrollTop - 44;
+    return Math.max(0, Math.min(bottom, top));
+  };
+
+  /** Keep pinned to the new text while it streams — until the answer fills the view, or the user scrolls up. */
   Widget.prototype.stick = function () {
-    if (this._stick) this.log.scrollTop = this.log.scrollHeight;
-    else this.jump.classList.add('on');
+    if (!this._stick) { this.jump.classList.add('on'); return; }
+    var a = this._active && this._active.slot ? this._active.slot.el : null;
+    var log = this.log;
+    var bottom = log.scrollHeight - log.clientHeight;
+    var rest = this.restingTop(a);
+    log.scrollTop = rest;
+    if (rest < bottom - 4) { this._stick = false; this.jump.classList.add('on'); }
+  };
+
+  /** A finished answer: show it from its beginning if it is long. */
+  Widget.prototype.reveal = function (turnEl) {
+    var log = this.log;
+    var bottom = log.scrollHeight - log.clientHeight;
+    if (!this._stick && log.scrollTop < bottom - 48) { this.jump.classList.add('on'); return; }
+    var rest = this.restingTop(turnEl);
+    log.scrollTop = Math.max(log.scrollTop, rest);
+    this._stick = rest >= bottom - 4;
+    this.jump.classList.toggle('on', !this._stick);
   };
 
   Widget.prototype.addUserTurn = function (text, restoring) {
+    var self = this;
     var t = el('div', 'turn user' + (restoring ? '' : ' anim'));
     t.appendChild(el('div', 'bubble', text));
+    var ua = el('div', 'uact');
+    ua.appendChild(el('span', 'ustate'));
+    var copy = toolButton('act copy', ICON.copy, 'Copy message');
+    copy.addEventListener('click', function () {
+      copyText(text, function () { flashCopied(copy); self.live.textContent = 'Copied.'; });
+    });
+    var edit = toolButton('act edit', ICON.edit, 'Edit and resend');
+    edit.addEventListener('click', function () { self.beginEdit(); });
+    ua.appendChild(copy);
+    ua.appendChild(edit);
+    t.appendChild(ua);
     this.log.appendChild(t);
     return t;
   };
@@ -2183,29 +4007,33 @@
 
   Widget.prototype.restore = function (saved) {
     var self = this;
-    if (saved.userName) this.profile.userName = saved.userName;
+    if (saved.id) this.convId = String(saved.id).slice(0, 40);
+    this.convFacts = cleanFacts(saved.facts);
+    this.suggested = saved.suggested && typeof saved.suggested === 'object' ? saved.suggested : {};
     if (saved.pending) this.pending = saved.pending;
-    if (saved.wide) this.setWide(true);
-    var turns = saved.turns || [];
+    var turns = Array.isArray(saved.turns) ? saved.turns.filter(function (t) { return t && (t.role === 'user' || t.role === 'assistant'); }) : [];
+    this.turns = turns;
+    // Nothing is saved half-restored (setWide saves).
+    this._restoring = true;
+    try { if (saved.wide) this.setWide(true); } finally { this._restoring = false; }
     if (!turns.length) return;
     this.hideWelcome();
     var lastSlot = null;
     turns.forEach(function (tr) {
       if (tr.role === 'user') {
-        self.addUserTurn(tr.text, true);
-        self.history.push({ role: 'user', text: tr.send || tr.text });
+        self.addUserTurn(String(tr.text || ''), true);
       } else {
         var slot = self.addAssistantTurn(true);
         var data = tr.data || { status: 'answer', text: tr.text };
         slot.msg.appendChild(self.renderAnswer(data, tr.send, true));
         self.renderMeta(slot, data, tr.send, tr.ms, tr.at);
-        if (/^(companion|guide|identity|agent|router|local|instant)$/.test(String(data.source || '')) && data.text) self.history.push({ role: 'assistant', text: String(data.text).slice(0, 1200) });
+        if (tr.memo) self.renderMemo(slot.el, tr);
         lastSlot = slot;
       }
     });
-    this.turns = turns;
-    this.history = this.history.slice(-10);
+    this.rebuildHistory();
     if (lastSlot) this.markLast(lastSlot.el);
+    this.markLastUser();
     // Restored choices from an old turn should not be clickable any more.
     var olds = this.log.querySelectorAll('.turn.assistant:not(.last) .choices .chip');
     for (var i = 0; i < olds.length; i++) olds[i].disabled = true;
@@ -2219,9 +4047,7 @@
     if (data.text && !isErr) {
       var copy = toolButton('act copy', ICON.copy, 'Copy');
       copy.addEventListener('click', function () {
-        var text = plainText(data);
-        var done = function () { copy.innerHTML = ICON.check; copy.classList.add('on'); setTimeout(function () { copy.innerHTML = ICON.copy; copy.classList.remove('on'); }, 1400); };
-        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done); else done();
+        copyText(plainText(data), function () { flashCopied(copy); self.live.textContent = 'Copied.'; });
       });
       meta.appendChild(copy);
     }
@@ -2244,7 +4070,7 @@
       down.addEventListener('click', pickR(down, 'down', 'fail'));
       meta.appendChild(up); meta.appendChild(down);
     }
-    if (!isErr) {   // an error card carries its own "Try again"
+    if (!isErr && data.source !== 'local') {   // an error card carries its own "Try again"; a local reply has nothing to regenerate
       var retry = toolButton('act retry', ICON.retry, 'Regenerate');
       retry.addEventListener('click', function () { self.retry(); });
       meta.appendChild(retry);
@@ -2262,6 +4088,7 @@
 
     if (data.status === 'error' || data.status === 'unauthenticated' || data.status === 'denied') {
       var n = el('div', 'notice');
+      n.setAttribute('role', 'alert');
       var ic = el('span', 'ic'); ic.innerHTML = ICON.alert; n.appendChild(ic);
       var tx = el('div', 'txt');
       tx.appendChild(el('div', null, data.text || 'Something went wrong.'));
@@ -2328,12 +4155,44 @@
 
     if (data.options && data.options.length) frag.appendChild(this.renderChoices(data.options, restoring));
 
+    var actions = safeActions(data);
+    if (actions.length) frag.appendChild(this.renderActions(actions, restoring));
+
     var chips = [];
     if (this.opts.followups && data.status === 'answer') chips = followupsFor(data);
     if (Array.isArray(data.suggestions)) chips = chips.concat(data.suggestions.slice(0, 4).map(function (s) { return { label: String(s), text: String(s) }; }));
     if (chips.length) frag.appendChild(this.renderFollowups(chips));
     return frag;
   };
+
+  /** Action buttons in a reply. A restored destructive action stays disabled. */
+  Widget.prototype.renderActions = function (actions, restoring) {
+    var self = this;
+    var wrap = el('div', 'chips actions');
+    actions.forEach(function (a) {
+      var b = el('button', 'chip' + (a.danger ? ' danger' : ''));
+      b.type = 'button';
+      if (a.icon && Object.prototype.hasOwnProperty.call(ICON, a.icon)) b.innerHTML = ICON[a.icon];
+      b.appendChild(document.createTextNode(a.label));
+      if (restoring && !/^view:/.test(a.run)) b.disabled = true;
+      b.addEventListener('click', function () { if (!self.busy) self.runAction(a, wrap); });
+      wrap.appendChild(b);
+    });
+    return wrap;
+  };
+
+  /** Actions a reply may carry: anything from K.R.1.S itself, only section links from a server. */
+  function safeActions(data) {
+    if (!Array.isArray(data.actions)) return [];
+    var local = data.source === 'local';
+    return data.actions.filter(function (a) {
+      if (!a || typeof a.label !== 'string' || typeof a.run !== 'string') return false;
+      if (/^view:(history|profile|memory|appearance|settings|about)$/.test(a.run)) return true;
+      return local && /^(memory:enable|memory:clear|dismiss)$/.test(a.run);
+    }).slice(0, 4).map(function (a) {
+      return { label: a.label.slice(0, 40), run: a.run, danger: !!a.danger && local, icon: typeof a.icon === 'string' ? a.icon : null };
+    });
+  }
 
   Widget.prototype.recordReaction = function (reaction, data, question) {
     var payload = {
@@ -2838,15 +4697,1386 @@
   }
 
   // ==========================================================================
+  //  Long-term memory — stored in this browser (per user, per endpoint), or in
+  //  the host's own store when `memoryStore` is given. Every write goes
+  //  through memSet / memAddNote, which refuse private details outright.
+  // ==========================================================================
+  Widget.prototype.memoryAllowed = function () { return this.opts.memory !== false; };
+  Widget.prototype.historyAllowed = function () { return this.opts.history !== false && this.opts.persist !== false; };
+  Widget.prototype.historyOn = function () { return this.historyAllowed() && !!this.settings.history; };
+
+  function emptyMemory() { return { v: 2, enabled: true, suggest: true, fields: {}, notes: [], declined: [], suppressed: [], updated: 0 }; }
+
+  /** Whitelist and tidy a value for one profile field, or null if it is not usable. */
+  function normaliseField(key, value) {
+    var f = FIELD[key];
+    if (!f || value == null || typeof value === 'object') return null;
+    if (f.choices) {
+      for (var i = 0; i < f.choices.length; i++) if (f.choices[i][0] === value) return value;
+      return null;
+    }
+    var v = f.multi
+      ? String(value).replace(/\r/g, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, f.max)
+      : oneLine(value, f.max);
+    if (!v) return null;
+    if (key === 'timezone') return normaliseTz(v);
+    if (key === 'interests') v = v.split(/\s*[,;]\s*/).filter(Boolean).slice(0, 8).join(', ');
+    return v || null;
+  }
+
+  function sanitizeMemory(m) {
+    var out = emptyMemory();
+    if (!m || typeof m !== 'object') return out;
+    out.enabled = m.enabled !== false;
+    out.suggest = m.suggest !== false;
+    if (m.fields && typeof m.fields === 'object') {
+      FIELDS.forEach(function (f) {
+        var r = m.fields[f.key];
+        if (r == null) return;
+        var value = normaliseField(f.key, typeof r === 'object' ? r.value : r);
+        if (value == null) return;
+        var src = typeof r === 'object' && (r.source === 'you' || r.source === 'app') ? r.source : 'chat';
+        out.fields[f.key] = { value: value, source: src, at: (typeof r === 'object' && +r.at) || Date.now() };
+      });
+    }
+    if (Array.isArray(m.notes)) {
+      m.notes.slice(0, NOTES_MAX).forEach(function (n) {
+        var t = oneLine(n && typeof n === 'object' ? n.text : n, NOTE_MAX);
+        if (t && !isSensitive(t)) out.notes.push({ id: String((n && n.id) || uid()).slice(0, 40), text: t, source: n && (n.source === 'you' || n.source === 'app') ? n.source : 'chat', at: (n && +n.at) || Date.now() });
+      });
+    }
+    if (Array.isArray(m.declined)) out.declined = m.declined.filter(function (s) { return typeof s === 'string'; }).slice(-60);
+    if (Array.isArray(m.suppressed)) out.suppressed = m.suppressed.filter(function (k) { return !!FIELD[k]; });
+    out.updated = +m.updated || 0;
+    return out;
+  }
+
+  function cleanFacts(facts) {
+    var out = {};
+    if (!facts || typeof facts !== 'object') return out;
+    FIELDS.forEach(function (f) { var v = normaliseField(f.key, facts[f.key]); if (v != null) out[f.key] = v; });
+    return out;
+  }
+
+  function factSig(key, value) { return key + '|' + String(value).toLowerCase(); }
+
+  /** Facts a server reply says it heard: the legacy name, or a list of { key, value }. */
+  function serverFacts(data) {
+    var out = [];
+    var r = data && data.remember;
+    if (!r || typeof r !== 'object') return out;
+    if (r.userName) { var n = normaliseField('name', r.userName); if (n) out.push({ key: 'name', value: n }); }
+    if (Array.isArray(r.facts)) {
+      r.facts.slice(0, 6).forEach(function (f) {
+        if (!f || !FIELD[f.key] || f.key === 'instructions') return;
+        var v = normaliseField(f.key, f.value);
+        if (v != null && !isSensitive(v)) out.push({ key: f.key, value: v });
+      });
+    }
+    return out;
+  }
+
+  Widget.prototype.memLoad = function () {
+    this.memory = this.memoryAllowed() && !this.opts.memoryStore ? sanitizeMemory(readJSON(this._ns + ':mem')) : emptyMemory();
+    this.applyAppUser();
+    return this.memory;
+  };
+
+  /** A host-provided store answers later; until then memory starts from the account details only. */
+  Widget.prototype.memLoadAsync = function () {
+    var self = this;
+    var st = this.opts.memoryStore;
+    if (!st || typeof st.load !== 'function' || !this.memoryAllowed()) return;
+    Promise.resolve().then(function () { return st.load(); }).then(function (data) {
+      if (!data) return;
+      self.memory = sanitizeMemory(data);
+      self.applyAppUser();
+      self.memChanged({ save: false });
+    }, function () { /* the host's store is unavailable: carry on without it */ });
+  };
+
+  /** Details from the host's own account record, unless the user removed them. */
+  Widget.prototype.applyAppUser = function () {
+    var u = this.opts.user;
+    if (!u || typeof u !== 'object' || !this.memoryAllowed()) return;
+    var m = this.memory;
+    ['name', 'preferredName', 'role', 'company', 'department', 'location', 'timezone'].forEach(function (k) {
+      if (u[k] == null || m.suppressed.indexOf(k) >= 0) return;
+      var v = normaliseField(k, u[k]);
+      if (v == null) return;
+      var cur = m.fields[k];
+      if (!cur || cur.source === 'app') m.fields[k] = { value: v, source: 'app', at: cur && cur.value === v ? cur.at : Date.now() };
+    });
+  };
+
+  Widget.prototype.memSave = function () {
+    if (!this.memoryAllowed()) return;
+    this.memory.updated = Date.now();
+    var st = this.opts.memoryStore;
+    if (st && typeof st.save === 'function') {
+      try { Promise.resolve(st.save(this.memSnapshot(true))).catch(function () { /* host store */ }); } catch (_) { /* host store */ }
+    } else {
+      writeJSON(this._ns + ':mem', this.memory);
+    }
+  };
+
+  /** Everything that shows memory follows a change here. */
+  Widget.prototype.memChanged = function (o) {
+    o = o || {};
+    if (o.save !== false) this.memSave();
+    if (this.welcome && this.welcome.parentNode) this.refreshWelcome();
+    this.refreshDrawer();
+    this.refreshView(this.view, o.from);
+    var snap = this.memSnapshot();
+    this.emit('memory', snap);
+    if (typeof this.opts.onMemoryChange === 'function') { try { this.opts.onMemoryChange(snap); } catch (_) { /* host hook */ } }
+  };
+
+  Widget.prototype.memSnapshot = function (full) {
+    var m = this.memory;
+    var out = { enabled: m.enabled, suggest: m.suggest, fields: {}, notes: m.notes.map(function (n) { return assign({}, n); }), updated: m.updated };
+    for (var k in m.fields) out.fields[k] = assign({}, m.fields[k]);
+    if (full) { out.v = 2; out.declined = m.declined.slice(); out.suppressed = m.suppressed.slice(); }
+    return out;
+  };
+
+  Widget.prototype.memGet = function (key) { var r = this.memory.fields[key]; return r ? r.value : null; };
+
+  /** @returns {{ ok: boolean, value?: string, reason?: 'sensitive'|'invalid'|'timezone'|'unknown'|'off' }} */
+  Widget.prototype.memSet = function (key, value, source, o) {
+    if (!this.memoryAllowed()) return { ok: false, reason: 'off' };
+    if (!FIELD[key]) return { ok: false, reason: 'unknown' };
+    if (value == null || String(value).trim() === '') { this.memRemove(key, o); return { ok: true, value: null }; }
+    var v = normaliseField(key, value);
+    if (v == null) return { ok: false, reason: key === 'timezone' ? 'timezone' : 'invalid' };
+    if (!FIELD[key].choices && (key === 'instructions' ? looksLikeSecret(v) : isSensitive(v))) return { ok: false, reason: 'sensitive' };
+    var i = this.memory.suppressed.indexOf(key);
+    if (i >= 0 && source !== 'app') this.memory.suppressed.splice(i, 1);
+    var cur = this.memory.fields[key];
+    if (cur && cur.value === v && cur.source === (source || 'you')) return { ok: true, value: v };
+    this.memory.fields[key] = { value: v, source: source || 'you', at: Date.now() };
+    this.memChanged(o);
+    return { ok: true, value: v };
+  };
+
+  /** Put a field back exactly as it was (undo). */
+  Widget.prototype.memPut = function (key, rec) {
+    if (!FIELD[key] || !rec) return;
+    this.memory.fields[key] = assign({}, rec);
+    var i = this.memory.suppressed.indexOf(key);
+    if (i >= 0) this.memory.suppressed.splice(i, 1);
+    this.memChanged();
+  };
+
+  Widget.prototype.memRemove = function (key, o) {
+    var r = this.memory.fields[key];
+    if (!r) return false;
+    if (r.source === 'app' && this.memory.suppressed.indexOf(key) < 0) this.memory.suppressed.push(key);
+    delete this.memory.fields[key];
+    this.memChanged(o);
+    return true;
+  };
+
+  Widget.prototype.memAddNote = function (text, source) {
+    if (!this.memoryAllowed()) return { ok: false, reason: 'off' };
+    var t = oneLine(text, NOTE_MAX);
+    if (!t) return { ok: false, reason: 'empty' };
+    if (isSensitive(t)) return { ok: false, reason: 'sensitive' };
+    for (var i = 0; i < this.memory.notes.length; i++) if (this.memory.notes[i].text.toLowerCase() === t.toLowerCase()) return { ok: true, id: this.memory.notes[i].id, existed: true };
+    if (this.memory.notes.length >= NOTES_MAX) return { ok: false, reason: 'full' };
+    var n = { id: uid(), text: t, source: source || 'you', at: Date.now() };
+    this.memory.notes.push(n);
+    this.memChanged();
+    return { ok: true, id: n.id };
+  };
+
+  Widget.prototype.memEditNote = function (id, text) {
+    var t = oneLine(text, NOTE_MAX);
+    if (!t) return { ok: false, reason: 'empty' };
+    if (isSensitive(t)) return { ok: false, reason: 'sensitive' };
+    for (var i = 0; i < this.memory.notes.length; i++) {
+      if (this.memory.notes[i].id === id) { this.memory.notes[i].text = t; this.memory.notes[i].source = 'you'; this.memory.notes[i].at = Date.now(); this.memChanged(); return { ok: true }; }
+    }
+    return { ok: false, reason: 'missing' };
+  };
+
+  Widget.prototype.memRemoveNote = function (id) {
+    for (var i = 0; i < this.memory.notes.length; i++) {
+      if (this.memory.notes[i].id === id) { var n = this.memory.notes.splice(i, 1)[0]; this.memChanged(); return n; }
+    }
+    return null;
+  };
+
+  Widget.prototype.memInsertNote = function (note, index) {
+    if (!note) return;
+    this.memory.notes.splice(Math.max(0, Math.min(index == null ? this.memory.notes.length : index, this.memory.notes.length)), 0, note);
+    this.memChanged();
+  };
+
+  /** Clear everything remembered — and this chat's picture of the user with it. */
+  Widget.prototype.memClear = function () {
+    var m = this.memory;
+    for (var k in m.fields) if (m.fields[k].source === 'app' && m.suppressed.indexOf(k) < 0) m.suppressed.push(k);
+    m.fields = {};
+    m.notes = [];
+    m.declined = [];
+    this.convFacts = {};
+    this._lastSaved = null;
+    this.memChanged();
+    this.save();
+  };
+
+  Widget.prototype.memEnable = function (on) { this.memory.enabled = !!on; this.memChanged(); };
+  Widget.prototype.memSuggest = function (on) { this.memory.suggest = !!on; this.memChanged(); };
+
+  /** "Not now": do not ask about this value again. */
+  Widget.prototype.memDecline = function (key, value) {
+    var sig = factSig(key, value);
+    if (this.memory.declined.indexOf(sig) < 0) this.memory.declined.push(sig);
+    this.memory.declined = this.memory.declined.slice(-60);
+    this.memSave();
+  };
+
+  /** What K.R.1.S remembers, as rows for the Memory list and the recall reply. */
+  Widget.prototype.memItems = function () {
+    var self = this, out = [];
+    FIELDS.forEach(function (f) {
+      var r = self.memory.fields[f.key];
+      if (r) out.push({ kind: 'field', key: f.key, label: f.label, value: r.value, display: f.choices ? choiceLabel(f.key, r.value) : r.value, source: r.source, at: r.at });
+    });
+    this.memory.notes.forEach(function (n) { out.push({ kind: 'note', id: n.id, key: 'note', label: 'Note', value: n.text, display: n.text, source: n.source, at: n.at }); });
+    return out;
+  };
+
+  /** What the user said about themselves in this chat that is not in memory. */
+  Widget.prototype.convOnlyFacts = function () {
+    var self = this, out = [];
+    FIELDS.forEach(function (f) {
+      var v = self.convFacts[f.key];
+      if (v == null) return;
+      var saved = self.memory.enabled ? self.memGet(f.key) : null;
+      if (saved == null || String(saved).toLowerCase() !== String(v).toLowerCase()) out.push({ key: f.key, value: v });
+    });
+    return out;
+  };
+
+  /** Saved memory (when on), with this chat's newer statements laid over it. */
+  Widget.prototype.profileView = function () {
+    var p = {};
+    if (this.memoryAllowed() && this.memory.enabled) for (var k in this.memory.fields) p[k] = this.memory.fields[k].value;
+    for (var c in this.convFacts) p[c] = this.convFacts[c];
+    return p;
+  };
+
+  /** The profile as the server's src/profile.js expects it, or null. */
+  Widget.prototype.profileForServer = function () {
+    var p = this.profileView();
+    var out = {};
+    ['name', 'preferredName', 'role', 'company', 'department', 'location', 'timezone'].forEach(function (k) { if (p[k]) out[k] = p[k]; });
+    if (p.interests) out.interests = String(p.interests).split(/\s*,\s*/).filter(Boolean).slice(0, 8);
+    var style = {};
+    if (p.length && p.length !== 'balanced') style.length = p.length;
+    if (p.tone) style.tone = p.tone;
+    if (style.length || style.tone) out.style = style;
+    if (p.instructions) out.instructions = p.instructions;
+    if (this.memoryAllowed() && this.memory.enabled && this.memory.notes.length) out.notes = this.memory.notes.map(function (n) { return n.text; });
+    return Object.keys(out).length ? out : null;
+  };
+
+  /** What to call the user: what they asked for, else their first name. */
+  Widget.prototype.addressName = function () {
+    var p = this.profileView();
+    return p.preferredName || (p.name ? String(p.name).split(' ')[0] : null) || null;
+  };
+
+  Widget.prototype.findNote = function (target) {
+    var words = String(target || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(function (w) { return w.length > 2 && !NOT_NAME[w]; });
+    if (!words.length) return null;
+    var best = null, bestScore = 0;
+    this.memory.notes.forEach(function (n) {
+      var t = n.text.toLowerCase();
+      var hits = words.filter(function (w) { return t.indexOf(w) >= 0; }).length;
+      var score = hits / words.length;
+      if (score > bestScore) { best = n; bestScore = score; }
+    });
+    return bestScore >= 0.6 ? best : null;
+  };
+
+  /** Host changed who is signed in (or updated their account details). */
+  Widget.prototype.setUser = function (user) {
+    var id = user && user.id != null ? String(user.id).slice(0, 200) : '';
+    this.opts.user = user && typeof user === 'object' ? user : null;
+    if (id !== this._userId) {
+      this.save();
+      this.setIdentity(this.opts.user);
+      this.memLoad();
+      this._skipArchive = true;
+      this.reset();
+      this._skipArchive = false;
+      this.memLoadAsync();
+      this.memChanged({ save: false });
+      return;
+    }
+    this.applyAppUser();
+    this.memChanged();
+  };
+
+  /** Sign-out on a shared machine: nothing about this user stays in this browser. */
+  Widget.prototype.forgetUser = function () {
+    this.histClear();
+    writeJSON(this._ns + ':mem', null);
+    try { var s = store('session'); if (s) s.removeItem(this._storeKey); } catch (_) { /* ignore */ }
+    this.memory = emptyMemory();
+    this._lastSaved = null;
+    this.discardCurrent();
+    this.memChanged({ save: false });
+  };
+
+  // ==========================================================================
+  //  History — past conversations on this device. An index for listing and
+  //  search, and one key per conversation, so saving a message rewrites one
+  //  conversation, not all of them.
+  // ==========================================================================
+  Widget.prototype.histIndex = function () {
+    if (!this.historyAllowed()) return { v: 2, items: [] };
+    var idx = readJSON(this._ns + ':idx');
+    if (!idx || !Array.isArray(idx.items)) idx = { v: 2, items: [] };
+    idx.items = idx.items.filter(function (it) { return it && typeof it.id === 'string'; });
+    idx.items.sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); });
+    return idx;
+  };
+
+  function previewFor(turns) {
+    for (var i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].role === 'assistant' && turns[i].text) return oneLine(String(turns[i].text).replace(/[*_`#>|]/g, ''), 110);
+    }
+    return '';
+  }
+  function keywordsFor(turns) {
+    return turns.filter(function (t) { return t.role === 'user'; }).map(function (t) { return oneLine(t.text); }).join(' ').toLowerCase().slice(0, 600);
+  }
+
+  /** Changes when the conversation does: a new turn, or any card answered. */
+  Widget.prototype.histSig = function () {
+    var last = this.turns[this.turns.length - 1];
+    var memos = this.turns.filter(function (t) { return t.memo; }).map(function (t) { return t.memo.state.charAt(0); }).join('');
+    return this.convId + ':' + this.turns.length + ':' + ((last && last.at) || 0) + ':' + memos;
+  };
+
+  Widget.prototype.histSaveCurrent = function (force) {
+    if (!this.historyOn() || this._skipArchive || this._restoring || !this.turns.length) return;
+    var sig = this.histSig();
+    if (!force && sig === this._histSig) return;
+    this._histSig = sig;
+    var turns = this.turns.slice(-40);
+    var now = Date.now();
+    var idx = this.histIndex();
+    var existing = null;
+    for (var i = 0; i < idx.items.length; i++) if (idx.items[i].id === this.convId) { existing = idx.items[i]; break; }
+    var created = existing ? existing.created : (turns[0].at || now);
+    var rec = { v: 2, id: this.convId, created: created, updated: now, turns: turns, facts: this.convFacts, suggested: this.suggested, pending: this.pending };
+    var key = this._ns + ':c:' + this.convId;
+    var ok = writeJSON(key, rec);
+    // Out of room: let the oldest conversations go first.
+    var guard = 0;
+    while (!ok && guard++ < 8) {
+      var oldest = null;
+      for (var j = idx.items.length - 1; j >= 0; j--) if (idx.items[j].id !== this.convId) { oldest = idx.items[j]; break; }
+      if (!oldest) break;
+      writeLocal(this._ns + ':c:' + oldest.id, null);
+      idx.items.splice(idx.items.indexOf(oldest), 1);
+      ok = writeJSON(key, rec);
+    }
+    if (!ok) { writeJSON(this._ns + ':idx', idx); return; }
+    // A title settles once the conversation has a real question in it.
+    var named = titleFor(this.turns);
+    var title = existing && existing.real ? existing.title : named.title;
+    var meta = { id: this.convId, title: title, real: !!(existing && existing.real) || named.real, created: created, updated: now, count: turns.length, preview: previewFor(turns), kw: keywordsFor(turns) };
+    if (existing) idx.items.splice(idx.items.indexOf(existing), 1);
+    idx.items.unshift(meta);
+    var max = Math.max(1, this.opts.historyMax || 40);
+    while (idx.items.length > max) { var gone = idx.items.pop(); writeLocal(this._ns + ':c:' + gone.id, null); }
+    writeJSON(this._ns + ':idx', idx);
+  };
+
+  /** Start afresh without keeping what is on screen (it was just deleted). */
+  Widget.prototype.discardCurrent = function () {
+    this._skipArchive = true;
+    this.reset();
+    this._skipArchive = false;
+    this.refreshDrawer();
+    if (this.view === 'history') this.refreshView('history');
+  };
+
+  Widget.prototype.histLoad = function (id) {
+    var rec = readJSON(this._ns + ':c:' + id);
+    if (!rec || !Array.isArray(rec.turns)) return null;
+    return rec;
+  };
+
+  Widget.prototype.histDelete = function (id) {
+    var idx = this.histIndex();
+    var meta = null;
+    for (var i = 0; i < idx.items.length; i++) if (idx.items[i].id === id) { meta = idx.items.splice(i, 1)[0]; break; }
+    var rec = this.histLoad(id);
+    writeLocal(this._ns + ':c:' + id, null);
+    writeJSON(this._ns + ':idx', idx);
+    if (id === this.convId) this._histSig = null;
+    return meta ? { meta: meta, rec: rec } : null;
+  };
+
+  Widget.prototype.histRestore = function (removed) {
+    if (!removed || !removed.meta || !removed.rec) return;
+    writeJSON(this._ns + ':c:' + removed.meta.id, removed.rec);
+    var idx = this.histIndex();
+    idx.items = idx.items.filter(function (it) { return it.id !== removed.meta.id; });
+    idx.items.push(removed.meta);
+    writeJSON(this._ns + ':idx', idx);
+  };
+
+  Widget.prototype.histClear = function () {
+    var self = this;
+    this.histIndex().items.forEach(function (it) { writeLocal(self._ns + ':c:' + it.id, null); });
+    writeJSON(this._ns + ':idx', null);
+    this._histSig = null;
+  };
+
+  Widget.prototype.histPrune = function () {
+    if (!this.historyAllowed()) return;
+    var self = this;
+    var idx = this.histIndex();
+    var cutoff = Date.now() - Math.max(1, this.opts.historyDays || 30) * 86400000;
+    var max = Math.max(1, this.opts.historyMax || 40);
+    var keep = [];
+    idx.items.forEach(function (it, i) {
+      if ((it.updated || 0) < cutoff || i >= max) writeLocal(self._ns + ':c:' + it.id, null);
+      else keep.push(it);
+    });
+    if (keep.length !== idx.items.length) { idx.items = keep; writeJSON(this._ns + ':idx', keep.length ? idx : null); }
+  };
+
+  // ==========================================================================
+  //  Sections. Each renders into its pane's body from current state, so a
+  //  change anywhere (a "remember this?" yes, another tab, the host API) is
+  //  reflected the next time — or, for the open section, straight away.
+  // ==========================================================================
+  Widget.prototype.refreshDrawer = function () {
+    var self = this;
+    if (!this.drawer) return;
+    for (var k in this.navItems) {
+      if (k === this.view) this.navItems[k].setAttribute('aria-current', 'page');
+      else this.navItems[k].removeAttribute('aria-current');
+    }
+    if (this.memPill) {
+      this.memPill.textContent = this.memory.enabled ? 'On' : 'Paused';
+      this.memPill.className = 'pill' + (this.memory.enabled ? '' : ' off');
+    }
+    if (this.drecent) {
+      this.drecent.textContent = '';
+      var items = this.histIndex().items.slice(0, 5);
+      if (!items.length) this.drecent.appendChild(el('li', 'dempty', this.historyOn() ? 'Your conversations will appear here.' : 'Chat history is off.'));
+      items.forEach(function (it) {
+        var li = el('li');
+        var b = el('button');
+        b.type = 'button';
+        b.title = it.title;
+        b.appendChild(el('span', 't', it.title));
+        b.appendChild(el('span', 'w', whenLabel(it.updated)));
+        if (it.id === self.convId) b.setAttribute('aria-current', 'true');
+        b.addEventListener('click', function () { self.toggleDrawer(false, true); self.openConversation(it.id); });
+        li.appendChild(b);
+        self.drecent.appendChild(li);
+      });
+    }
+    if (this.duser) {
+      this.duser.textContent = '';
+      var name = this.memGet('name') || this.memGet('preferredName');
+      this.duser.appendChild(userAvatar(name));
+      var txt = el('span', 'txt');
+      txt.appendChild(el('span', 'nm', name || 'Tell ' + this.opts.title + ' about you'));
+      var sub = [this.memGet('role'), this.memGet('company')].filter(Boolean).join(' · ');
+      txt.appendChild(el('span', 'sb', sub || (name ? 'Profile and memory' : 'Your name, role and preferences')));
+      this.duser.appendChild(txt);
+      this.duser.setAttribute('aria-label', 'Profile' + (name ? ': ' + name : ''));
+    }
+  };
+
+  // --- History ---------------------------------------------------------------------
+  Widget.prototype.renderHistory = function (body) {
+    var self = this;
+    if (!this.historyOn()) {
+      body.appendChild(banner(ICON.pause, 'Chat history is off. New conversations aren’t kept on this device.', 'Turn on', function () {
+        self.setSetting('history', true);
+        self.refreshView('history');
+      }, 'hist-on'));
+    }
+    var idx = this.histIndex();
+    if (!idx.items.length) {
+      body.appendChild(emptyState('No conversations yet', 'Your chats are kept on this device for ' + (this.opts.historyDays || 30) + ' days, so you can pick up where you left off.', 'Start a chat', function () { self.newChat(); }));
+      return;
+    }
+    var search = el('div', 'search');
+    search.innerHTML = ICON.search;
+    var q = el('input', 'input');
+    q.type = 'search';
+    q.placeholder = 'Search conversations';
+    q.setAttribute('aria-label', 'Search conversations');
+    q.setAttribute('data-fk', 'hist-search');
+    q.value = this._histQuery || '';
+    search.appendChild(q);
+    body.appendChild(search);
+    var list = el('div');
+    body.appendChild(list);
+
+    var draw = function () {
+      list.textContent = '';
+      var needle = String(q.value || '').toLowerCase().trim();
+      self._histQuery = q.value;
+      var now = Date.now();
+      var items = self.histIndex().items.filter(function (it) {
+        return !needle || (String(it.title) + ' ' + (it.preview || '') + ' ' + (it.kw || '')).toLowerCase().indexOf(needle) >= 0;
+      });
+      if (!items.length) { list.appendChild(el('div', 'empty', 'No conversations match “' + q.value.trim() + '”.')); return; }
+      var groups = [], byName = {};
+      items.forEach(function (it) {
+        var g = bucketOf(it.updated, now);
+        if (!byName[g]) { byName[g] = []; groups.push(g); }
+        byName[g].push(it);
+      });
+      groups.forEach(function (g) {
+        var sec = el('div', 'sec');
+        var h = el('h4', null, g);
+        h.appendChild(el('span', 'count', String(byName[g].length)));
+        sec.appendChild(h);
+        var ul = el('ul', 'hlist');
+        byName[g].forEach(function (it) {
+          var li = el('li', 'hrow');
+          var open = el('button', 'hopen');
+          open.type = 'button';
+          open.setAttribute('data-fk', 'h-' + it.id);
+          var ht = el('div', 'ht');
+          ht.appendChild(el('span', null, it.title));
+          if (it.id === self.convId) ht.appendChild(el('span', 'pill gold', 'Current'));
+          open.appendChild(ht);
+          open.appendChild(el('div', 'hs', it.count + (it.count === 1 ? ' message' : ' messages') + ' · ' + whenLabel(it.updated, now) + (it.preview ? ' · ' + it.preview : '')));
+          open.addEventListener('click', function () { self.openConversation(it.id); });
+          var del = el('button', 'iconbtn del');
+          del.type = 'button';
+          del.innerHTML = ICON.trash;
+          del.setAttribute('aria-label', 'Delete “' + it.title + '”');
+          del.title = 'Delete';
+          del.addEventListener('click', function () {
+            var current = it.id === self.convId;
+            var removed = self.histDelete(it.id);
+            if (current) self.discardCurrent();
+            self.refreshView('history');
+            self.refreshDrawer();
+            self.toast('Conversation deleted', { label: 'Undo', fn: function () {
+              self.histRestore(removed);
+              if (current) self.openConversation(it.id);
+              self.refreshView('history');
+            } });
+          });
+          li.appendChild(open);
+          li.appendChild(del);
+          ul.appendChild(li);
+        });
+        sec.appendChild(ul);
+        list.appendChild(sec);
+      });
+    };
+    q.addEventListener('input', draw);
+    draw();
+    body.appendChild(el('p', 'fhint', 'Kept on this device for ' + (this.opts.historyDays || 30) + ' days. Delete all of it in Settings.'));
+  };
+
+  // --- Profile -----------------------------------------------------------------------
+  Widget.prototype.renderProfile = function (body) {
+    var self = this;
+    if (!this.memory.enabled) {
+      body.appendChild(banner(ICON.pause, 'Memory is paused. ' + this.opts.title + ' won’t use these details until you turn it back on.', 'Turn on', function () { self.memEnable(true); self.refreshView('profile'); }, 'prof-on'));
+    }
+    var name = this.memGet('name') || this.memGet('preferredName');
+    var card = el('div', 'pcard');
+    card.appendChild(userAvatar(name));
+    var txt = el('div', 'txt');
+    txt.appendChild(el('div', 'nm', name || 'Tell ' + this.opts.title + ' about you'));
+    var sub = [this.memGet('role'), this.memGet('company')].filter(Boolean).join(' · ');
+    txt.appendChild(el('div', 'sb', sub || 'These details help ' + this.opts.title + ' tailor its answers and suggestions. All of them are optional.'));
+    card.appendChild(txt);
+    this.profileCard = { name: txt.firstChild, sub: txt.lastChild, avatar: card.firstChild };
+    body.appendChild(card);
+
+    var group = function (title, keys, lead) {
+      var sec = el('div', 'sec');
+      sec.appendChild(el('h4', null, title));
+      if (lead) sec.appendChild(el('p', 'lead', lead));
+      var g = el('div', 'group');
+      keys.forEach(function (k) { g.appendChild(self.fieldRow(k)); });
+      sec.appendChild(g);
+      body.appendChild(sec);
+    };
+    group('About you', ['name', 'preferredName']);
+    group('Work', ['role', 'company', 'department', 'location', 'timezone']);
+    group('Interests', ['interests']);
+    group('How ' + this.opts.title + ' answers', ['length', 'tone', 'instructions']);
+    body.appendChild(el('p', 'fhint', (this.opts.memoryStore ? 'Kept by your app' : 'Kept in this browser') + ' and sent only with your own messages. These details shape how ' + this.opts.title + ' talks — they never change a figure from your records.'));
+  };
+
+  /** Keep the profile card in step with the form, without re-rendering the form. */
+  Widget.prototype.paintProfileCard = function () {
+    var c = this.profileCard;
+    if (!c) return;
+    var name = this.memGet('name') || this.memGet('preferredName');
+    c.name.textContent = name || 'Tell ' + this.opts.title + ' about you';
+    var sub = [this.memGet('role'), this.memGet('company')].filter(Boolean).join(' · ');
+    c.sub.textContent = sub || 'These details help ' + this.opts.title + ' tailor its answers and suggestions. All of them are optional.';
+    var fresh = userAvatar(name);
+    c.avatar.parentNode.replaceChild(fresh, c.avatar);
+    c.avatar = fresh;
+  };
+
+  /** One profile field: label, where the value came from, the control, and a quiet "Saved". */
+  Widget.prototype.fieldRow = function (key) {
+    var self = this;
+    var f = FIELD[key];
+    var wrap = el('div', 'field');
+    var lab = el('div', 'flabel');
+    var id = 'kris-f-' + key;
+    var l = el('label', null, f.long || f.label);
+    l.htmlFor = id;
+    lab.appendChild(l);
+    var src = el('span', 'src');
+    lab.appendChild(src);
+    var saved = el('span', 'saved');
+    saved.innerHTML = ICON.check;
+    saved.appendChild(document.createTextNode('Saved'));
+    saved.setAttribute('aria-hidden', 'true');
+    lab.appendChild(saved);
+    wrap.appendChild(lab);
+
+    var paint = function () {
+      var r = self.memory.fields[key];
+      src.hidden = !r || r.source === 'you';
+      if (r && r.source === 'chat') { src.className = 'src'; src.textContent = 'Learned in chat · ' + dateLabel(r.at); }
+      else if (r && r.source === 'app') { src.className = 'src app'; src.textContent = 'From your account'; }
+    };
+    var done = function () {
+      paint();
+      self.paintProfileCard();
+      saved.classList.add('on');
+      clearTimeout(saved._t);
+      saved._t = setTimeout(function () { saved.classList.remove('on'); }, 1400);
+      self.live.textContent = (f.label) + ' saved.';
+    };
+    paint();
+
+    if (f.choices) {
+      var defaults = { length: 'balanced', tone: 'warm' };
+      var seg = segmented(f.choices, this.memGet(key) || defaults[key], function (v) {
+        var r = self.memSet(key, v, 'you', { from: 'profile' });
+        if (r.ok) done();
+      }, f.label, 'f-' + key);
+      seg.classList.add('full');
+      seg.id = id;
+      wrap.appendChild(seg);
+      return wrap;
+    }
+
+    var inp = el(f.multi ? 'textarea' : 'input', f.multi ? 'textarea' : 'input');
+    if (!f.multi) inp.type = 'text';
+    inp.id = id;
+    inp.maxLength = f.max;
+    inp.value = this.memGet(key) || '';
+    inp.setAttribute('data-fk', 'f-' + key);
+    inp.setAttribute('autocomplete', 'off');
+    var tzNow = detectedTz();
+    inp.placeholder = key === 'timezone' ? (tzNow ? 'Detected: ' + tzNow : 'e.g. Asia/Kolkata') : (f.ph || '');
+    if (key === 'timezone' || key === 'name' || key === 'preferredName') inp.setAttribute('spellcheck', 'false');
+    if (key === 'timezone') {
+      var zones = [];
+      try { if (typeof Intl.supportedValuesOf === 'function') zones = Intl.supportedValuesOf('timeZone'); } catch (_) { zones = []; }
+      if (zones.length) {
+        var dl = el('datalist');
+        dl.id = 'kris-tz-list';
+        zones.forEach(function (z) { var o = el('option'); o.value = z; dl.appendChild(o); });
+        wrap.appendChild(dl);
+        inp.setAttribute('list', dl.id);
+      }
+    }
+    var hint = el('div', 'fhint', f.hint || (key === 'timezone' ? 'Used for “today”, “yesterday” and times in answers. Leave empty to follow this device.' : ''));
+    hint.hidden = !hint.textContent;
+    var baseHint = hint.textContent;
+    var commit = function () {
+      var v = f.multi ? inp.value.trim() : oneLine(inp.value, f.max);
+      var cur = self.memGet(key) || '';
+      if (v === String(cur)) return;
+      var r = self.memSet(key, v, 'you', { from: 'profile' });
+      if (r.ok) {
+        inp.removeAttribute('aria-invalid');
+        hint.className = 'fhint';
+        hint.textContent = baseHint;
+        hint.hidden = !baseHint;
+        if (r.value != null && !f.multi) inp.value = r.value;
+        done();
+      } else {
+        inp.setAttribute('aria-invalid', 'true');
+        hint.hidden = false;
+        hint.className = 'fhint err';
+        hint.textContent = r.reason === 'sensitive'
+          ? 'That looks like private information (a password, ID number, contact, health or financial detail), so it isn’t saved.'
+          : r.reason === 'timezone' ? 'Use a time zone like Asia/Kolkata or Europe/London.' : 'That couldn’t be saved.';
+      }
+    };
+    inp.addEventListener('change', commit);
+    if (!f.multi) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+    hint.id = id + '-hint';
+    inp.setAttribute('aria-describedby', hint.id);
+    wrap.appendChild(inp);
+    wrap.appendChild(hint);
+    return wrap;
+  };
+
+  // --- Memory ---------------------------------------------------------------------------
+  Widget.prototype.renderMemory = function (body) {
+    var self = this;
+    var m = this.memory;
+    var top = el('div', 'sec');
+    var g = el('div', 'group');
+    g.appendChild(switchRow('Memory', 'Let ' + this.opts.title + ' remember details you approve, across conversations.', m.enabled, function (on) {
+      self.memEnable(on);
+      self.toast(on ? 'Memory is on.' : 'Memory is paused. Nothing saved is used or added.');
+    }, 'mem-on'));
+    g.appendChild(switchRow('Ask to remember useful details', 'When you mention your role, team or preferences, ' + this.opts.title + ' offers to save them. Nothing is saved without a yes.', m.suggest && m.enabled, function (on) {
+      self.memSuggest(on);
+    }, 'mem-suggest', !m.enabled));
+    top.appendChild(g);
+    body.appendChild(top);
+
+    // Long-term
+    var items = this.memItems();
+    var sec = el('div', 'sec');
+    var h = el('h4', null, this.opts.title + ' remembers');
+    h.appendChild(el('span', 'count', items.length ? String(items.length) : ''));
+    sec.appendChild(h);
+    if (!m.enabled && items.length) sec.appendChild(el('p', 'lead', 'Paused — kept, but not used, until you turn memory back on.'));
+    var list = el('div', 'group');
+    if (!items.length) {
+      list.appendChild(emptyState('Nothing saved yet', 'Tell ' + this.opts.title + ' about your role or your team and it will ask before remembering — or fill in your profile.', 'Open profile', function () { self.showView('profile'); }));
+    }
+    items.forEach(function (it) { list.appendChild(self.memoryRow(it)); });
+    if (m.enabled) {
+      var add = el('form', 'addrow');
+      add.setAttribute('novalidate', '');
+      var ai = el('input', 'input');
+      ai.type = 'text';
+      ai.maxLength = NOTE_MAX;
+      ai.placeholder = 'Add something to remember…';
+      ai.setAttribute('aria-label', 'Add something for ' + self.opts.title + ' to remember');
+      ai.setAttribute('data-fk', 'mem-add');
+      var ab = el('button', 'btn sm', 'Add');
+      ab.type = 'submit';
+      add.appendChild(ai);
+      add.appendChild(ab);
+      add.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var v = ai.value.trim();
+        if (!v) { ai.focus(); return; }
+        var facts = detectFacts(v);
+        var res;
+        if (facts.length === 1 && v.split(/\s+/).length <= 12) res = self.memSet(facts[0].key, facts[0].value, 'you');
+        else res = self.memAddNote(v, 'you');
+        if (!res.ok) {
+          self.toast(res.reason === 'sensitive' ? 'That looks like private information, so it isn’t saved.' : res.reason === 'full' ? 'Memory is full — delete a note first.' : 'That couldn’t be saved.');
+          return;
+        }
+        self.toast('Saved to memory.');
+        var again = self.panes.memory && self.panes.memory.body.querySelector('[data-fk="mem-add"]');
+        if (again) again.focus();
+      });
+      list.appendChild(add);
+    }
+    sec.appendChild(list);
+    body.appendChild(sec);
+
+    // This conversation only
+    var cs = el('div', 'sec');
+    cs.appendChild(el('h4', null, 'This conversation only'));
+    cs.appendChild(el('p', 'lead', 'Used while this chat is open, and left behind when you start a new one.'));
+    var cg = el('div', 'group');
+    var only = this.convOnlyFacts();
+    only.forEach(function (f) {
+      var row = el('div', 'mrow');
+      var mt = el('div', 'mt');
+      mt.appendChild(el('div', 'mk', FIELD[f.key].label));
+      mt.appendChild(el('div', 'mv', FIELD[f.key].choices ? choiceLabel(f.key, f.value) : f.value));
+      mt.appendChild(el('div', 'mm', 'Mentioned in this chat'));
+      row.appendChild(mt);
+      if (m.enabled) {
+        var keep = el('button', 'btn sm', 'Remember');
+        keep.type = 'button';
+        keep.setAttribute('data-fk', 'keep-' + f.key);
+        keep.addEventListener('click', function () {
+          var r = self.memSet(f.key, f.value, 'chat');
+          self.toast(r.ok ? 'Saved to memory.' : 'That couldn’t be saved.');
+        });
+        row.appendChild(keep);
+      }
+      cg.appendChild(row);
+    });
+    var vessel = this.context && (this.context.vesselName || this.context.vesselId);
+    if (vessel) cg.appendChild(infoRow('Vessel on this page', vessel, 'Questions default to it unless you name another'));
+    if (this.turns.length) cg.appendChild(infoRow('Recent messages', this.turns.length + (this.turns.length === 1 ? ' message' : ' messages') + ' in this chat', 'The latest few go with each question so follow-ups make sense'));
+    if (!cg.childNodes.length) cg.appendChild(el('div', 'empty', 'Nothing yet — this fills in as you chat.'));
+    cs.appendChild(cg);
+    body.appendChild(cs);
+
+    // Clear
+    if (items.length) {
+      var ds = el('div', 'sec');
+      var dg = el('div', 'group');
+      var row = el('div', 'row');
+      var rt = el('div', 'rt');
+      rt.appendChild(el('div', 'rl', 'Clear all memory'));
+      rt.appendChild(el('div', 'rd', 'Removes everything above. Your conversations aren’t affected.'));
+      row.appendChild(rt);
+      row.appendChild(confirmButton('Clear all', 'Confirm', function () { self.memClear(); self.toast('Memory cleared.'); }, 'mem-clear'));
+      dg.appendChild(row);
+      ds.appendChild(dg);
+      body.appendChild(ds);
+    }
+    body.appendChild(el('p', 'fhint', (this.opts.memoryStore ? 'Kept by your app' : 'Kept in this browser') + ' and sent only with your own messages; the ' + this.opts.title + ' server keeps none of it. Passwords, ID numbers, contact, health and financial details are never saved.'));
+  };
+
+  Widget.prototype.memoryRow = function (it) {
+    var self = this;
+    var row = el('div', 'mrow');
+    var mt = el('div', 'mt');
+    mt.appendChild(el('div', 'mk', it.label));
+    var mv = el('div', 'mv', it.display);
+    mt.appendChild(mv);
+    mt.appendChild(el('div', 'mm', (it.source === 'chat' ? 'Learned in chat' : it.source === 'app' ? 'From your account' : 'Added by you') + ' · ' + dateLabel(it.at)));
+    row.appendChild(mt);
+    var btns = el('div', 'mbtns');
+    var ed = el('button', 'iconbtn');
+    ed.type = 'button';
+    ed.innerHTML = ICON.edit;
+    ed.setAttribute('aria-label', 'Edit ' + it.label.toLowerCase());
+    ed.title = 'Edit';
+    ed.setAttribute('data-fk', 'ed-' + (it.id || it.key));
+    ed.addEventListener('click', function () {
+      if (it.kind === 'field') {
+        self.showView('profile');
+        var target = self.panes.profile && self.panes.profile.body.querySelector('#kris-f-' + it.key);
+        if (target) setTimeout(function () { try { target.focus(); if (target.scrollIntoView) target.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ } }, 40);
+        return;
+      }
+      // a note is edited in place
+      if (row.querySelector('.medit')) return;
+      mv.hidden = true;
+      var f = el('form', 'medit');
+      f.setAttribute('novalidate', '');
+      var inp = el('input', 'input');
+      inp.type = 'text';
+      inp.maxLength = NOTE_MAX;
+      inp.value = it.value;
+      inp.setAttribute('aria-label', 'Edit note');
+      var ok = el('button', 'btn sm primary', 'Save'); ok.type = 'submit';
+      var no = el('button', 'btn sm ghost', 'Cancel'); no.type = 'button';
+      f.appendChild(inp); f.appendChild(ok); f.appendChild(no);
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var r = self.memEditNote(it.id, inp.value);
+        if (!r.ok) self.toast(r.reason === 'sensitive' ? 'That looks like private information, so it isn’t saved.' : 'That couldn’t be saved.');
+      });
+      no.addEventListener('click', function () { self.refreshView('memory'); });
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); self.refreshView('memory'); } });
+      mt.appendChild(f);
+      inp.focus();
+    });
+    var del = el('button', 'iconbtn del');
+    del.type = 'button';
+    del.innerHTML = ICON.trash;
+    del.setAttribute('aria-label', 'Forget ' + (it.kind === 'note' ? 'this note' : it.label.toLowerCase()));
+    del.title = 'Forget';
+    del.addEventListener('click', function () {
+      if (it.kind === 'note') {
+        var at = self.memory.notes.map(function (n) { return n.id; }).indexOf(it.id);
+        var gone = self.memRemoveNote(it.id);
+        self.toast('Forgotten', { label: 'Undo', fn: function () { self.memInsertNote(gone, at); } });
+      } else {
+        var before = assign({}, self.memory.fields[it.key]);
+        self.memRemove(it.key);
+        delete self.convFacts[it.key];
+        self.toast('Forgotten', { label: 'Undo', fn: function () { self.memPut(it.key, before); } });
+      }
+    });
+    btns.appendChild(ed);
+    btns.appendChild(del);
+    row.appendChild(btns);
+    return row;
+  };
+
+  // --- Appearance ---------------------------------------------------------------------------
+  Widget.prototype.renderAppearance = function (body) {
+    var self = this;
+    var s = this.settings;
+    var sec = el('div', 'sec');
+    sec.appendChild(el('h4', null, 'Theme'));
+    var grid = el('div', 'themes');
+    grid.setAttribute('role', 'radiogroup');
+    grid.setAttribute('aria-label', 'Theme');
+    var cards = [];
+    [['light', 'Light'], ['dark', 'Dark'], ['auto', 'System']].forEach(function (t, i) {
+      var b = el('button', 'tcard');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.setAttribute('data-fk', 'theme-' + t[0]);
+      var prev = el('span', 'tprev ' + t[0]);
+      ['band', 'b1', 'b2', 'b3'].forEach(function (c) { prev.appendChild(el('i', c)); });
+      b.appendChild(prev);
+      var tl = el('span', 'tl');
+      tl.appendChild(el('span', null, t[1]));
+      var ck = el('span'); ck.innerHTML = ICON.check; tl.appendChild(ck);
+      b.appendChild(tl);
+      var on = self._themePref === t[0];
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+      b.addEventListener('click', function () { self.setTheme(t[0], true); });
+      b.addEventListener('keydown', function (e) {
+        var d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+        if (!d) return;
+        e.preventDefault();
+        var n = cards[(i + d + cards.length) % cards.length];
+        n.focus();
+        n.click();
+      });
+      cards.push(b);
+      grid.appendChild(b);
+    });
+    sec.appendChild(grid);
+    sec.appendChild(el('p', 'foot-note', 'System follows your device’s light or dark setting.'));
+    body.appendChild(sec);
+
+    var ts = el('div', 'sec');
+    ts.appendChild(el('h4', null, 'Text and spacing'));
+    var tg = el('div', 'group');
+    var sizeRow = el('div', 'row stack');
+    sizeRow.appendChild(rowText('Text size'));
+    sizeRow.appendChild(segmented([['s', 'Small'], ['m', 'Default'], ['l', 'Large']], s.textSize, function (v) { self.setSetting('textSize', v); }, 'Text size', 'size', true));
+    sizeRow.appendChild(el('p', 'sample', this.opts.title + ' answers at this size. Every figure still comes straight from your records.'));
+    tg.appendChild(sizeRow);
+    var denRow = el('div', 'row stack');
+    denRow.appendChild(rowText('Density', 'Compact fits more of the conversation on screen.'));
+    denRow.appendChild(segmented([['comfortable', 'Comfortable'], ['compact', 'Compact']], s.density, function (v) { self.setSetting('density', v); }, 'Density', 'density', true));
+    tg.appendChild(denRow);
+    ts.appendChild(tg);
+    body.appendChild(ts);
+
+    var cs = el('div', 'sec');
+    cs.appendChild(el('h4', null, 'Chat'));
+    var cg = el('div', 'group');
+    cg.appendChild(switchRow('Show times', 'When each reply arrived and how long it took.', s.timestamps, function (on) { self.setSetting('timestamps', on); }, 'times'));
+    cs.appendChild(cg);
+    body.appendChild(cs);
+
+    var ms = el('div', 'sec');
+    ms.appendChild(el('h4', null, 'Motion'));
+    var mg = el('div', 'group');
+    mg.appendChild(switchRow('Reduce motion', 'Turns off animations and transitions. When off, ' + this.opts.title + ' follows your system setting' + (this._osReducedMotion ? ' — which asks for reduced motion right now.' : '.'), s.motion === 'reduce', function (on) { self.setSetting('motion', on ? 'reduce' : 'system'); }, 'motion'));
+    mg.appendChild(switchRow('Animate ' + this.opts.title, 'Blinking, the swaying feather, the turning aura and eyes that follow the cursor.', s.character, function (on) { self.setSetting('character', on); }, 'character'));
+    ms.appendChild(mg);
+    body.appendChild(ms);
+  };
+
+  // --- Settings ---------------------------------------------------------------------------------
+  Widget.prototype.renderSettings = function (body) {
+    var self = this;
+    var s = this.settings;
+    var mod = isMac() ? '⌘' : 'Ctrl';
+
+    var cs = el('div', 'sec');
+    cs.appendChild(el('h4', null, 'Chat'));
+    var cg = el('div', 'group');
+    cg.appendChild(switchRow('Send with Enter', 'When off, Enter adds a new line and ' + mod + ' + Enter sends.', s.sendWithEnter, function (on) { self.setSetting('sendWithEnter', on); }, 'enter'));
+    cg.appendChild(switchRow('Suggested follow-ups', 'Next-question chips under data answers.', s.followups, function (on) { self.setSetting('followups', on); }, 'followups'));
+    cs.appendChild(cg);
+    body.appendChild(cs);
+
+    if (this.historyAllowed()) {
+      var hs = el('div', 'sec');
+      hs.appendChild(el('h4', null, 'History'));
+      var hg = el('div', 'group');
+      var days = this.opts.historyDays || 30;
+      hg.appendChild(switchRow('Keep chat history on this device', 'Conversations are kept for ' + days + ' days, then deleted automatically.', s.history, function (on) {
+        self.setSetting('history', on);
+        self.toast(on ? 'Chat history is on.' : 'Chat history is off. Saved conversations stay until you delete them.');
+      }, 'history'));
+      var n = this.histIndex().items.length;
+      var row = el('div', 'row');
+      var rt = el('div', 'rt');
+      rt.appendChild(el('div', 'rl', 'Delete all chat history'));
+      rt.appendChild(el('div', 'rd', n ? n + (n === 1 ? ' conversation' : ' conversations') + ' on this device.' : 'Nothing saved.'));
+      row.appendChild(rt);
+      var delAll = confirmButton('Delete all', 'Confirm', function () {
+        self.histClear();
+        self.discardCurrent();
+        self.showView('settings', true);
+        self.refreshView('settings');
+        self.toast('Chat history deleted.');
+      }, 'hist-clear');
+      delAll.disabled = !n;
+      row.appendChild(delAll);
+      hg.appendChild(row);
+      hs.appendChild(hg);
+      body.appendChild(hs);
+    }
+
+    var ks = el('div', 'sec');
+    ks.appendChild(el('h4', null, 'Keyboard'));
+    var kg = el('div', 'group');
+    var keys = el('ul', 'keys');
+    var addKey = function (what, combo) {
+      var li = el('li');
+      li.appendChild(el('span', null, what));
+      var c = el('span');
+      combo.forEach(function (k, i) { if (i) c.appendChild(document.createTextNode('+')); c.appendChild(el('kbd', null, k)); });
+      li.appendChild(c);
+      keys.appendChild(li);
+    };
+    addKey('Send', s.sendWithEnter ? ['Enter'] : [mod, 'Enter']);
+    addKey('New line', s.sendWithEnter ? ['Shift', 'Enter'] : ['Enter']);
+    addKey('Edit your last message', ['↑']);
+    addKey('Stop a reply', ['Esc']);
+    addKey('Back, or close the panel', ['Esc']);
+    if (this._hotkey) addKey('Open or close ' + this.opts.title, hotkeyLabel(this._hotkey));
+    kg.appendChild(keys);
+    ks.appendChild(kg);
+    body.appendChild(ks);
+
+    var rs = el('div', 'sec');
+    rs.appendChild(el('h4', null, 'Reset'));
+    var rg = el('div', 'group');
+    var r1 = el('div', 'row');
+    var r1t = el('div', 'rt');
+    r1t.appendChild(el('div', 'rl', 'Reset appearance and settings'));
+    r1t.appendChild(el('div', 'rd', 'Theme, text size, motion and chat preferences. Memory and history are kept.'));
+    r1.appendChild(r1t);
+    r1.appendChild(confirmButton('Reset', 'Confirm', function () { self.resetSettings(); self.refreshView('settings'); self.toast('Settings reset.'); }, 'reset', true));
+    rg.appendChild(r1);
+    var r2 = el('div', 'row');
+    var r2t = el('div', 'rt');
+    r2t.appendChild(el('div', 'rl', 'Delete everything on this device'));
+    r2t.appendChild(el('div', 'rd', 'Memory, chat history and settings kept by ' + this.opts.title + ' in this browser.'));
+    r2.appendChild(r2t);
+    r2.appendChild(confirmButton('Delete', 'Confirm', function () {
+      self.forgetUser();
+      self.resetSettings();
+      self.showView('settings', true);
+      self.refreshView('settings');
+      self.toast('Everything on this device was deleted.');
+    }, 'wipe'));
+    rg.appendChild(r2);
+    rs.appendChild(rg);
+    body.appendChild(rs);
+  };
+
+  // --- About ------------------------------------------------------------------------------------
+  Widget.prototype.renderAbout = function (body) {
+    var self = this;
+    var a = el('div', 'about');
+    var hero = el('div', 'hero blinking');
+    hero.appendChild(el('span', 'ring'));
+    portrait(hero, 'a', false).svg.setAttribute('data-mood', 'happy');
+    a.appendChild(hero);
+    a.appendChild(el('h3', null, this.opts.title));
+    a.appendChild(el('p', 'say', 'Say it “Kris” · ' + (this.opts.tagline || 'your guide')));
+    a.appendChild(el('p', 'meaning', NAME_MEANING));
+    body.appendChild(a);
+
+    var h = this.health || null;
+    var ss = el('div', 'sec');
+    ss.appendChild(el('h4', null, 'Status'));
+    var sg = el('div', 'group');
+    var conn = { online: ['Online', 'okc'], waking: ['Waking up…', ''], connecting: ['Connecting…', ''], offline: ['Can’t reach it', 'badc'] }[this._conn] || ['—', ''];
+    sg.appendChild(kvRow('Server', conn[0], conn[1]));
+    if (h && h.build) sg.appendChild(kvRow('Server build', String(h.build)));
+    if (h && typeof h.database === 'boolean') sg.appendChild(kvRow('Records database', h.database ? 'Configured' : 'Not configured', h.database ? '' : 'badc'));
+    if (h && h.companion) sg.appendChild(kvRow('Conversation model', h.companion.enabled === false ? 'Off' : String(h.companion.model || 'Configured')));
+    sg.appendChild(kvRow('Widget', VERSION));
+    ss.appendChild(sg);
+    var refresh = el('button', 'btn sm', 'Check again');
+    refresh.type = 'button';
+    refresh.style.marginTop = '10px';
+    refresh.setAttribute('data-fk', 'about-refresh');
+    refresh.addEventListener('click', function () {
+      refresh.disabled = true;
+      self.warm(true).then(function () { self.refreshView('about'); });
+    });
+    ss.appendChild(refresh);
+    body.appendChild(ss);
+
+    var ps = el('div', 'sec');
+    ps.appendChild(el('h4', null, 'How your information is handled'));
+    var pg = el('div', 'group');
+    var ul = el('ul', 'plist');
+    [
+      'Every figure comes straight from your records. If they don’t hold the answer, ' + this.opts.title + ' says so.',
+      'Memory is opt-in: ' + this.opts.title + ' asks before remembering anything, and never keeps passwords, ID numbers, contact, health or financial details.',
+      'Memory and chat history stay ' + (this.opts.memoryStore ? 'with your app' : 'in this browser') + '. They are sent only with your own messages, and the server keeps none of it.',
+      this.historyAllowed() ? 'Chat history is deleted automatically after ' + (this.opts.historyDays || 30) + ' days.' : 'Chat history is not kept.'
+    ].forEach(function (t) { ul.appendChild(el('li', null, t)); });
+    pg.appendChild(ul);
+    ps.appendChild(pg);
+    body.appendChild(ps);
+  };
+
+  // --- toasts ---------------------------------------------------------------------------------
+  /** A short confirmation above the composer, optionally with one action (Undo). */
+  Widget.prototype.toast = function (text, action, ms) {
+    var self = this;
+    var box = this.toasts;
+    if (!box) return;
+    clearTimeout(this._toastT);
+    box.textContent = '';
+    var h = this.composerEl && this.composerEl.offsetHeight;
+    box.style.bottom = (this.view === 'chat' && h ? h + 8 : 16) + 'px';
+    var t = el('div', 'toast' + (action ? '' : ' solo'));
+    t.appendChild(el('span', null, text));
+    var dismiss = function () {
+      clearTimeout(self._toastT);
+      t.classList.add('out');
+      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, self._reducedMotion ? 0 : 180);
+    };
+    if (action && typeof action.fn === 'function') {
+      var b = el('button', null, action.label || 'Undo');
+      b.type = 'button';
+      b.addEventListener('click', function () { dismiss(); try { action.fn(); } catch (_) { /* ignore */ } });
+      t.appendChild(b);
+    }
+    box.appendChild(t);
+    this._toastT = setTimeout(dismiss, ms || (action ? 6500 : 3200));
+  };
+
+  // --- building blocks -------------------------------------------------------------------------
+  function userAvatar(name) {
+    var a = el('span', 'uavatar');
+    a.setAttribute('aria-hidden', 'true');
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length) a.textContent = (parts[0].charAt(0) + (parts.length > 1 ? parts[parts.length - 1].charAt(0) : '')).toUpperCase();
+    else a.innerHTML = ICON.user;
+    return a;
+  }
+
+  function rowText(label, desc, id) {
+    var rt = el('div', 'rt');
+    var l = el('div', 'rl', label);
+    if (id) l.id = id;
+    rt.appendChild(l);
+    if (desc) rt.appendChild(el('div', 'rd', desc));
+    return rt;
+  }
+
+  function switchRow(label, desc, on, onChange, fk, disabled) {
+    var row = el('div', 'row' + (disabled ? ' disabled' : ''));
+    var id = 'kris-s-' + fk;
+    row.appendChild(rowText(label, desc, id));
+    var sw = el('button', 'switch');
+    sw.type = 'button';
+    sw.setAttribute('role', 'switch');
+    sw.setAttribute('aria-checked', on ? 'true' : 'false');
+    sw.setAttribute('aria-labelledby', id);
+    sw.setAttribute('data-fk', 'sw-' + fk);
+    sw.disabled = !!disabled;
+    sw.addEventListener('click', function () {
+      var next = sw.getAttribute('aria-checked') !== 'true';
+      sw.setAttribute('aria-checked', next ? 'true' : 'false');
+      onChange(next);
+    });
+    row.appendChild(sw);
+    return row;
+  }
+
+  function segmented(choices, value, onPick, label, fk, full) {
+    var seg = el('div', 'seg' + (full ? ' full' : ''));
+    seg.setAttribute('role', 'radiogroup');
+    seg.setAttribute('aria-label', label);
+    var btns = [];
+    var set = function (v) {
+      var any = false;
+      btns.forEach(function (b) {
+        var on = b.getAttribute('data-v') === v;
+        any = any || on;
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+      });
+      if (!any && btns[0]) btns[0].tabIndex = 0;
+    };
+    choices.forEach(function (c, i) {
+      var b = el('button', null, c[1]);
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.setAttribute('data-v', c[0]);
+      if (fk) b.setAttribute('data-fk', fk + '-' + c[0]);
+      b.addEventListener('click', function () { set(c[0]); onPick(c[0]); });
+      b.addEventListener('keydown', function (e) {
+        var d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+        if (!d) return;
+        e.preventDefault();
+        var n = btns[(i + d + btns.length) % btns.length];
+        n.focus();
+        n.click();
+      });
+      btns.push(b);
+      seg.appendChild(b);
+    });
+    set(value);
+    return seg;
+  }
+
+  /** A destructive button that asks once more before it acts. */
+  function confirmButton(label, armedLabel, onConfirm, fk, neutral) {
+    var b = el('button', 'btn sm' + (neutral ? '' : ' danger'), label);
+    b.type = 'button';
+    b.setAttribute('data-fk', 'cf-' + fk);
+    var t = null;
+    var disarm = function () { clearTimeout(t); b.classList.remove('armed'); b.textContent = label; };
+    b.addEventListener('click', function () {
+      if (!b.classList.contains('armed')) {
+        b.classList.add('armed');
+        b.textContent = armedLabel;
+        t = setTimeout(disarm, 4000);
+        return;
+      }
+      disarm();
+      onConfirm();
+    });
+    b.addEventListener('blur', function () { setTimeout(function () { if (b.classList.contains('armed')) disarm(); }, 150); });
+    return b;
+  }
+
+  function banner(svg, text, actionLabel, onAction, fk) {
+    var b = el('div', 'banner');
+    b.innerHTML = svg;
+    b.appendChild(el('span', 'txt', text));
+    if (actionLabel) {
+      var btn = el('button', 'btn sm', actionLabel);
+      btn.type = 'button';
+      btn.setAttribute('data-fk', 'bn-' + fk);
+      btn.addEventListener('click', onAction);
+      b.appendChild(btn);
+    }
+    return b;
+  }
+
+  function emptyState(title, text, actionLabel, onAction) {
+    var e = el('div', 'empty');
+    var lot = el('span', 'lotus'); lot.innerHTML = LOTUS; e.appendChild(lot);
+    e.appendChild(el('b', null, title));
+    e.appendChild(el('span', null, text));
+    if (actionLabel) {
+      e.appendChild(document.createElement('br'));
+      var b = el('button', 'btn sm', actionLabel);
+      b.type = 'button';
+      b.addEventListener('click', onAction);
+      e.appendChild(b);
+    }
+    return e;
+  }
+
+  function infoRow(label, value, meta) {
+    var row = el('div', 'mrow');
+    var mt = el('div', 'mt');
+    mt.appendChild(el('div', 'mk', label));
+    mt.appendChild(el('div', 'mv', value));
+    if (meta) mt.appendChild(el('div', 'mm', meta));
+    row.appendChild(mt);
+    return row;
+  }
+
+  function kvRow(k, v, cls) {
+    var r = el('div', 'kv');
+    r.appendChild(el('span', null, k));
+    r.appendChild(el('b', cls || null, v));
+    return r;
+  }
+
+  function setUserState(userEl, text) {
+    if (!userEl) return;
+    var s = userEl.querySelector('.ustate');
+    if (s) s.textContent = text || '';
+  }
+  function setInert(node, on) {
+    if (!node) return;
+    if (on) { node.setAttribute('inert', ''); node.setAttribute('aria-hidden', 'true'); }
+    else { node.removeAttribute('inert'); node.removeAttribute('aria-hidden'); }
+  }
+  function isMac() {
+    try { return /Mac|iPhone|iPad|iPod/.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || ''); } catch (_) { return false; }
+  }
+  function parseHotkey(s) {
+    if (!s || typeof s !== 'string') return null;
+    var parts = s.toLowerCase().replace(/\s+/g, '').split('+');
+    var key = parts.pop();
+    if (!key) return null;
+    var has = function (k) { return parts.indexOf(k) >= 0; };
+    return { key: key, mod: has('mod'), ctrl: has('ctrl'), alt: has('alt') || has('option'), shift: has('shift'), meta: has('meta') || has('cmd') };
+  }
+  function hotkeyMatch(h, e) {
+    if (!h || !e.key) return false;
+    var k = String(e.key).toLowerCase();
+    var code = String(e.code || '');
+    var keyOk = k === h.key || (h.key.length === 1 && (code === 'Key' + h.key.toUpperCase() || code === 'Digit' + h.key));
+    if (!keyOk) return false;
+    var mac = isMac();
+    var wantCtrl = h.ctrl || (h.mod && !mac);
+    var wantMeta = h.meta || (h.mod && mac);
+    return !!e.ctrlKey === !!wantCtrl && !!e.metaKey === !!wantMeta && !!e.altKey === !!h.alt && !!e.shiftKey === !!h.shift;
+  }
+  function hotkeyLabel(h) {
+    var mac = isMac();
+    var out = [];
+    if (h.ctrl || (h.mod && !mac)) out.push('Ctrl');
+    if (h.meta || (h.mod && mac)) out.push('⌘');
+    if (h.alt) out.push(mac ? '⌥' : 'Alt');
+    if (h.shift) out.push('Shift');
+    out.push(h.key.length === 1 ? h.key.toUpperCase() : h.key);
+    return out;
+  }
+  function copyText(text, done) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, done); return; }
+    } catch (_) { /* fall through */ }
+    done();
+  }
+  function flashCopied(btn) {
+    btn.innerHTML = ICON.check;
+    btn.classList.add('on');
+    setTimeout(function () { btn.innerHTML = ICON.copy; btn.classList.remove('on'); }, 1400);
+  }
+  function joinAnd(list) {
+    if (list.length <= 1) return list.join('');
+    return list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1];
+  }
+
+  // ==========================================================================
   //  Public API
   // ==========================================================================
   var instance = null;
+  var early = [];   // KRIS.on(...) called before init
+  function clone(o) { try { return JSON.parse(JSON.stringify(o)); } catch (_) { return null; } }
+
   var KRIS = {
     __loaded: true,
     version: VERSION,
     init: function (options) {
       if (instance) return KRIS;
-      var start = function () { if (!instance) instance = new Widget(options); };
+      var start = function () {
+        if (instance) return;
+        instance = new Widget(options);
+        early.forEach(function (p) { instance.on(p[0], p[1]); });
+        early = [];
+      };
       if (document.body) start();
       else document.addEventListener('DOMContentLoaded', start);
       return KRIS;
@@ -2856,6 +6086,7 @@
     toggle: function () { if (instance) instance.toggle(); },
     ask: function (text) { if (instance) { instance.openPanel(); instance.submit(text); } },
     reset: function () { if (instance) instance.reset(); },
+    newChat: function () { if (instance) { instance.openPanel(); instance.newChat(); } },
     warm: function () { return instance ? instance.warm(true) : Promise.resolve(); },
     setContext: function (ctx) { if (instance) instance.setContext(ctx); },
     clearContext: function () { if (instance) instance.setContext(null); },
@@ -2864,6 +6095,63 @@
     toggleTheme: function () { if (instance) instance.toggleTheme(); },
     /** The theme on screen now: 'light' or 'dark'. */
     getTheme: function () { return instance ? instance.resolvedTheme() : null; },
+
+    /** Open a section: 'chat' | 'history' | 'profile' | 'memory' | 'appearance' | 'settings' | 'about'. */
+    openView: function (name) { return instance ? instance.showView(name) : false; },
+
+    /**
+     * What K.R.1.S remembers. Values set here count as coming from the
+     * user's account ("From your account"); the user can still edit or
+     * remove them. Keys: name, preferredName, role, company, department,
+     * location, timezone, interests, length (brief|balanced|detailed),
+     * tone (warm|neutral|formal), instructions.
+     */
+    memory: {
+      get: function () { return instance ? instance.memSnapshot() : null; },
+      set: function (key, value) { return instance ? instance.memSet(key, value, 'app').ok : false; },
+      remove: function (key) { return instance ? instance.memRemove(key) : false; },
+      addNote: function (text) { return instance ? instance.memAddNote(text, 'app').ok : false; },
+      clear: function () { if (instance) instance.memClear(); },
+      enable: function (on) { if (instance) instance.memEnable(on !== false); },
+      isEnabled: function () { return instance ? !!instance.memory.enabled : false; }
+    },
+
+    /** Past conversations on this device. */
+    history: {
+      list: function () { return instance ? clone(instance.histIndex().items) || [] : []; },
+      open: function (id) { if (!instance) return false; instance.openPanel(); return instance.openConversation(String(id)); },
+      remove: function (id) {
+        if (!instance) return false;
+        id = String(id);
+        var removed = !!instance.histDelete(id);
+        if (id === instance.convId) instance.discardCurrent(); else instance.refreshDrawer();
+        return removed;
+      },
+      clear: function () { if (instance) { instance.histClear(); instance.discardCurrent(); } }
+    },
+
+    settings: {
+      get: function () { return instance ? assign({}, instance.settings) : null; },
+      set: function (key, value) { return instance ? instance.setSetting(key, value) : false; },
+      reset: function () { if (instance) instance.resetSettings(); }
+    },
+
+    /** Who is signed in. A different id switches to that user's memory and history. */
+    setUser: function (user) { if (instance) instance.setUser(user); },
+    /** Sign-out on a shared machine: remove this user's memory, history and open chat from this browser. */
+    forget: function () { if (instance) instance.forgetUser(); },
+
+    /** Events: 'open', 'close', 'answer', 'memory', 'settings', 'view', 'conversation', or '*'. */
+    on: function (evt, fn) {
+      if (typeof fn !== 'function') return KRIS;
+      if (instance) instance.on(evt, fn); else early.push([evt, fn]);
+      return KRIS;
+    },
+    off: function (evt, fn) {
+      if (instance) instance.off(evt, fn);
+      early = early.filter(function (p) { return !(p[0] === evt && p[1] === fn); });
+      return KRIS;
+    },
 
     /**
      * React to something that happened in your app:
@@ -2883,6 +6171,9 @@
     },
     _instance: function () { return instance; },
     _localReply: localReply,
+    _detectFacts: detectFacts,
+    _parseMemoryCommand: parseMemoryCommand,
+    _isSensitive: isSensitive,
     scriptOrigin: SCRIPT_ORIGIN
   };
 
