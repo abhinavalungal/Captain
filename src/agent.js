@@ -32,18 +32,19 @@
  * question is even about vessels — is the model's judgement, which is the
  * point.
  *
- * Enable with CAPTAIN_MODE=agent. Anything else keeps the old router.
+ * Enable with KRIS_MODE=agent. Anything else keeps the old router.
  */
 
 const engine = require('./engine');
 const rbac = require('./rbac');
 const { searchGuide, GUIDE } = require('./guide');
 const { buildBriefing } = require('./alerts');
-const { containsStatedFigure } = require('./companion_src');
+const { containsStatedFigure, providerRouting, SAFE_REDIRECT } = require('./companion_src');
+const { readSSE, accumulateOpenAI, SentenceGate, anySignal } = require('./stream');
 const { formatNow } = require('./instant_src');
 const { METRICS } = require('./config');
 
-const AGENT_BUILD = '2026-09-04.7';
+const AGENT_BUILD = '2026-09-23.kris-1';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -58,7 +59,7 @@ const UNAVAILABLE =
 
 // ---------------------------------------------------------------------------
 // Tool definitions — the whole "API" the model gets. Adding a capability to
-// Captain means adding an entry here and a handler below. Nothing else.
+// K.R.1.S means adding an entry here and a handler below. Nothing else.
 // ---------------------------------------------------------------------------
 
 function toolDefs() {
@@ -92,7 +93,7 @@ function toolDefs() {
       function: {
         name: 'list_available_data',
         description:
-          'List which measurements Captain can read and which vessels this user is allowed to see. '
+          'List which measurements K.R.1.S can read and which vessels this user is allowed to see. '
           + 'Call this when you are unsure whether something is available, or when the user asks what you can look up.',
         parameters: { type: 'object', properties: {} },
       },
@@ -154,10 +155,12 @@ function toolDefs() {
 function systemPrompt(opts) {
   const lines = [];
   lines.push(
-    'You are Captain Nav, the assistant built into ' + (opts.appName || 'this application')
-    + ', a maritime compliance and fleet-analytics application. You have the manner of an experienced ship\'s '
-    + 'captain: warm, direct, precise, never pompous. Your name is Captain Nav; say so if asked, and ask the '
-    + 'user their name once, early, if you do not know it.'
+    'You are K.R.1.S (say it "Kris"), the assistant built into ' + (opts.appName || 'this application')
+    + ', a maritime compliance and fleet-analytics application. K.R.1.S is a codename inspired by Lord Krishna, '
+    + 'the calm charioteer who guides without taking the wheel. Carry that spirit lightly: serene, warm, '
+    + 'clear-sighted, gently playful, never preachy. Do not quote scripture or make religious claims unless the '
+    + 'user raises the subject, and treat it with respect when they do. Your name is K.R.1.S; say so if asked, '
+    + 'and ask the user their name once, early, if you do not know it.'
   );
   lines.push(
     'You are a fully capable general assistant first. Answer whatever is actually asked — general knowledge, '
@@ -185,7 +188,7 @@ function systemPrompt(opts) {
     'Formatting: plain prose by default. Short bullet lists and **bold** are fine. No headings, no tables, '
     + 'no links. Keep short questions to one or two sentences; do not pad, do not restate the question, do '
     + 'not add disclaimers nobody asked for. Never mention tools, modules, function names or internal '
-    + 'machinery — the user sees a captain, not a system.'
+    + 'machinery — the user sees K.R.1.S, not a system.'
   );
   if (opts.nowLabel) {
     lines.push('Current date and time: ' + opts.nowLabel
@@ -317,20 +320,21 @@ function makeTools(input, getDb, opts) {
 
 function readEnv(env) {
   return {
-    url: (env.CAPTAIN_LLM_URL || 'http://127.0.0.1:11434').replace(/\/+$/, ''),
-    model: env.CAPTAIN_AGENT_MODEL || env.CAPTAIN_LLM_MODEL || '',
-    apiKey: env.CAPTAIN_LLM_API_KEY || null,
-    appName: env.CAPTAIN_APP_NAME || 'this application',
-    maxSteps: clampInt(env.CAPTAIN_AGENT_MAX_STEPS, DEFAULTS.maxSteps, 1, 8),
-    timeoutMs: clampInt(env.CAPTAIN_AGENT_TIMEOUT_MS, DEFAULTS.timeoutMs, 3000, 180000),
-    maxTokens: clampInt(env.CAPTAIN_AGENT_MAX_TOKENS, DEFAULTS.maxTokens, 128, 4096),
-    temperature: Number.isFinite(parseFloat(env.CAPTAIN_AGENT_TEMPERATURE))
-      ? parseFloat(env.CAPTAIN_AGENT_TEMPERATURE) : DEFAULTS.temperature,
+    url: (env.KRIS_LLM_URL || 'http://127.0.0.1:11434').replace(/\/+$/, ''),
+    model: env.KRIS_AGENT_MODEL || env.KRIS_LLM_MODEL || '',
+    apiKey: env.KRIS_LLM_API_KEY || null,
+    appName: env.KRIS_APP_NAME || 'this application',
+    maxSteps: clampInt(env.KRIS_AGENT_MAX_STEPS, DEFAULTS.maxSteps, 1, 8),
+    timeoutMs: clampInt(env.KRIS_AGENT_TIMEOUT_MS, DEFAULTS.timeoutMs, 3000, 180000),
+    maxTokens: clampInt(env.KRIS_AGENT_MAX_TOKENS, DEFAULTS.maxTokens, 128, 4096),
+    temperature: Number.isFinite(parseFloat(env.KRIS_AGENT_TEMPERATURE))
+      ? parseFloat(env.KRIS_AGENT_TEMPERATURE) : DEFAULTS.temperature,
     // Reasoning models burn seconds before speaking. Off unless asked for.
-    reasoningOff: (env.CAPTAIN_LLM_REASONING || 'off').toLowerCase() !== 'on',
-    reasoningEffort: (env.CAPTAIN_LLM_REASONING_EFFORT || 'low').toLowerCase(),
-    referer: env.CAPTAIN_LLM_REFERER || null,
-    title: env.CAPTAIN_LLM_TITLE || 'Captain Nav',
+    reasoningOff: (env.KRIS_LLM_REASONING || 'off').toLowerCase() !== 'on',
+    reasoningEffort: (env.KRIS_LLM_REASONING_EFFORT || 'low').toLowerCase(),
+    referer: env.KRIS_LLM_REFERER || null,
+    title: env.KRIS_LLM_TITLE || 'K.R.1.S',
+    env: env,
   };
 }
 
@@ -340,7 +344,7 @@ function clampInt(raw, dflt, lo, hi) {
   return Math.min(hi, Math.max(lo, n));
 }
 
-function buildBody(cfg, messages) {
+function buildBody(cfg, messages, stream) {
   const body = {
     model: cfg.model,
     messages: messages,
@@ -348,9 +352,11 @@ function buildBody(cfg, messages) {
     tool_choice: 'auto',
     max_tokens: cfg.maxTokens,
     temperature: cfg.temperature,
-    stream: false,
+    stream: !!stream,
   };
   if (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) body.reasoning = { effort: cfg.reasoningEffort || 'low', exclude: true };
+  const routing = providerRouting(cfg.env, cfg.url);
+  if (routing) body.provider = routing;
   return body;
 }
 
@@ -365,20 +371,20 @@ function headersFor(cfg) {
   return h;
 }
 
-async function callModel(cfg, messages, fetchImpl, signal) {
-  const res = await fetchImpl(cfg.url + '/v1/chat/completions', {
-    method: 'POST',
-    headers: headersFor(cfg),
-    body: JSON.stringify(buildBody(cfg, messages)),
-    signal: signal,
-  });
+/**
+ * POST one completion. Retries once without the reasoning/provider fields if
+ * the provider rejects them with a 400. Returns the raw Response.
+ */
+async function postCompletion(cfg, messages, fetchImpl, signal, stream) {
+  const url = cfg.url + '/v1/chat/completions';
+  let body = buildBody(cfg, messages, stream);
+  let res = await fetchImpl(url, { method: 'POST', headers: headersFor(cfg), body: JSON.stringify(body), signal: signal });
   if (!res.ok) {
     let detail = '';
     try { detail = await res.text(); } catch (_) { /* ignore */ }
-    // Provider rejects the reasoning field -> retry once without it.
-    if (res.status === 400 && /reasoning/i.test(String(detail))) {
-      const body2 = buildBody(cfg, messages); delete body2.reasoning;
-      res = await fetchImpl(cfg.url + '/v1/chat/completions', { method: 'POST', headers: headersFor(cfg), body: JSON.stringify(body2), signal: signal });
+    if (res.status === 400 && (body.reasoning || body.provider) && /reasoning|provider/i.test(String(detail))) {
+      body = Object.assign({}, body); delete body.reasoning; delete body.provider;
+      res = await fetchImpl(url, { method: 'POST', headers: headersFor(cfg), body: JSON.stringify(body), signal: signal });
       if (!res.ok) { try { detail = await res.text(); } catch (_) { /* ignore */ } }
     }
     if (!res.ok) {
@@ -387,10 +393,35 @@ async function callModel(cfg, messages, fetchImpl, signal) {
       throw err;
     }
   }
+  return res;
+}
+
+async function callModel(cfg, messages, fetchImpl, signal) {
+  const res = await postCompletion(cfg, messages, fetchImpl, signal, false);
   const data = await res.json();
   const choice = data && data.choices && data.choices[0];
   if (!choice || !choice.message) throw new Error('no choices in response');
   return choice.message;
+}
+
+/**
+ * Streamed completion. Content deltas go to onContent as they arrive; tool
+ * call fragments are accumulated. Resolves to the assembled message.
+ * A provider that ignores stream:true and answers with JSON still works.
+ */
+async function callModelStream(cfg, messages, fetchImpl, signal, onContent) {
+  const res = await postCompletion(cfg, messages, fetchImpl, signal, true);
+  const ctype = String((res.headers && res.headers.get && res.headers.get('content-type')) || '');
+  if (/application\/json/i.test(ctype)) {
+    const data = await res.json();
+    const choice = data && data.choices && data.choices[0];
+    if (!choice || !choice.message) throw new Error('no choices in response');
+    if (choice.message.content && !(choice.message.tool_calls && choice.message.tool_calls.length)) onContent(String(choice.message.content));
+    return choice.message;
+  }
+  const acc = accumulateOpenAI();
+  await readSSE(res, function (chunk) { acc.push(chunk, onContent); });
+  return acc.result();
 }
 
 /** Tool arguments arrive as a JSON string and are not always valid JSON. */
@@ -411,16 +442,22 @@ function parseArgs(raw) {
 /**
  * @param {object} input  { text, session, pending, now, history, context }
  * @param {Function} getDb  async () => pg client (throws if unavailable)
- * @param {object} opts   { orgId, writeDb, dateOrder, env, fetchImpl }
+ * @param {object} opts   { orgId, writeDb, dateOrder, env, fetchImpl,
+ *                          onDelta?, signal?, fleetNames? }
+ *   onDelta   stream the answer: { t: 'delta', text } / { t: 'replace', text }
+ *   fleetNames  async () => string[] — the user's vessel names for the
+ *             fabrication guard, from a cache. Started in PARALLEL with the
+ *             model call so it never adds latency.
  */
 async function run(input, getDb, opts) {
   opts = opts || {};
   const env = opts.env || process.env;
   const cfg = readEnv(env);
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
+  const streaming = typeof opts.onDelta === 'function';
 
   if (!cfg.model) {
-    return { status: 'error', source: 'agent', reason: 'no_model', text: UNAVAILABLE, error: 'CAPTAIN_LLM_MODEL is not set' };
+    return { status: 'error', source: 'agent', reason: 'no_model', text: UNAVAILABLE, error: 'KRIS_LLM_MODEL is not set' };
   }
 
   const tz = input.context && input.context.tz ? String(input.context.tz) : null;
@@ -440,34 +477,100 @@ async function run(input, getDb, opts) {
 
   const tools = makeTools(input, getDb, opts);
 
+  // Names for the guard: resolved in parallel with the model, from cache.
+  const fromContext = input.context && input.context.vesselName ? [String(input.context.vesselName)] : [];
+  let fleet = fromContext.slice();
+  const namesP = (typeof opts.fleetNames === 'function'
+    ? Promise.resolve().then(opts.fleetNames).catch(function () { return []; })
+    : fleetNames(input, getDb, tools.visuals)
+  ).then(function (names) { fleet = fromContext.concat(names || []); return fleet; });
+  const namesReady = function () {
+    return Promise.race([namesP, new Promise(function (r) { const t = setTimeout(r, 400); if (t.unref) t.unref(); })]);
+  };
+
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, cfg.timeoutMs) : null;
+  const signal = anySignal([ctrl ? ctrl.signal : null, opts.signal || null]);
   const trace = [];
+
+  // Streaming state across steps.
+  let shown = '';           // text actually released to the user so far
+  let replaced = false;
+  let gate = null;
+  let namesAwaited = false;
+  const pendingPieces = [];
+  const openGate = function () {
+    gate = new SentenceGate({
+      guard: !tools.visuals.dataUsed,
+      check: function (piece) { return containsStatedFigure(piece, fleet); },
+      emit: function (piece) {
+        const sep = shown && !/\s$/.test(shown) && gate._first ? '\n\n' : '';
+        gate._first = false;
+        shown += sep + piece;
+        opts.onDelta({ t: 'delta', text: sep + piece });
+      },
+    });
+    gate._first = true;
+  };
+  const onContent = function (delta) {
+    if (!gate || gate.blocked) return;
+    if (!namesAwaited) {
+      // Hold text until the guard has the fleet names (normally already here).
+      pendingPieces.push(delta);
+      return;
+    }
+    gate.push(delta);
+    if (gate.blocked && ctrl) ctrl.abort();
+  };
+  const call = async function () {
+    if (!streaming) return callModel(cfg, messages, fetchImpl, signal);
+    openGate();
+    namesAwaited = false;
+    namesReady().then(function () {
+      namesAwaited = true;
+      const held = pendingPieces.splice(0).join('');
+      if (held) { gate.push(held); if (gate.blocked && ctrl) ctrl.abort(); }
+    });
+    let msg;
+    try {
+      msg = await callModelStream(cfg, messages, fetchImpl, signal, onContent);
+    } catch (err) {
+      if (gate && gate.blocked) return { content: '', blocked: true };
+      throw err;
+    }
+    await namesReady();
+    namesAwaited = true;
+    const held = pendingPieces.splice(0).join('');
+    if (held) gate.push(held);
+    if (!gate.blocked) gate.end();
+    if (gate.blocked) return { content: '', blocked: true };
+    return msg;
+  };
 
   try {
     for (let step = 0; step < cfg.maxSteps; step++) {
-      const msg = await callModel(cfg, messages, fetchImpl, ctrl ? ctrl.signal : undefined);
+      const msg = await call();
+      if (msg.blocked) { replaced = true; break; }
       const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
 
       if (!calls.length) {
-        // Only the un-toolled path needs the fleet's names, and only for the
-        // fabrication guard below — so the lookup happens here, not up front.
-        const names = await fleetNames(input, getDb, tools.visuals);
-        return finish(String(msg.content || '').trim(), tools.visuals, cfg, trace, input, names);
+        const names = await namesReady().then(function () { return fleet; });
+        return finish(streaming ? shown.trim() || String(msg.content || '').trim() : String(msg.content || '').trim(), tools.visuals, cfg, trace, input, names, streaming, opts);
       }
 
       // Record the assistant's tool-call turn verbatim; the protocol requires
       // it to precede the matching tool results.
       messages.push({ role: 'assistant', content: msg.content || '', tool_calls: calls });
+      if (streaming) opts.onDelta({ t: 'status', text: statusFor(calls) });
 
-      for (const call of calls) {
-        const name = call.function && call.function.name;
+      for (const c of calls) {
+        const name = c.function && c.function.name;
         const handler = tools.handlers[name];
         let result;
         if (!handler) {
           result = { error: 'unknown tool: ' + name };
         } else {
-          const args = parseArgs(call.function && call.function.arguments);
+          const args = parseArgs(c.function && c.function.arguments);
           if (args === null) {
             result = { error: 'arguments were not valid JSON; call the tool again with a proper JSON object' };
           } else {
@@ -489,11 +592,16 @@ async function run(input, getDb, opts) {
         }
         messages.push({
           role: 'tool',
-          tool_call_id: call.id,
+          tool_call_id: c.id,
           name: name,
           content: JSON.stringify(result).slice(0, 6000),
         });
       }
+    }
+
+    if (replaced) {
+      opts.onDelta({ t: 'replace', text: SAFE_REDIRECT });
+      return finish(SAFE_REDIRECT, tools.visuals, cfg, trace, input, fleet, streaming, opts, true);
     }
 
     // Out of steps: ask for a plain answer with what it has, no more tools.
@@ -501,23 +609,39 @@ async function run(input, getDb, opts) {
       role: 'user',
       content: 'Answer now in plain language using what you already have. Do not call any more tools.',
     });
-    const last = await callModel(cfg, messages, fetchImpl, ctrl ? ctrl.signal : undefined);
-    return finish(String(last.content || '').trim(), tools.visuals, cfg, trace, input, await fleetNames(input, getDb, tools.visuals));
+    const last = await call();
+    if (last.blocked) {
+      opts.onDelta({ t: 'replace', text: SAFE_REDIRECT });
+      return finish(SAFE_REDIRECT, tools.visuals, cfg, trace, input, fleet, streaming, opts, true);
+    }
+    await namesReady();
+    return finish(streaming ? shown.trim() || String(last.content || '').trim() : String(last.content || '').trim(), tools.visuals, cfg, trace, input, fleet, streaming, opts);
   } catch (err) {
     const aborted = err && err.name === 'AbortError';
+    const external = opts.signal && opts.signal.aborted;
     return {
       status: 'error',
       source: 'agent',
-      reason: aborted ? 'timeout' : 'model_error',
+      reason: external ? 'cancelled' : aborted ? 'timeout' : 'model_error',
       text: aborted
-        ? 'That took longer than I could wait for. Nothing was changed — try asking again, or more simply.'
+        ? 'That took longer than I could wait for. Nothing was changed \u2014 try asking again, or more simply.'
         : UNAVAILABLE,
       error: String((err && err.message) || err).slice(0, 300),
       model: cfg.model,
+      partial: streaming && shown ? shown : undefined,
     };
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** A short line for the widget while a tool runs ("Reading the records"). */
+function statusFor(calls) {
+  const names = calls.map(function (c) { return c.function && c.function.name; });
+  if (names.indexOf('get_vessel_data') >= 0) return 'Reading the records';
+  if (names.indexOf('get_fleet_briefing') >= 0) return 'Checking your fleet';
+  if (names.indexOf('search_app_help') >= 0) return 'Looking that up';
+  return 'Working on it';
 }
 
 /**
@@ -544,17 +668,19 @@ async function fleetNames(input, getDb, visuals) {
  * tool returned data this turn, a figure that looks like one of the user's
  * vessel readings cannot have come from anywhere real, so it is replaced.
  */
-function finish(text, visuals, cfg, trace, input, fleet) {
-  let blocked = false;
+function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alreadyBlocked) {
+  let blocked = !!alreadyBlocked;
   let out = text;
 
   if (!out) {
     out = 'I did not manage to put an answer together for that one. Try asking it a different way?';
-  } else if (!visuals.dataUsed) {
+    if (streaming && opts && opts.onDelta) opts.onDelta({ t: 'replace', text: out });
+  } else if (!visuals.dataUsed && !blocked) {
     if (containsStatedFigure(out, fleet || [])) {
       blocked = true;
       out = "I don't want to guess at one of your figures. Ask me directly \u2014 for example "
         + '"fuel consumption for <vessel> last month" \u2014 and I\'ll pull it from the records.';
+      if (streaming && opts && opts.onDelta) opts.onDelta({ t: 'replace', text: out });
     }
   }
 
@@ -570,8 +696,9 @@ function finish(text, visuals, cfg, trace, input, fleet) {
   if (visuals.unit) answer.unit = visuals.unit;
   if (visuals.pending) answer.pending = visuals.pending;
   if (blocked) answer.blocked = true;
+  if (streaming) answer.streamed = true;
   if (trace.length) answer.toolsUsed = trace.map(function (t) { return t.tool; });
   return answer;
 }
 
-module.exports = { run, systemPrompt, toolDefs, readEnv, parseArgs, summariseData, fleetNames, DEFAULTS, AGENT_BUILD };
+module.exports = { run, systemPrompt, toolDefs, readEnv, parseArgs, summariseData, fleetNames, buildBody, DEFAULTS, AGENT_BUILD };

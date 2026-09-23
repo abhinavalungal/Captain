@@ -242,10 +242,15 @@ t('convert: reachable through answerInstant with question phrasing', () => {
     assert.strictEqual(r.instant, true);
     assert.ok(/Captain Nav/.test(r.text));
   });
-  await ta('"what can you do" still returns the metric list (help), unchanged', async () => {
-    const r = await route('what can you do');
-    assert.strictEqual(r.status, 'help');
-    assert.ok(Array.isArray(r.metrics) && r.metrics.length);
+  await ta('"what can you do" gets the capability overview with next steps; "help" keeps the catalogue', async () => {
+    const r = await route('What can you do?');
+    assert.strictEqual(r.status, 'answer');
+    assert.strictEqual(r.instant, true);
+    assert.ok(/Captain Nav/.test(r.text), r.text);
+    assert.ok(Array.isArray(r.suggestions) && r.suggestions.length >= 3);
+    const h = await route('help');
+    assert.strictEqual(h.status, 'help');
+    assert.ok(Array.isArray(h.metrics) && h.metrics.length);
   });
   await ta('number comparison with visualization is instant and carries a bar chart', async () => {
     const r = await route('Can you visualize a comparison of which number is bigger, 2 or 19?');

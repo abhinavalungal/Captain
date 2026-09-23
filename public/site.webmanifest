@@ -1,0 +1,14 @@
+{
+  "name": "Shuddha now",
+  "short_name": "Shuddha now",
+  "description": "Powering the transition to zero carbon shipping",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F6F1",
+  "theme_color": "#0F3D2E",
+  "icons": [
+    { "src": "assets/favicon.svg", "type": "image/svg+xml", "sizes": "any" },
+    { "src": "assets/shuddha-now-app-icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "assets/shuddha-now-app-icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}

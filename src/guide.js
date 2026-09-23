@@ -64,10 +64,15 @@ const GUIDE = [
     aliases: ['reset password', 'forgot password', 'change password', 'cant log in', 'cannot sign in'],
   },
   {
-    id: 'what-is-captain',
-    title: 'What Captain Nav can do',
-    answer: 'I\u2019m Captain Nav. I answer questions about your vessel data straight from the records, help you find things in the app, and give you a quick briefing on request. I never make up a figure \u2014 if the data does not have it, I say so.',
-    aliases: ['what can you do', 'what are you', 'help', 'what is captain', 'what is captain nav', 'captain nav', 'introduce yourself'],
+    id: 'what-is-kris',
+    title: 'What K.R.1.S can do',
+    answer: 'I\u2019m K.R.1.S \u2014 say it \u201cKris\u201d. Think of me as a calm guide at your side. Here\u2019s where I can help:\n\n'
+      + '- **Vessel data** \u2014 fuel, power, speed, emissions, FuelEU balance and off-hire, read straight from your records.\n'
+      + '- **Fleet briefing** \u2014 ask \u201canything I should know?\u201d for reporting gaps and flags across your fleet.\n'
+      + '- **The app** \u2014 exporting, adding vessels, inviting teammates, permissions.\n'
+      + '- **Everything else** \u2014 explanations, quick calculations, drafting, or just a chat.\n\n'
+      + 'I never make up a figure. If the records don\u2019t hold it, I\u2019ll say so.',
+    aliases: ['what can you do', 'what are you', 'help', 'what is kris', 'who is kris', 'about kris', 'introduce yourself'],
   },
 ];
 

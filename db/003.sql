@@ -1,15 +1,15 @@
--- Captain — read views over fueleu_final and dnv
+-- K.R.1.S — read views over fueleu_final and dnv
 --
 -- These exist for one reason: Postgres identifiers with spaces or reserved
 -- words ("CB at Start", "Gross CB") cannot be declared as safe SQL
--- identifiers in Captain's config (src/config.js) without weakening the
+-- identifiers in K.R.1.S's config (src/config.js) without weakening the
 -- identifier check that makes SQL injection structurally impossible there.
 -- A view sidesteps that by exposing plain snake_case names while leaving
 -- the underlying tables — and whatever writes into them — untouched.
 --
 -- Safe to re-run. Nothing here mutates fueleu_final or dnv.
 
-create or replace view public.captain_fueleu_final as
+create or replace view public.kris_fueleu_final as
 select
   imo,
   "VesselName"          as vessel_name,
@@ -30,7 +30,7 @@ select
   oprtype
 from public.fueleu_final;
 
-create or replace view public.captain_dnv as
+create or replace view public.kris_dnv as
 select
   imo,
   vessel_name,

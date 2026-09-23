@@ -1,5 +1,5 @@
 'use strict';
-// Proves the SQL Captain would run against fueleu_final/dnv is well-formed —
+// Proves the SQL K.R.1.S would run against fueleu_final/dnv is well-formed —
 // correct identifiers, correct quoting, correct params — WITHOUT a live
 // connection. Every identifier here is checked against the exact DDL Nav sent.
 const assert = require('assert');
@@ -13,7 +13,7 @@ function check(key, expectCols) {
   const metric = METRICS_BY_KEY[key];
   const built = sql.build({ metricKey: key, intent: 'value', range, limit: 500 }, vesselIds);
   const text = built.text;
-  assert.ok(/FROM\s+"captain_(fueleu_final|dnv)"/.test(text), key + ' wrong table: ' + text);
+  assert.ok(/FROM\s+"kris_(fueleu_final|dnv)"/.test(text), key + ' wrong table: ' + text);
   for (const col of expectCols) {
     assert.ok(text.includes('"' + col + '"'), key + ' missing quoted column ' + col + ' in:\n' + text);
   }
@@ -41,13 +41,13 @@ const b2 = sql.build({ metricKey: 'dnv_compliance_balance', intent: 'value', ran
 assert.ok(/"reallocation_period_start"[\s\S]*::date/.test(b2.text), 'dnv should filter as date');
 
 // Config-level sanity beyond SQL text: exactly what config.js declares.
-assert.strictEqual(SOURCES.captain_fueleu_final.table, 'captain_fueleu_final');
-assert.strictEqual(SOURCES.captain_fueleu_final.vesselColumn, 'imo');
-assert.strictEqual(SOURCES.captain_fueleu_final.timeColumn, 'voyage_start');
-assert.strictEqual(SOURCES.captain_fueleu_final.timeColumnType, 'timestamptz');
-assert.strictEqual(SOURCES.captain_dnv.table, 'captain_dnv');
-assert.strictEqual(SOURCES.captain_dnv.timeColumn, 'reallocation_period_start');
-assert.strictEqual(SOURCES.captain_dnv.timeColumnType, 'date');
+assert.strictEqual(SOURCES.kris_fueleu_final.table, 'kris_fueleu_final');
+assert.strictEqual(SOURCES.kris_fueleu_final.vesselColumn, 'imo');
+assert.strictEqual(SOURCES.kris_fueleu_final.timeColumn, 'voyage_start');
+assert.strictEqual(SOURCES.kris_fueleu_final.timeColumnType, 'timestamptz');
+assert.strictEqual(SOURCES.kris_dnv.table, 'kris_dnv');
+assert.strictEqual(SOURCES.kris_dnv.timeColumn, 'reallocation_period_start');
+assert.strictEqual(SOURCES.kris_dnv.timeColumnType, 'date');
 assert.strictEqual(validateConfig(), true, 'full config must still validate with the new sources/metrics');
 
 // Every new metric's unit is still flagged unconfirmed — this is a canary:

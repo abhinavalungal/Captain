@@ -37,8 +37,9 @@ const { converse } = require('./companion_src');
 const { answerInstant, formatNow } = require('./instant_src');
 const identity = require('./identity');
 const agent = require('./agent');
+const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-04.7';
+const ROUTER_BUILD = '2026-09-23.kris-1';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -46,11 +47,6 @@ const DB_NOT_CONFIGURED = 'My database connection is not configured yet, so I ca
 const DB_UNREACHABLE = 'I cannot reach the vessel database right now, so I cannot look that up. Nothing was changed \u2014 try again in a moment. I can still help with the app in the meantime.';
 const QUERY_FAILED = 'That lookup did not go through \u2014 nothing was changed. It might be a schema mismatch on my side rather than your question; try rephrasing, or ask me to check a different vessel or period.';
 
-// Learned vocabulary per organisation, cached briefly so that classifying a
-// greeting does not cost a query every time. One indexed SELECT per org per
-// minute at most; nothing else here reads the database for non-data messages.
-const learnedCache = new Map();
-const LEARNED_TTL_MS = 60000;
 
 /**
  * @param {object} input   { text, session, pending, now, history, context }
@@ -58,7 +54,11 @@ const LEARNED_TTL_MS = 60000;
  *   Either a connected pg client (tests) or an async function that returns
  *   one on first call — and throws if it cannot. The function form is what
  *   the HTTP layer passes, so no connection is opened until it's needed.
- * @param {object} opts    { orgId, writeDb, dateOrder, env, fetchImpl }
+ * @param {object} opts    { orgId, writeDb, dateOrder, env, fetchImpl,
+ *                           onDelta?, signal?, pool?, scopeCache? }
+ *   onDelta   stream model text to the caller as it is produced
+ *   pool      () => pg Pool | null, for BACKGROUND cache refreshes that must
+ *             never hold the request's connection or block the reply
  */
 async function route(input, db, opts) {
   opts = opts || {};
@@ -68,45 +68,12 @@ async function route(input, db, opts) {
   const text = String(input.text || '').trim();
   if (!text) return { status: 'unparsed', text: 'Ask me about a vessel, the app, or say hello.', source: 'router' };
 
-  // --- AI-FIRST MODE ------------------------------------------------------------
-  // CAPTAIN_MODE=agent hands the whole message to the model with tools, and none
-  // of the matching below runs. The model works out intent for itself; the tools
-  // it can reach are the same deterministic engine/RBAC/guide code used here.
-  // If the model layer is unreachable, we fall back to this router rather than
-  // leaving the user with nothing (set CAPTAIN_AGENT_FALLBACK=0 to disable).
-  if (String(env.CAPTAIN_MODE || '').toLowerCase() === 'agent') {
-    let agentOut = null;
-    try {
-      agentOut = await agent.run(input, getDb, opts);
-    } catch (err) {
-      console.error('captain: agent failed', err);
-      agentOut = { status: 'error', source: 'agent', reason: 'model_error', text: '' };
-    }
-    if (agentOut && agentOut.status !== 'error') return agentOut;
-    if (env.CAPTAIN_AGENT_FALLBACK === '0') {
-      return agentOut && agentOut.text
-        ? agentOut
-        : { status: 'error', source: 'agent', text: 'I could not reach my reasoning service just now. Nothing was changed.' };
-    }
-    // fall through to the deterministic router below
-  }
-
-  const userName = input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null;
-  const vesselName = input.context && input.context.vesselName ? String(input.context.vesselName) : null;
-
-  // The previous turn asked for the user's name. A bare "Nav" here is the
-  // answer, not a data question — but the user is free to ignore the question
-  // and ask about fuel instead, in which case this resolves to null and the
-  // message routes normally below.
-  if (input.pending && input.pending.kind === 'name') {
-    const reply = parser.classify(text, [], input.now) === 'other'
-      ? identity.resolveNameReply(text, { vesselName: vesselName })
-      : null;
-    if (reply) {
-      return { status: 'answer', source: 'identity', instant: true, text: reply.text, remember: reply.remember || undefined };
-    }
-    input = Object.assign({}, input, { pending: null }); // fall through, question dropped
-  }
+  // --- FAST LANE ---------------------------------------------------------------
+  // Everything a server can answer exactly and locally is answered here, in
+  // well under a millisecond, in EVERY mode — including KRIS_MODE=agent.
+  // No database, no model, no network. "Hi" must never wait for either.
+  const fast = fastLane(text, input, opts);
+  if (fast) return fast;
 
   // A pending clarification or teach-confirmation is a data conversation in
   // flight — it belongs to the engine, which needs the records.
@@ -115,60 +82,59 @@ async function route(input, db, opts) {
     return withDb(getDb, function (client) {
       return engine.ask(input, client, opts).then(function (r) {
         // Vocabulary may just have changed; make the new word count right away.
-        if (isTeach && opts.orgId) learnedCache.delete(opts.orgId);
+        if (isTeach && opts.orgId) { learnedCache.delete(opts.orgId); legacyLearned.delete(opts.orgId); }
         return tagSource(r, 'data');
       });
     });
   }
 
-  // --- 0. instant facts: date, time, arithmetic — exact, local, microseconds ------
-  // The server has a clock and exact arithmetic; a language model has neither.
-  // These never go to a model or the database.
-  const tz = input.context && input.context.tz ? String(input.context.tz) : null;
-  const instant = answerInstant(text, { now: input.now, tz: tz });
-  if (instant) return { status: 'answer', source: 'instant', kind: instant.kind, text: instant.text, chart: instant.chart || undefined, instant: true };
-
-  // --- 0.5 identity: names, in both directions — exact, local, no model ---------
-  // "What's your name" / "my name is Nav" / "what's my name". Captured names
-  // travel back to the widget in `remember` and return on every message in
-  // context.userName; the server itself stays stateless.
-  const whoAmI = identity.answerIdentity(text, { userName: userName, vesselName: vesselName });
-  if (whoAmI) {
-    return {
-      status: 'answer', source: 'identity', instant: true, text: whoAmI.text,
-      remember: whoAmI.remember || undefined,
-      pending: whoAmI.pending || undefined,
-    };
+  // --- AI-FIRST MODE ------------------------------------------------------------
+  // KRIS_MODE=agent hands the message to the model with tools. Two
+  // shortcuts come first because they are strictly better than a model round
+  // trip and cannot change an answer's meaning:
+  //   - a message the deterministic parser can already answer in full is
+  //     answered by the engine directly (the agent would call the very same
+  //     engine through a tool, after one or two model turns);
+  //   - everything else streams from the model.
+  // If the model layer is unreachable, we fall back to the router below
+  // (set KRIS_AGENT_FALLBACK=0 to disable).
+  if (String(env.KRIS_MODE || '').toLowerCase() === 'agent') {
+    if (env.KRIS_AGENT_DIRECT_DATA !== '0') {
+      const direct = await directData(text, input, getDb, opts);
+      if (direct) return direct;
+    }
+    let agentOut = null;
+    try {
+      agentOut = await agent.run(input, getDb, Object.assign({}, opts, { fleetNames: fleetNamesFor(input, getDb, opts) }));
+    } catch (err) {
+      console.error('kris: agent failed', err);
+      agentOut = { status: 'error', source: 'agent', reason: 'model_error', text: '' };
+    }
+    if (agentOut && agentOut.status !== 'error') return agentOut;
+    if (agentOut && agentOut.reason === 'cancelled') return agentOut;
+    if (env.KRIS_AGENT_FALLBACK === '0') {
+      return agentOut && agentOut.text
+        ? agentOut
+        : { status: 'error', source: 'agent', text: 'I could not reach my reasoning service just now. Nothing was changed.' };
+    }
+    if (opts.onDelta && agentOut && agentOut.partial) opts.onDelta({ t: 'replace', text: '' });
+    // fall through to the deterministic router below
   }
+
+  const userName = input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null;
 
   // --- 1. classify without the database ---------------------------------------
-  let kind = parser.classify(text, [], input.now);
-
-  if (kind === 'help') {
-    return {
-      status: 'help',
-      source: 'router',
-      text: 'I answer from your vessel records only. Here is what I can read.',
-      metrics: METRICS.filter(function (m) { return !m.finerVersionOf; }).map(function (m) { return { key: m.key, label: m.label, unit: m.unit, aliases: (m.aliases || []).slice(0, 4) }; }),
-    };
-  }
+  const kind = parser.classify(text, [], input.now);
 
   if (kind === 'data' || kind === 'teach') {
     return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
   }
 
-  // --- 1.2 capability, malformed variants --------------------------------------
-  // The exact phrases "help" / "what can you do" were claimed above and get the
-  // metric list. Everything a human actually types around them - "what you can
-  // do", "wat can u do", "how can you help me" - lands here: a fixed local
-  // answer instead of a model round-trip (or, previously, a fall-through).
-  if (identity.CAPABILITY_RE.test(text)) {
-    return { status: 'answer', source: 'guide', instant: true, text: identity.capabilityAnswer(), guide: { id: 'what-is-captain', title: 'What Captain Nav can do' } };
-  }
-
   if (isBriefingRequest(text)) {
     return withDb(getDb, async function (client) {
-      const scope = await rbac.resolveScope(input.session, client);
+      const scope = opts.scopeCache
+        ? await scopeCache.load(scopeKey(input.session), function () { return rbac.resolveScope(input.session, client); })
+        : await rbac.resolveScope(input.session, client);
       if (!scope.authenticated) return { status: 'unauthenticated', text: 'Sign in and I can check your vessels.', source: 'router' };
       if (!scope.vessels.length) return { status: 'no_scope', text: 'Your account is not linked to any vessel, so there is nothing to brief.', source: 'router' };
       const briefing = await buildBriefing(scope.vesselIds, scope.vessels.map(function (v) { return v.name; }), client);
@@ -192,41 +158,24 @@ async function route(input, db, opts) {
     });
   }
 
-  // --- 2. small talk: answered locally, in microseconds -------------------------------
-  // A greeting, thanks or goodbye is answered from a fixed set of replies and
-  // NEVER sent to a model. Routing "hi" through a frontier reasoning model
-  // costs tens of seconds and buys nothing, so it does not happen. Set
-  // CAPTAIN_SMALLTALK_MODEL=1 if you would rather a model handle these.
-  if (isSmallTalk(text) && env.CAPTAIN_SMALLTALK_MODEL !== '1') {
-    return { status: 'answer', source: 'router', text: smallTalkReply(text, userName), instant: true };
-  }
+  // Small talk the fast lane did not claim because KRIS_SMALLTALK_MODEL=1.
   if (isSmallTalk(text)) {
-    if (env.CAPTAIN_ENABLE_LLM === '0') return { status: 'answer', source: 'router', text: smallTalkReply(text, userName), instant: true };
+    if (env.KRIS_ENABLE_LLM === '0') return { status: 'answer', source: 'router', text: smallTalkReply(text, userName, input), instant: true };
     return companionReply(text, input, opts, env);
   }
 
-  // --- 3. app guide (no database) ------------------------------------------------------
-  // A learned term inside an app question would be data, not guidance. If the
-  // org's vocabulary is already cached we honour that without a query; if the
-  // cache is cold we take the guide match — an app question must not cost a
-  // database round-trip.
-  const cachedLearned = peekLearned(opts.orgId);
-  const guideHit = matchGuide(text);
-  if (guideHit && !(cachedLearned.length && parser.classify(text, cachedLearned, input.now) === 'data')) {
-    return { status: 'answer', text: guideHit.answer, guide: { id: guideHit.id, title: guideHit.title }, source: 'guide' };
-  }
-
   // --- 4. learned vocabulary: an org's own word for a metric is still data ---------
-  // Reached only for text the guide did not claim. Consulted when the database
-  // is reachable (cached for a minute); if it isn't, the message simply goes on
-  // to the companion, which cannot state a figure anyway.
-  const learned = await loadLearnedIfAvailable(getDb, opts.orgId);
+  // NEVER blocks: the cached vocabulary is used if present; if it is cold or
+  // stale, a background refresh is started on the pool and this message goes
+  // on without it. A conversational message must not pay for a database
+  // round-trip it almost never needs.
+  const learned = await learnedFor(getDb, opts);
   if (learned.length && parser.classify(text, learned, input.now) === 'data') {
     return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
   }
 
   // --- 5. companion (no database access) ------------------------------------------
-  if (env.CAPTAIN_ENABLE_LLM === '0') {
+  if (env.KRIS_ENABLE_LLM === '0') {
     const parsed = parser.parse(text, { now: input.now, vessels: [], learned: learned });
     const suggestions = (parsed.suggestions || METRICS.filter(function (m) { return !m.finerVersionOf; }).slice(0, 6).map(function (m) { return m.label; }));
     return {
@@ -237,6 +186,120 @@ async function route(input, db, opts) {
   }
 
   return companionReply(text, input, opts, env);
+}
+
+/**
+ * The fast lane: exact, local answers. Returns a reply or null.
+ * Order matters and mirrors the old router's precedence.
+ */
+function fastLane(text, input, opts) {
+  const env = opts.env || process.env;
+  const userName = input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null;
+  const vesselName = input.context && input.context.vesselName ? String(input.context.vesselName) : null;
+
+  // The previous turn asked for the user's name. A bare "Nav" here is the
+  // answer, not a data question — but the user is free to ignore the question
+  // and ask about fuel instead, in which case this resolves to null and the
+  // message routes normally.
+  if (input.pending && input.pending.kind === 'name') {
+    const reply = parser.classify(text, [], input.now) === 'other'
+      ? identity.resolveNameReply(text, { vesselName: vesselName })
+      : null;
+    input.pending = null; // answered or dropped: either way it is not a data clarification
+    if (reply) return { status: 'answer', source: 'identity', instant: true, text: reply.text, remember: reply.remember || undefined };
+  }
+  if (input.pending) return null; // a data conversation in flight
+
+  // Date, time, arithmetic.
+  const tz = input.context && input.context.tz ? String(input.context.tz) : null;
+  const instant = answerInstant(text, { now: input.now, tz: tz });
+  if (instant) return { status: 'answer', source: 'instant', kind: instant.kind, text: instant.text, chart: instant.chart || undefined, instant: true };
+
+  // Names, in both directions.
+  const whoAmI = identity.answerIdentity(text, { userName: userName, vesselName: vesselName });
+  if (whoAmI) {
+    return {
+      status: 'answer', source: 'identity', instant: true, text: whoAmI.text,
+      remember: whoAmI.remember || undefined,
+      pending: whoAmI.pending || undefined,
+    };
+  }
+
+  // "What can you do" and every malformed variant: a warm overview with next
+  // steps. (The bare word "help" still gets the full measurement catalogue.)
+  if (identity.CAPABILITY_RE.test(text)) {
+    return {
+      status: 'answer', source: 'guide', instant: true, text: identity.capabilityAnswer(),
+      guide: { id: 'what-is-kris', title: 'What K.R.1.S can do' },
+      suggestions: ['Anything I should know?', 'Fuel consumption last month', 'How do I export a report?', 'Show me what you can read'],
+    };
+  }
+
+  const kind = parser.classify(text, [], input.now);
+  if (kind === 'help' || /^\s*show me what you can read\s*$/i.test(text)) {
+    return {
+      status: 'help',
+      source: 'router',
+      instant: true,
+      text: 'I answer from your vessel records only. Here is what I can read.',
+      metrics: METRICS.filter(function (m) { return !m.finerVersionOf; }).map(function (m) { return { key: m.key, label: m.label, unit: m.unit, aliases: (m.aliases || []).slice(0, 4) }; }),
+    };
+  }
+  if (kind !== 'other') return null; // data-shaped: never answered by the fast lane
+
+  // Greetings, thanks, goodbyes: fixed replies, never a model round trip.
+  if (isSmallTalk(text) && env.KRIS_SMALLTALK_MODEL !== '1') {
+    return { status: 'answer', source: 'router', text: smallTalkReply(text, userName, input), instant: true };
+  }
+
+  // App guide. A learned term inside an app question would be data, not
+  // guidance: if the org's vocabulary is cached we honour it without a query.
+  if (!isBriefingRequest(text) && !followUpRewrite(text, input.history, input.now, opts.dateOrder)) {
+    const cachedLearned = opts.orgId ? (learnedCache.peek(opts.orgId) || peekLegacy(opts.orgId) || []) : [];
+    const guideHit = matchGuide(text);
+    if (guideHit && !(cachedLearned.length && parser.classify(text, cachedLearned, input.now) === 'data')) {
+      return { status: 'answer', text: guideHit.answer, guide: { id: guideHit.id, title: guideHit.title }, source: 'guide', instant: true };
+    }
+  }
+  return null;
+}
+
+/**
+ * Agent mode: when the deterministic engine can already answer a data-shaped
+ * question in full (a figure, a table, a series) or ask a precise clarifying
+ * question, return that — the agent would otherwise spend one or two model
+ * turns deciding to call the same engine. Anything the engine cannot handle
+ * cleanly (unparsed, unsupported) returns null and goes to the model.
+ */
+async function directData(text, input, getDb, opts) {
+  const kind = parser.classify(text, [], input.now);
+  if (kind !== 'data') return null;
+  let client;
+  try { client = await getDb(); } catch (_) { return null; } // the agent will explain the outage
+  if (!client) return null;
+  try {
+    const r = await engine.ask(input, client, opts);
+    if (r && (r.status === 'answer' || r.status === 'clarify' || r.status === 'confirm' || r.status === 'no_scope' || r.status === 'help')) {
+      return tagSource(r, 'data');
+    }
+  } catch (err) {
+    console.error('kris: direct data path failed, handing to agent', err && err.message);
+  }
+  return null;
+}
+
+/** The user's vessel names for the fabrication guard, cache-first, never on the request's connection. */
+function fleetNamesFor(input, getDb, opts) {
+  return async function () {
+    const key = scopeKey(input.session);
+    const cached = scopeCache.peek(key);
+    if (cached) return (cached.vessels || []).map(function (v) { return v.name; });
+    const pool = typeof opts.pool === 'function' ? opts.pool() : null;
+    const runner = pool || (await getDb().catch(function () { return null; }));
+    if (!runner) return [];
+    const scope = await scopeCache.load(key, function () { return rbac.resolveScope(input.session, runner); });
+    return (scope.vessels || []).map(function (v) { return v.name; });
+  };
 }
 
 /**
@@ -264,7 +327,7 @@ async function companionReply(text, input, opts, env) {
   } catch (err) {
     // The companion must NEVER take the whole request down. Whatever the
     // model layer throws, the user gets a plain honest sentence, not a 500.
-    console.error('captain: companion failed', err);
+    console.error('kris: companion failed', err);
     convo = {
       text: 'I hit a snag answering that one — nothing was changed. I can still read your vessel data and help with the app.',
       blocked: false,
@@ -279,7 +342,7 @@ async function companionReply(text, input, opts, env) {
     blocked: convo.blocked || undefined,
     options: convo.blocked ? examplePrompts() : undefined,
     // Provider failure detail (HTTP status, timeout). The HTTP layer logs it,
-    // records it for /api/captain diagnostics, and strips it before replying.
+    // records it for /api/kris diagnostics, and strips it before replying.
     error: convo.error ? 'companion: ' + String(convo.error).slice(0, 200) : undefined,
   };
 }
@@ -313,8 +376,8 @@ async function withDb(getDb, fn) {
       reason: notConfigured ? 'db_not_configured' : 'db_unreachable',
       text: notConfigured ? DB_NOT_CONFIGURED : DB_UNREACHABLE,
       // Cause classification from the HTTP layer (never the raw message).
-      code: notConfigured ? undefined : (err && err.captainCode) || undefined,
-      detail: notConfigured ? undefined : (err && err.captainHint) || undefined,
+      code: notConfigured ? undefined : (err && err.krisCode) || undefined,
+      detail: notConfigured ? undefined : (err && err.krisHint) || undefined,
     };
   }
   if (!client) {
@@ -327,7 +390,7 @@ async function withDb(getDb, fn) {
   try {
     return await fn(client);
   } catch (err) {
-    console.error('captain: query failed', err);
+    console.error('kris: query failed', err);
     const missing = err && err.code === '42P01' ? String(err.message || '').match(/relation "([^"]+)" does not exist/) : null;
     return {
       status: 'error', source: 'router', reason: 'query_failed', text: QUERY_FAILED,
@@ -338,26 +401,45 @@ async function withDb(getDb, fn) {
   }
 }
 
-/** Cached learned terms if fresh, without touching the database. */
-function peekLearned(orgId) {
-  const hit = orgId ? learnedCache.get(orgId) : null;
-  return hit && Date.now() - hit.at < LEARNED_TTL_MS ? hit.rows : [];
-}
-
-async function loadLearnedIfAvailable(getDb, orgId) {
+/**
+ * Learned vocabulary.
+ *   HTTP path (opts.pool given): NEVER waits on the database. Uses the cached
+ *   vocabulary if present; if it is cold or stale, refreshes it in the
+ *   background on the pool, and this message goes on without it.
+ *   Direct callers (tests, scripts passing a client): loads through the
+ *   client, cached for a minute, as before.
+ */
+async function learnedFor(getDb, opts) {
+  const orgId = opts.orgId;
   if (!orgId) return [];
-  const hit = learnedCache.get(orgId);
-  if (hit && Date.now() - hit.at < LEARNED_TTL_MS) return hit.rows;
+  if (opts.pool) {
+    const hit = learnedCache.peek(orgId);
+    if (!learnedCache.get(orgId)) {
+      const pool = typeof opts.pool === 'function' ? opts.pool() : null;
+      if (pool) learnedCache.refresh(orgId, function () { return terms.loadMappings(pool, orgId); });
+    }
+    return hit || [];
+  }
+  const hit = peekLegacy(orgId);
+  if (hit) return hit;
   let client;
-  try { client = await getDb(); } catch (_) { return hit ? hit.rows : []; }
-  if (!client) return hit ? hit.rows : [];
+  try { client = await getDb(); } catch (_) { return []; }
+  if (!client) return [];
   try {
     const rows = await terms.loadMappings(client, orgId);
-    learnedCache.set(orgId, { rows: rows, at: Date.now() });
+    legacyLearned.set(orgId, { rows: rows, at: Date.now() });
     return rows;
   } catch (_) {
-    return hit ? hit.rows : [];
+    return [];
   }
+}
+
+// Cache for the direct-caller path.
+const legacyLearned = new Map();
+const LEARNED_TTL_MS = 60000;
+function peekLegacy(orgId) {
+  const hit = orgId ? legacyLearned.get(orgId) : null;
+  return hit && Date.now() - hit.at < LEARNED_TTL_MS ? hit.rows : null;
 }
 
 /**
@@ -421,12 +503,15 @@ function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); 
 
 const SMALL_TALK = new Set(['hi', 'hello', 'hey', 'hiya', 'yo', 'sup', 'thanks', 'thank', 'you', 'thx', 'ty', 'ok', 'okay',
   'good', 'morning', 'afternoon', 'evening', 'night', 'bye', 'goodbye', 'cheers', 'please', 'cool', 'great', 'nice',
-  'captain', 'there', 'how', 'are', 'doing', 'whats', 'up', 'yes', 'no', 'yep', 'nope', 'lol', 'haha']);
+  'kris', 'krishna', 'namaste', 'namaskar', 'radhe', 'hare', 'jai', 'shri', 'shree', 'there', 'how', 'are', 'doing', 'whats', 'up', 'yes', 'no', 'yep', 'nope', 'lol', 'haha',
+  'today', 'mate', 'sir', 'again', 'all', 'fine', 'well', 'hows', 'it', 'going', 'things', 'buddy', 'much', 'lot',
+  'so', 'very', 'awesome', 'perfect', 'noted', 'alright', 'sure', 'gotcha', 'yeah', 'hmm', 'wow', 'welcome', 'appreciated', 'cya', 'later', 'see']);
 
 /** True when every word is conversational filler — nothing that could name a metric. */
 function isSmallTalk(text) {
-  const words = String(text).toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const words = String(text).toLowerCase().replace(/[’']/g, '').replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
   if (!words.length) return true;
+  if (words.length > 8) return false;
   return words.every(function (w) { return SMALL_TALK.has(w) || w.length <= 2; });
 }
 
@@ -435,48 +520,90 @@ function isSmallTalk(text) {
 const SMALL_TALK_REPLIES = {
   thanks: [
     "You're welcome. Ask whenever you need a figure from the records.",
-    'Any time. I\'m here when you need the numbers.',
-    'Glad to help.',
+    "Any time. I'm here when you need the numbers.",
+    'Happy to help.',
   ],
   bye: [
-    'Fair winds. I\'m here when you need me.',
-    'Safe watch. Come find me any time.',
+    "Go well. I'm here whenever you need me.",
+    'Until next time. The records will keep.',
   ],
   howareyou: [
-    'All well on the bridge, thanks. What can I get you?',
-    'Steady as she goes. What do you need?',
+    'Calm and content, thank you. What shall we look into?',
+    'All is well here. What do you need?',
+    'Peaceful as ever, thanks for asking. What are we looking at today?',
   ],
   affirm: [
-    'Right you are. What next?',
+    'Very well. What next?',
     'Understood.',
   ],
   greet: [
-    'Hello. Ask me about a vessel, the app, or anything else you need.',
-    'Good to see you. What can I look up?',
-    'Morning. What do you need from the records?',
+    '{hello}. Ask me about a vessel, the app, or anything else you need.',
+    '{hello}. What can I look up for you?',
+    '{hello}. What do you need from the records?',
   ],
 };
+
+// A greeting the user chose is returned in kind: "Namaste" gets "Namaste",
+// "Radhe Radhe" gets "Radhe Radhe". Only ever an echo of their own words.
+const KIND_GREETINGS = [
+  [/\bjai (?:shri|shree|sri) krishna\b/, 'Jai Shri Krishna'],
+  [/\bhare krishna\b/, 'Hare Krishna'],
+  [/\bradhe radhe\b/, 'Radhe Radhe'],
+  [/\bnamaskar\b/, 'Namaskar'],
+  [/\bnamaste\b/, 'Namaste'],
+];
 
 function pick(list, seed) {
   return list[Math.abs(seed) % list.length];
 }
 
-function smallTalkReply(text, name) {
+// Building an Intl formatter costs ~1 ms; build each one once.
+const HOUR_FMT = new Map();
+function hourFormatter(tz) {
+  let f = HOUR_FMT.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', hour12: false });
+    if (HOUR_FMT.size > 200) HOUR_FMT.clear();
+    HOUR_FMT.set(tz, f);
+  }
+  return f;
+}
+
+/** "Good morning" / "Good afternoon" / "Good evening" in the user's own time zone. */
+function timeOfDayHello(input) {
+  const tz = input && input.context && input.context.tz ? String(input.context.tz) : null;
+  let hour = null;
+  try {
+    const f = hourFormatter(tz || 'UTC');
+    hour = parseInt(f.format(input && input.now ? new Date(input.now) : new Date()), 10) % 24;
+  } catch (_) { hour = null; }
+  if (hour == null || !tz) return 'Hello';
+  if (hour < 5) return 'Hello';
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function smallTalkReply(text, name, input) {
   const t = String(text).toLowerCase();
-  // Seeded from the message so the same input is stable within a session but
+  // Seeded from the message so the same input is stable within a minute but
   // different greetings vary.
   const seed = t.length * 31 + (t.charCodeAt(0) || 0) + Date.now() / 60000 | 0;
   if (/thank|thx|\bty\b|cheers|appreciate/.test(t)) return personalize(pick(SMALL_TALK_REPLIES.thanks, seed), name);
-  if (/\bbye\b|goodbye|good night|\bnight\b|see you|later/.test(t)) return personalize(pick(SMALL_TALK_REPLIES.bye, seed), name);
-  if (/how are you|how.?s it going|how are things|you doing|what.?s up|sup\b/.test(t)) return pick(SMALL_TALK_REPLIES.howareyou, seed);
-  if (/^\s*(ok|okay|yes|yep|yeah|no|nope|cool|great|nice|sure|got it|alright)\b/.test(t)) return pick(SMALL_TALK_REPLIES.affirm, seed);
-  return personalize(pick(SMALL_TALK_REPLIES.greet, seed), name);
+  if (/\bbye\b|goodbye|good night|\bnight\b|see you|see ya|\bcya\b|later/.test(t)) return personalize(pick(SMALL_TALK_REPLIES.bye, seed), name);
+  if (/how are you|how.?s it going|how are things|you doing|what.?s up|\bsup\b|how.?s things/.test(t)) return pick(SMALL_TALK_REPLIES.howareyou, seed);
+  if (/^\s*(ok|okay|yes|yep|yeah|no|nope|cool|great|nice|sure|got it|gotcha|alright|noted|perfect|awesome)\b/.test(t)) return pick(SMALL_TALK_REPLIES.affirm, seed);
+  // Echo the greeting the user chose (a time of day, or a namaste); otherwise use theirs.
+  const kind = KIND_GREETINGS.find((g) => g[0].test(t));
+  const m = t.match(/good (morning|afternoon|evening)/);
+  const hello = kind ? kind[1] : m ? 'Good ' + m[1] : timeOfDayHello(input);
+  return personalize(pick(SMALL_TALK_REPLIES.greet, seed).replace('{hello}', hello), name);
 }
 
 /** "Hello." becomes "Hello, Nav." when the widget has remembered a name. */
 function personalize(reply, name) {
   if (!name) return reply;
-  const safe = String(name).replace(/[^\w'\u2019. -]/g, '').trim().slice(0, 40);
+  const safe = String(name).replace(/[^\w'’. -]/g, '').trim().slice(0, 40);
   if (!safe) return reply;
   return reply.replace(/^([A-Za-z][\w' ]*?)([.!])/, '$1, ' + safe + '$2');
 }
@@ -490,7 +617,20 @@ function tagSource(result, source) {
   return result;
 }
 
-/** Exposed so the learned-term cache can be cleared when vocabulary changes or in tests. */
-function clearLearnedCache() { learnedCache.clear(); }
+/**
+ * Run the fast lane once on representative messages so the first real
+ * greeting after a (re)start does not pay for regex compilation, Intl
+ * formatter construction and JIT warm-up (~20 ms cold, <1 ms warm).
+ */
+function prewarm() {
+  const env = { KRIS_MODE: 'router' };
+  const samples = ['hi', 'how are you?', 'what can you do', 'what is the date today', 'how do i export a report', 'thanks', 'my name is Nav', 'fuel consumption last month'];
+  for (const text of samples) {
+    try { fastLane(text, { text, now: new Date(), context: { tz: 'Asia/Calcutta' } }, { env }); } catch (_) { /* warm-up only */ }
+  }
+}
 
-module.exports = { route: route, agent: agent, ROUTER_BUILD: ROUTER_BUILD, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite };
+/** Exposed so the learned-term cache can be cleared when vocabulary changes or in tests. */
+function clearLearnedCache() { learnedCache.clear(); legacyLearned.clear(); scopeCache.clear(); }
+
+module.exports = { route: route, prewarm: prewarm, fastLane: fastLane, agent: agent, ROUTER_BUILD: ROUTER_BUILD, clearLearnedCache: clearLearnedCache, isSmallTalk: isSmallTalk, smallTalkReply: smallTalkReply, isLightMessage: isLightMessage, followUpRewrite: followUpRewrite };

@@ -4,7 +4,7 @@
  *   node test/db_diagnostics_test.js
  */
 const assert = require('assert');
-const { classifyDbError, handleCaptain, health } = require('../src/httpHandler');
+const { classifyDbError, handleKris, health } = require('../src/httpHandler');
 const router = require('../src/router');
 
 let passed = 0; const fails = [];
@@ -49,11 +49,11 @@ t('pool config uses client-side query_timeout, never the statement_timeout start
 
 // End to end: a data question against a database whose connect() fails with a
 // classified error surfaces the code + hint, and the raw message never appears.
-const failingDb = async () => { throw Object.assign(new Error('password authentication failed for user "postgres"'), { code: '28P01', captainCode: 'DB_AUTH', captainHint: 'hint text' }); };
+const failingDb = async () => { throw Object.assign(new Error('password authentication failed for user "postgres"'), { code: '28P01', krisCode: 'DB_AUTH', krisHint: 'hint text' }); };
 ta('withDb reply carries code + detail from the classified connection error', async () => {
   const out = await router.route(
     { text: 'fueleu penalty for STI ROTHERHITHE this year', session: { userId: 'u', orgId: 'o', vesselIds: ['v1'] }, now: new Date(), history: [], context: {} },
-    failingDb, { orgId: 'o', env: { CAPTAIN_ENABLE_LLM: '0' } }
+    failingDb, { orgId: 'o', env: { KRIS_ENABLE_LLM: '0' } }
   );
   assert.strictEqual(out.reason, 'db_unreachable');
   assert.strictEqual(out.code, 'DB_AUTH');
@@ -61,24 +61,24 @@ ta('withDb reply carries code + detail from the classified connection error', as
   assert.ok(!/authentication failed/.test(JSON.stringify(out)));
 });
 ta('a missing view is named so the operator knows which migration to run', async () => {
-  const client = { query: async () => { throw Object.assign(new Error('relation "captain_dnv" does not exist'), { code: '42P01' }); } };
+  const client = { query: async () => { throw Object.assign(new Error('relation "kris_dnv" does not exist'), { code: '42P01' }); } };
   const out = await router.route(
     { text: 'fueleu penalty for STI ROTHERHITHE this year', session: { userId: 'u', orgId: 'o', vesselIds: ['v1'] }, now: new Date(), history: [], context: {} },
-    async () => client, { orgId: 'o', env: { CAPTAIN_ENABLE_LLM: '0' } }
+    async () => client, { orgId: 'o', env: { KRIS_ENABLE_LLM: '0' } }
   );
   assert.strictEqual(out.reason, 'query_failed');
   assert.strictEqual(out.code, 'PG_42P01');
-  assert.ok(/captain_dnv/.test(out.detail));
+  assert.ok(/kris_dnv/.test(out.detail));
 });
-ta('CAPTAIN_DIAGNOSTICS=0 hides code/detail from the client but keeps the build', async () => {
+ta('KRIS_DIAGNOSTICS=0 hides code/detail from the client but keeps the build', async () => {
   // Drive through the HTTP layer with the router monkeypatched to return a classified error.
   const orig = router.route;
   router.route = async () => ({ status: 'error', source: 'router', reason: 'db_unreachable', text: 'x', code: 'DB_AUTH', detail: 'hint' });
   try {
     const token = Buffer.from(JSON.stringify({ sub: 'n' })).toString('base64');
-    const on = JSON.parse((await handleCaptain({ method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ text: 'q' }), env: { CAPTAIN_DEV_SESSION: '1' } })).body);
+    const on = JSON.parse((await handleKris({ method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ text: 'q' }), env: { KRIS_DEV_SESSION: '1' } })).body);
     assert.strictEqual(on.code, 'DB_AUTH'); assert.strictEqual(on.detail, 'hint'); assert.ok(on.build);
-    const off = JSON.parse((await handleCaptain({ method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ text: 'q' }), env: { CAPTAIN_DEV_SESSION: '1', CAPTAIN_DIAGNOSTICS: '0' } })).body);
+    const off = JSON.parse((await handleKris({ method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ text: 'q' }), env: { KRIS_DEV_SESSION: '1', KRIS_DIAGNOSTICS: '0' } })).body);
     assert.strictEqual(off.code, undefined); assert.strictEqual(off.detail, undefined); assert.ok(off.build);
   } finally { router.route = orig; }
 });

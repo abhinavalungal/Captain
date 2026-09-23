@@ -4,7 +4,7 @@
  * fetch is stubbed with payloads in three DIFFERENT envelope/field styles to
  * prove the mapper and sync are shape-tolerant. Numbers are arbitrary.
  *
- *   CAPTAIN_TEST_URL='postgres://...' node test/integrations.js
+ *   KRIS_TEST_URL='postgres://...' node test/integrations.js
  */
 const assert = require('assert');
 const { Client } = require('pg');
@@ -19,7 +19,7 @@ const ta = async (n, f) => { try { await f(); passed++; } catch (e) { fails.push
 const ENV = {
   VESON_API_TOKEN: 'tok', VESON_LEGWISE_API: 'https://api.example/legs', VESON_OFFHIRE_API: 'https://api.example/off',
   GEOFORM_API: 'https://geo.example/getallforms', GEOFORM_API_KEY: 'k', GEOFORM_API_KEY_HEADER: 'library-api',
-  CAPTAIN_SYNC_DAYS: '40', CAPTAIN_IMOS: '',
+  KRIS_SYNC_DAYS: '40', KRIS_IMOS: '',
 };
 
 // three styles: camelCase array, "Title Case" under data{}, snake_case under result.rows
@@ -113,8 +113,8 @@ t('clients: token is appended to Veson URLs and never duplicated', async () => {
     await assert.rejects(vesonClient(bad, fetchStub).legWise(), (e) => e.name === 'Error' && /failed \(404\)/.test(e.message) && !/tok/.test(e.message.replace(/tok\b/, '')) );
   });
 
-  if (!process.env.CAPTAIN_TEST_URL) { finish(); return; }
-  const db = new Client({ connectionString: process.env.CAPTAIN_TEST_URL });
+  if (!process.env.KRIS_TEST_URL) { finish(); return; }
+  const db = new Client({ connectionString: process.env.KRIS_TEST_URL });
   await db.connect();
   await db.query("DELETE FROM veson_legs WHERE voyage_no IN ('V12','V13'); DELETE FROM veson_offhire WHERE reason='Weather'; DELETE FROM geoform_reports WHERE form_type='Noon Report';");
 

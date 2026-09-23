@@ -18,7 +18,7 @@ const sql = require('./sql');
 /**
  * Turn a request into a session. Replace the body of this function with your
  * real auth check — a Netlify Identity JWT, a Supabase session, a signed
- * cookie, whatever Geo Monitor already uses.
+ * cookie, whatever Shuddha now already uses.
  *
  * Must return null for an unauthenticated request. Returning a session with
  * an empty scope is treated as "authenticated but sees nothing", which is a
@@ -33,7 +33,7 @@ async function resolveSession(event, deps = {}) {
 
   const verify = deps.verifyToken;
   if (typeof verify !== 'function') {
-    throw new Error('Captain: no token verifier configured. Pass deps.verifyToken or deps.resolveSession.');
+    throw new Error('K.R.1.S: no token verifier configured. Pass deps.verifyToken or deps.resolveSession.');
   }
   return verify(token);
 }
@@ -44,7 +44,7 @@ async function resolveSession(event, deps = {}) {
  * Precedence:
  *   1. session.vesselIds  — an explicit allow-list wins outright
  *   2. session.departments — expanded via the vessels table scope column
- *   3. neither            — empty scope, and Captain says so plainly
+ *   3. neither            — empty scope, and K.R.1.S says so plainly
  */
 async function resolveScope(session, db) {
   if (!session) return { authenticated: false, vessels: [], vesselIds: [] };

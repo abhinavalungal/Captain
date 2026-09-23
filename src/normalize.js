@@ -108,7 +108,7 @@ function levenshtein(a, b) {
 /**
  * Typo tolerance scaled to word length. Short strings get none — "sp" and "ap"
  * are different metrics, not a typo, and guessing between them is exactly the
- * failure mode Captain exists to avoid.
+ * failure mode K.R.1.S exists to avoid.
  */
 function fuzzyThreshold(len) {
   if (len <= 4) return 0;
@@ -136,6 +136,17 @@ function buildAliasIndex(entries) {
   }
 
   return { exact, meta, maxWords, aliases: Array.from(exact.keys()) };
+}
+
+// A typo correction that turns an ordinary English word into part of a
+// metric alias is almost never a typo: "chat with me for a bit" is not
+// "ME FOC". Fuzzy matches may not rewrite these words.
+const COMMON_WORDS = new Set(['a', 'an', 'the', 'for', 'to', 'of', 'in', 'on', 'at', 'by', 'me', 'my', 'we', 'us', 'it', 'is', 'are', 'was', 'be', 'or', 'and', 'but', 'so', 'if', 'as', 'do', 'go', 'no', 'not', 'you', 'your', 'our', 'can', 'how', 'what', 'who', 'why', 'bit', 'lot', 'fun', 'with', 'from', 'this', 'that', 'there', 'here']);
+function correctsCommonWord(gram, alias) {
+  const g = gram.split(' '); const a = alias.split(' ');
+  if (g.length !== a.length) return g.some((w) => COMMON_WORDS.has(w));
+  for (let i = 0; i < g.length; i++) if (g[i] !== a[i] && COMMON_WORDS.has(g[i])) return true;
+  return false;
 }
 
 /**
@@ -181,6 +192,7 @@ function findAliasMatches(text, index) {
       for (const alias of index.aliases) {
         if (Math.abs(alias.length - gram.length) > budget) continue;
         const d = levenshtein(gram, alias);
+        if (d && correctsCommonWord(gram, alias)) continue;
         if (d <= budget && (!best || d < best.distance || (d === best.distance && n > best.words))) {
           best = {
             values: Array.from(index.exact.get(alias)),

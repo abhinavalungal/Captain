@@ -1,8 +1,8 @@
 -- ============================================================================
---  Captain — migration 002
+--  K.R.1.S — migration 002
 --  Tables that hold the synced copy of Veson IMOS and Geoform data.
---  Captain answers from these; the sync job (netlify/functions/captain-sync.js
---  or `npm run sync`) fills them.
+--  K.R.1.S answers from these; the sync job (src/integrations/sync.js, run by
+--  server.js on a schedule, by POST /api/kris-sync, or `npm run sync`) fills them.
 -- ============================================================================
 
 BEGIN;
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS geoform_reports (
 );
 CREATE INDEX IF NOT EXISTS geoform_reports_lookup ON geoform_reports (imo, report_date);
 
-CREATE TABLE IF NOT EXISTS captain_sync_log (
+CREATE TABLE IF NOT EXISTS kris_sync_log (
   id          BIGSERIAL PRIMARY KEY,
   started_at  TIMESTAMPTZ NOT NULL,
   finished_at TIMESTAMPTZ,
@@ -88,8 +88,8 @@ CREATE TABLE IF NOT EXISTS captain_sync_log (
 COMMIT;
 
 -- Reader: exactly the tables in src/config.js.
-GRANT SELECT ON vessels, veson_legs, veson_offhire, geoform_reports TO captain_reader;
+GRANT SELECT ON vessels, veson_legs, veson_offhire, geoform_reports TO kris_reader;
 
 -- Writer: the sync job.
-GRANT SELECT, INSERT, UPDATE ON vessels, veson_legs, veson_offhire, geoform_reports, captain_sync_log TO captain_writer;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO captain_writer;
+GRANT SELECT, INSERT, UPDATE ON vessels, veson_legs, veson_offhire, geoform_reports, kris_sync_log TO kris_writer;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO kris_writer;

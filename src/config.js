@@ -2,11 +2,11 @@
 
 /**
  * ============================================================================
- *  CAPTAIN — DATA REGISTRY
+ *  KRIS — DATA REGISTRY
  * ============================================================================
- *  THIS IS THE ONLY FILE YOU NEED TO EDIT TO POINT CAPTAIN AT YOUR SCHEMA.
+ *  THIS IS THE ONLY FILE YOU NEED TO EDIT TO POINT KRIS AT YOUR SCHEMA.
  *
- *  Nothing else in Captain contains a table name or a column name. Every
+ *  Nothing else in K.R.1.S contains a table name or a column name. Every
  *  identifier that reaches SQL is looked up here first; anything not declared
  *  here can never be queried. That is what makes SQL injection structurally
  *  impossible rather than merely filtered.
@@ -16,7 +16,7 @@
  */
 
 /**
- * SOURCES — the tables Captain is allowed to read.
+ * SOURCES — the tables K.R.1.S is allowed to read.
  *
  *   key            internal id, referenced by metrics
  *   table          real table name (optionally "schema.table")
@@ -26,9 +26,9 @@
  *                  'timestamptz' -> an instant (supports hour-level questions)
  *                  'timestamp'
  *   granularity    'daily' | 'hourly' | 'sub_hourly'
- *                  Captain refuses hour-of-day questions against 'daily'
+ *                  K.R.1.S refuses hour-of-day questions against 'daily'
  *                  sources instead of silently answering the wrong thing.
- *   description    shown to users when Captain explains where a number came from
+ *   description    shown to users when K.R.1.S explains where a number came from
  */
 const SOURCES = {
   geoform_reports: {
@@ -60,9 +60,9 @@ const SOURCES = {
   },
 
   // --- fueleu_final / dnv -----------------------------------------------------
-  // Both read through a VIEW, not the raw table (see db/003_captain_fueleu_dnv_views.sql).
+  // Both read through a VIEW, not the raw table (see db/003.sql).
   // Reason: the underlying tables use identifiers with spaces ("CB at Start",
-  // "Gross CB") that Captain's identifier validator correctly refuses to
+  // "Gross CB") that K.R.1.S's identifier validator correctly refuses to
   // declare directly — that refusal is what makes SQL injection structurally
   // impossible elsewhere in this file, so the view exists instead of loosening it.
   //
@@ -75,18 +75,18 @@ const SOURCES = {
   // interpolate a mid-voyage value. Fine for "this voyage" / "this month"
   // style questions; misleading for anything asking about a single day inside
   // a longer voyage. Flag if that's not the behaviour you want.
-  captain_fueleu_final: {
-    key: 'captain_fueleu_final',
-    table: 'captain_fueleu_final',
+  kris_fueleu_final: {
+    key: 'kris_fueleu_final',
+    table: 'kris_fueleu_final',
     vesselColumn: 'imo',
     timeColumn: 'voyage_start',
     timeColumnType: 'timestamptz',
     granularity: 'daily',
     description: 'FuelEU compliance balance by voyage',
   },
-  captain_dnv: {
-    key: 'captain_dnv',
-    table: 'captain_dnv',
+  kris_dnv: {
+    key: 'kris_dnv',
+    table: 'kris_dnv',
     vesselColumn: 'imo',
     timeColumn: 'reallocation_period_start',
     timeColumnType: 'date',
@@ -96,7 +96,7 @@ const SOURCES = {
 };
 
 /**
- * VESSELS — how Captain finds and names vessels. Vessel ids ARE IMO numbers,
+ * VESSELS — how K.R.1.S finds and names vessels. Vessel ids ARE IMO numbers,
  * because that is the key shared by Veson and Geoform.
  */
 const VESSELS = {
@@ -109,7 +109,7 @@ const VESSELS = {
 
 /**
  * METRICS — see the field reference above each block. `column` names here are
- * Captain's own normalized columns (db/002_veson_geoform.sql); the mapping
+ * K.R.1.S's own normalized columns (db/002_veson_geoform.sql); the mapping
  * from upstream API field names to these lives in src/integrations/mapping.js.
  */
 const METRICS = [
@@ -156,39 +156,39 @@ const METRICS = [
   { key: 'offhire_days', label: 'Off-hire days', unit: 'days', source: 'veson_offhire', column: 'offhire_days', kind: 'quantity', decimals: 2,
     aliases: ['off hire days', 'offhire days', 'days off hire'] },
 
-  // --- fueleu_final (via captain_fueleu_final view) ---------------------------
+  // --- fueleu_final (via kris_fueleu_final view) ---------------------------
   // UNIT NOT CONFIRMED: gCO2e is a guess, matching how `compliance_balance`
   // above is declared for veson_legs, and matching bigint values that size.
   // Confirm with Nav before this reaches a user.
-  { key: 'gross_cb', label: 'Gross compliance balance', unit: 'gCO2e /* UNCONFIRMED */', source: 'captain_fueleu_final', column: 'gross_cb', kind: 'quantity', decimals: 0,
+  { key: 'gross_cb', label: 'Gross compliance balance', unit: 'gCO2e /* UNCONFIRMED */', source: 'kris_fueleu_final', column: 'gross_cb', kind: 'quantity', decimals: 0,
     aliases: ['gross cb', 'gross compliance balance', 'voyage compliance balance', 'fueleu gross cb'],
     description: 'Gross FuelEU compliance balance for the voyage' },
-  { key: 'cb_at_start', label: 'Compliance balance at voyage start', unit: 'gCO2e /* UNCONFIRMED */', source: 'captain_fueleu_final', column: 'cb_at_start', kind: 'quantity', decimals: 0,
+  { key: 'cb_at_start', label: 'Compliance balance at voyage start', unit: 'gCO2e /* UNCONFIRMED */', source: 'kris_fueleu_final', column: 'cb_at_start', kind: 'quantity', decimals: 0,
     aliases: ['cb at start', 'starting compliance balance', 'opening cb', 'compliance balance at start'] },
-  { key: 'voyage_gross_days', label: 'Voyage gross days', unit: 'days', source: 'captain_fueleu_final', column: 'voyage_gross_days', kind: 'quantity', decimals: 2,
+  { key: 'voyage_gross_days', label: 'Voyage gross days', unit: 'days', source: 'kris_fueleu_final', column: 'voyage_gross_days', kind: 'quantity', decimals: 2,
     aliases: ['voyage gross days', 'gross voyage days', 'voyage days'] },
-  { key: 'fueleu_offhire_gross_days', label: 'Off-hire gross days (FuelEU)', unit: 'days', source: 'captain_fueleu_final', column: 'offhire_gross_days', kind: 'quantity', decimals: 2,
+  { key: 'fueleu_offhire_gross_days', label: 'Off-hire gross days (FuelEU)', unit: 'days', source: 'kris_fueleu_final', column: 'offhire_gross_days', kind: 'quantity', decimals: 2,
     aliases: ['fueleu offhire gross days', 'fueleu off hire gross days'] },
-  { key: 'net_gross_days', label: 'Net gross days', unit: 'days', source: 'captain_fueleu_final', column: 'net_gross_days', kind: 'quantity', decimals: 2,
+  { key: 'net_gross_days', label: 'Net gross days', unit: 'days', source: 'kris_fueleu_final', column: 'net_gross_days', kind: 'quantity', decimals: 2,
     aliases: ['net gross days', 'net voyage days'] },
 
-  // --- dnv (via captain_dnv view) ----------------------------------------------
+  // --- dnv (via kris_dnv view) ----------------------------------------------
   // UNIT NOT CONFIRMED for all four below — best guesses only.
-  { key: 'dnv_compliance_balance', label: 'DNV compliance balance', unit: 'gCO2e /* UNCONFIRMED */', source: 'captain_dnv', column: 'compliance_balance', kind: 'quantity', decimals: 0,
+  { key: 'dnv_compliance_balance', label: 'DNV compliance balance', unit: 'gCO2e /* UNCONFIRMED */', source: 'kris_dnv', column: 'compliance_balance', kind: 'quantity', decimals: 0,
     aliases: ['dnv cb', 'dnv compliance balance', 'reallocation compliance balance', 'dnv balance'],
     description: 'FuelEU compliance balance for the reallocation period, per DNV' },
-  { key: 'fueleu_penalty', label: 'FuelEU penalty', unit: 'EUR /* UNCONFIRMED */', source: 'captain_dnv', column: 'fueleu_penalty', kind: 'quantity', decimals: 2,
+  { key: 'fueleu_penalty', label: 'FuelEU penalty', unit: 'EUR /* UNCONFIRMED */', source: 'kris_dnv', column: 'fueleu_penalty', kind: 'quantity', decimals: 2,
     aliases: ['fueleu penalty', 'dnv penalty', 'compliance penalty', 'fueleu fine'] },
-  { key: 'fueleu_energy', label: 'FuelEU energy', unit: 'MJ /* UNCONFIRMED */', source: 'captain_dnv', column: 'fueleu_energy', kind: 'quantity', decimals: 0,
+  { key: 'fueleu_energy', label: 'FuelEU energy', unit: 'MJ /* UNCONFIRMED */', source: 'kris_dnv', column: 'fueleu_energy', kind: 'quantity', decimals: 0,
     aliases: ['fueleu energy', 'dnv energy', 'energy used fueleu'] },
-  { key: 'actual_ghg', label: 'Actual GHG intensity', unit: 'gCO2e/MJ /* UNCONFIRMED */', source: 'captain_dnv', column: 'actual_ghg', kind: 'rate', decimals: 2,
+  { key: 'actual_ghg', label: 'Actual GHG intensity', unit: 'gCO2e/MJ /* UNCONFIRMED */', source: 'kris_dnv', column: 'actual_ghg', kind: 'rate', decimals: 2,
     aliases: ['actual ghg', 'actual ghg intensity', 'dnv ghg', 'realised ghg intensity'] },
 ];
 
 /**
  * METRIC_GROUPS — words that legitimately refer to more than one metric.
- * Captain asks instead of picking. An organisation can resolve a group for
- * itself by teaching Captain ("consumption means fuel consumption").
+ * K.R.1.S asks instead of picking. An organisation can resolve a group for
+ * itself by teaching K.R.1.S ("consumption means fuel consumption").
  */
 const METRIC_GROUPS = [
   { term: 'consumption', metrics: ['fuel_consumption', 'me_consumption', 'ae_consumption', 'leg_fuel'] },
@@ -199,7 +199,7 @@ const METRIC_GROUPS = [
   { term: 'co2', metrics: ['co2', 'leg_co2'] },
   { term: 'distance', metrics: ['distance', 'leg_distance'] },
   // Three tables carry a compliance balance. "CB" alone is ambiguous between
-  // them, so Captain asks which one rather than picking.
+  // them, so K.R.1.S asks which one rather than picking.
   { term: 'cb', metrics: ['gross_cb', 'dnv_compliance_balance', 'compliance_balance'] },
   { term: 'compliance balance', metrics: ['gross_cb', 'dnv_compliance_balance', 'compliance_balance'] },
   { term: 'balance', metrics: ['gross_cb', 'dnv_compliance_balance', 'compliance_balance'] },
@@ -222,7 +222,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
 
 function assertIdent(value, what) {
   if (typeof value !== 'string' || !IDENT.test(value)) {
-    throw new Error(`Captain config: invalid identifier for ${what}: ${JSON.stringify(value)}`);
+    throw new Error(`K.R.1.S config: invalid identifier for ${what}: ${JSON.stringify(value)}`);
   }
   return value;
 }
@@ -247,10 +247,10 @@ function validateConfig() {
       assertIdent(src.timeColumn, `source ${src.key}.timeColumn`);
     } catch (e) { errors.push(e.message); }
     if (!['date', 'timestamp', 'timestamptz'].includes(src.timeColumnType)) {
-      errors.push(`Captain config: source ${src.key} has unknown timeColumnType`);
+      errors.push(`K.R.1.S config: source ${src.key} has unknown timeColumnType`);
     }
     if (!['daily', 'hourly', 'sub_hourly'].includes(src.granularity)) {
-      errors.push(`Captain config: source ${src.key} has unknown granularity`);
+      errors.push(`K.R.1.S config: source ${src.key} has unknown granularity`);
     }
   }
 
@@ -264,21 +264,21 @@ function validateConfig() {
 
   const seenKeys = new Set();
   for (const m of METRICS) {
-    if (seenKeys.has(m.key)) errors.push(`Captain config: duplicate metric key ${m.key}`);
+    if (seenKeys.has(m.key)) errors.push(`K.R.1.S config: duplicate metric key ${m.key}`);
     seenKeys.add(m.key);
-    if (!SOURCES[m.source]) errors.push(`Captain config: metric ${m.key} references unknown source ${m.source}`);
-    if (!AGGREGATIONS_BY_KIND[m.kind]) errors.push(`Captain config: metric ${m.key} has unknown kind ${m.kind}`);
+    if (!SOURCES[m.source]) errors.push(`K.R.1.S config: metric ${m.key} references unknown source ${m.source}`);
+    if (!AGGREGATIONS_BY_KIND[m.kind]) errors.push(`K.R.1.S config: metric ${m.key} has unknown kind ${m.kind}`);
     try { assertIdent(m.column, `metric ${m.key}.column`); } catch (e) { errors.push(e.message); }
-    if (!m.unit) errors.push(`Captain config: metric ${m.key} is missing a unit`);
+    if (!m.unit) errors.push(`K.R.1.S config: metric ${m.key} is missing a unit`);
   }
 
   for (const g of METRIC_GROUPS) {
     if (!g.metrics || g.metrics.length < 2) {
-      errors.push(`Captain config: group "${g.term}" must point at two or more metrics`);
+      errors.push(`K.R.1.S config: group "${g.term}" must point at two or more metrics`);
     }
     for (const k of g.metrics || []) {
       if (!METRICS.some((m) => m.key === k)) {
-        errors.push(`Captain config: group "${g.term}" references unknown metric ${k}`);
+        errors.push(`K.R.1.S config: group "${g.term}" references unknown metric ${k}`);
       }
     }
   }

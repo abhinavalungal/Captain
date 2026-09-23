@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * Field mapping from upstream API records to Captain's own tables.
+ * Field mapping from upstream API records to K.R.1.S's own tables.
  *
- * Upstream report APIs return rows whose key names Captain does not control
+ * Upstream report APIs return rows whose key names K.R.1.S does not control
  * and which can change between report versions. Rather than hard-code one
  * spelling, each target column lists the candidate source keys it accepts.
  * Matching is insensitive to case, spaces, underscores, hyphens and dots, so
@@ -14,14 +14,14 @@
  *   - unmatched TARGET columns -> so you know a metric will be NULL
  *
  * Run `npm run discover` against the live APIs to see both lists. An override
- * can also be supplied via CAPTAIN_FIELD_MAP as JSON:
+ * can also be supplied via KRIS_FIELD_MAP as JSON:
  *   {"veson_legs":{"fuel_mt":"TotalFuelConsumedMT"}}
  */
 
 const norm = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
- * Target schemas. `columns` are Captain's own column names — these are the
+ * Target schemas. `columns` are K.R.1.S's own column names — these are the
  * ones referenced in src/config.js. `candidates` are guesses at upstream
  * spellings; `discover` confirms them.
  */
@@ -81,7 +81,7 @@ const SCHEMAS = {
 
 /**
  * Build a concrete key->column resolution for one record shape.
- * `override` is an optional { column: sourceKey } map from CAPTAIN_FIELD_MAP.
+ * `override` is an optional { column: sourceKey } map from KRIS_FIELD_MAP.
  */
 function resolveMapping(schemaName, sampleRecord, override = {}) {
   const schema = SCHEMAS[schemaName];
@@ -179,9 +179,9 @@ function deriveFuelTotal(record) {
 }
 
 function loadOverrides(env = process.env) {
-  if (!env.CAPTAIN_FIELD_MAP) return {};
-  try { return JSON.parse(env.CAPTAIN_FIELD_MAP); }
-  catch (e) { throw new Error('CAPTAIN_FIELD_MAP is not valid JSON: ' + e.message); }
+  if (!env.KRIS_FIELD_MAP) return {};
+  try { return JSON.parse(env.KRIS_FIELD_MAP); }
+  catch (e) { throw new Error('KRIS_FIELD_MAP is not valid JSON: ' + e.message); }
 }
 
 module.exports = { SCHEMAS, resolveMapping, mapRecord, deriveFuelTotal, loadOverrides, toNumber, toText, toTime, norm };

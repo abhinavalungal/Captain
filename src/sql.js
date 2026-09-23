@@ -207,7 +207,7 @@ WHERE ${scope} AND ((${pa}) OR (${pb})) AND ${col} IS NOT NULL`.trim();
 
 /**
  * Overview: every registered metric over one period, one statement per source
- * table. Used when a user asks Captain to look at a vessel without naming a
+ * table. Used when a user asks K.R.1.S to look at a vessel without naming a
  * measurement.
  */
 function buildOverview(plan, vesselIds) {

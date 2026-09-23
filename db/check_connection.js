@@ -12,7 +12,7 @@
  */
 const { Client } = require('pg');
 
-const url = process.argv[2] || process.env.CAPTAIN_READ_URL;
+const url = process.argv[2] || process.env.KRIS_READ_URL;
 if (!url) {
   console.error('Usage: node db/check_connection.js "<connection string>"');
   process.exit(1);
@@ -20,7 +20,7 @@ if (!url) {
 
 (async () => {
   // Supabase's pooler presents a certificate chain from its own CA, which is
-  // not in every OS trust store (Windows especially). Captain's server accepts
+  // not in every OS trust store (Windows especially). K.R.1.S's server accepts
   // it the same way (see sslFor() in src/httpHandler.js).
   const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
   try {
@@ -44,14 +44,14 @@ if (!url) {
       console.log('\nvessels table columns:');
       cols.rows.forEach((r) => console.log('  ', r.column_name, '—', r.data_type));
     } else {
-      console.log('\nNo `vessels` table in public schema — Captain has nothing to scope RBAC against yet.');
+      console.log('\nNo `vessels` table in public schema — K.R.1.S has nothing to scope RBAC against yet.');
     }
 
     const views = await client.query(
       `select table_name from information_schema.views
-       where table_schema = 'public' and table_name in ('captain_fueleu_final', 'captain_dnv')`
+       where table_schema = 'public' and table_name in ('kris_fueleu_final', 'kris_dnv')`
     );
-    console.log('\ncaptain_* views present:', views.rows.length ? views.rows.map((r) => r.table_name).join(', ') : '(none yet — run db/003_captain_fueleu_dnv_views.sql)');
+    console.log('\nkris_* views present:', views.rows.length ? views.rows.map((r) => r.table_name).join(', ') : '(none yet — run db/003.sql)');
   } catch (err) {
     console.error('❌ Connection or query failed:', err.message);
     process.exitCode = 1;

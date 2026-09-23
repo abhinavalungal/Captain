@@ -61,16 +61,32 @@ const HELP_RE = /^\s*(help|what can you do|what do you know|commands|capabilitie
  *
  * Three layers, in order of increasing authority:
  *   1. config aliases      — one term, one metric
- *   2. config groups       — one term, several metrics, so Captain asks
+ *   2. config groups       — one term, several metrics, so K.R.1.S asks
  *   3. learned mappings    — an organisation's own vocabulary, which REPLACES
  *                            layers 1 and 2 for that exact term
  *
  * The replacement in layer 3 is what makes teaching useful. If an org tells
- * Captain that "consumption" means fuel consumption, the built-in ambiguity
+ * K.R.1.S that "consumption" means fuel consumption, the built-in ambiguity
  * for that word is resolved for them and they stop being asked. It still only
  * changes which column is read — never what the column contains.
  */
+// The index over config aliases is rebuilt from scratch on every call and
+// costs ~1 ms — and classify() runs several times per message. Memoise it:
+// once for "no learned terms", and per learned-mappings array otherwise (the
+// caches hand out the same array until they refresh).
+let BASE_INDEX = null;
+const INDEX_BY_LEARNED = new WeakMap();
 function buildMetricIndex(learnedMappings = []) {
+  if (!learnedMappings || !learnedMappings.length) {
+    if (!BASE_INDEX) BASE_INDEX = buildMetricIndexUncached([]);
+    return BASE_INDEX;
+  }
+  let idx = INDEX_BY_LEARNED.get(learnedMappings);
+  if (!idx) { idx = buildMetricIndexUncached(learnedMappings); INDEX_BY_LEARNED.set(learnedMappings, idx); }
+  return idx;
+}
+
+function buildMetricIndexUncached(learnedMappings = []) {
   const learnedTerms = new Set(
     learnedMappings
       .filter((lm) => METRICS_BY_KEY[lm.metric_key])
@@ -590,7 +606,7 @@ function priorPeriod(range) {
  * vessel data. The router uses this to avoid opening a connection for
  * greetings, app-navigation questions and small talk.
  *
- *   'help'  — asks what Captain can do
+ *   'help'  — asks what K.R.1.S can do
  *   'teach' — "X means Y" vocabulary
  *   'data'  — names a metric (or is an "analyse my vessel over <period>"
  *             overview), so it needs the records

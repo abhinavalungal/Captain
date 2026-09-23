@@ -6,7 +6,7 @@ const { resolveMapping, mapRecord, deriveFuelTotal, loadOverrides } = require('.
 /**
  * Pull upstream data into Postgres.
  *
- * Captain answers questions from these tables and never calls Veson or
+ * K.R.1.S answers questions from these tables and never calls Veson or
  * Geoform during a conversation. That is deliberate: report APIs are slow,
  * return whole reports rather than one figure, and would put a third party
  * between a user and a yes/no about their own vessel. Sync hourly; answer
@@ -72,10 +72,10 @@ async function sync({ db, env = process.env, fetchImpl, log = () => {}, now = ne
 
   // --- Geoform, per IMO, over a rolling window in 30-day pages -------------
   {
-    const days = Math.max(1, parseInt(env.CAPTAIN_SYNC_DAYS || '120', 10));
-    const explicit = (env.CAPTAIN_IMOS || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const days = Math.max(1, parseInt(env.KRIS_SYNC_DAYS || '120', 10));
+    const explicit = (env.KRIS_IMOS || '').split(',').map((s) => s.trim()).filter(Boolean);
     const targets = explicit.length ? explicit : Array.from(imos.keys());
-    if (!targets.length) stats.warnings.push('Geoform: no IMOs to pull — set CAPTAIN_IMOS or ensure Veson data contains IMO numbers');
+    if (!targets.length) stats.warnings.push('Geoform: no IMOs to pull — set KRIS_IMOS or ensure Veson data contains IMO numbers');
 
     const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const start = new Date(end.getTime() - days * 86400000);
@@ -121,7 +121,7 @@ async function sync({ db, env = process.env, fetchImpl, log = () => {}, now = ne
 
   stats.finished = new Date().toISOString();
   await db.query(
-    `INSERT INTO captain_sync_log (started_at, finished_at, legs, offhire, geoform, vessels, warnings)
+    `INSERT INTO kris_sync_log (started_at, finished_at, legs, offhire, geoform, vessels, warnings)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [stats.started, stats.finished, stats.legs, stats.offhire, stats.geoform, stats.vessels, JSON.stringify(stats.warnings)]
   ).catch((e) => stats.warnings.push('sync log: ' + e.message));
@@ -132,7 +132,7 @@ async function sync({ db, env = process.env, fetchImpl, log = () => {}, now = ne
 function warnMissing(stats, schema, res, required) {
   for (const col of required) {
     if (res.unmatchedTargets.includes(col)) {
-      stats.warnings.push(`${schema}: required column "${col}" matched no upstream field. Run npm run discover and set CAPTAIN_FIELD_MAP.`);
+      stats.warnings.push(`${schema}: required column "${col}" matched no upstream field. Run npm run discover and set KRIS_FIELD_MAP.`);
     }
   }
   if (res.unmatchedTargets.length) {

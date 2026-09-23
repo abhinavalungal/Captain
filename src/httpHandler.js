@@ -2,20 +2,27 @@
 
 const { Pool } = require('pg');
 
-// Bump on every delivery. Shows up in GET /api/captain (health) and in every
+// Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const CAPTAIN_BUILD = '2026-09-04.7';
+const KRIS_BUILD = '2026-09-23.kris-1';
 
-// Fingerprint every source file so /api/captain shows exactly what is
+// Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
 // means that file did not land intact.
+let FINGERPRINTS = null;
 function fileFingerprints() {
+  // Hashing every source file is synchronous disk work; do it once per process.
+  if (FINGERPRINTS) return FINGERPRINTS;
+  FINGERPRINTS = computeFingerprints();
+  return FINGERPRINTS;
+}
+function computeFingerprints() {
   const fs = require('fs'); const path = require('path'); const crypto = require('crypto');
   const out = {};
   const root = path.join(__dirname, '..');
   const targets = [];
   try { fs.readdirSync(__dirname).filter((f) => f.endsWith('.js')).forEach((f) => targets.push(['src/' + f, path.join(__dirname, f)])); } catch (_) { /* ignore */ }
-  targets.push(['public/captain-widget.js', path.join(root, 'public', 'captain-widget.js')]);
+  targets.push(['public/kris-widget.js', path.join(root, 'public', 'kris-widget.js')]);
   for (const [label, file] of targets) {
     try {
       const buf = fs.readFileSync(file);
@@ -28,7 +35,7 @@ function fileFingerprints() {
 }
 
 // Last few server-side errors, kept in memory (this process only). Exposed in
-// the health JSON ONLY in prototype auth mode (CAPTAIN_DEV_SESSION=1), which is
+// the health JSON ONLY in prototype auth mode (KRIS_DEV_SESSION=1), which is
 // already a dev-only configuration. Secrets are stripped before storing.
 const RECENT_ERRORS = [];
 function scrubSecrets(text) {
@@ -55,18 +62,18 @@ function recordError(where, err, extra) {
 }
 const router = require('./router');
 const { LIMITS, METRICS, SOURCES } = require('./config');
-const { readEnv: llmConfig } = require('./companion_src');
+const { readEnv: llmConfig, warmLLM } = require('./companion_src');
 const { sync } = require('./integrations/sync');
 
 /**
- * The whole HTTP surface of Captain, written against plain objects instead
+ * The whole HTTP surface of K.R.1.S, written against plain objects instead
  * of any platform's request/response shape. This is the ONE place the logic
  * lives — server.js (plain Node, runs anywhere) and netlify/functions/*.js
  * (kept only for anyone who still wants Netlify) are both thin adapters over
  * this file. There is exactly one implementation to keep correct.
  *
  * Every function here takes and returns plain data:
- *   handleCaptain({ method, headers, body, env })  -> { statusCode, headers, body }
+ *   handleKris({ method, headers, body, env })  -> { statusCode, headers, body }
  *   handleSync({ method, headers, env })           -> { statusCode, headers, body }
  * `headers` in is a plain lowercase-keyed object; `body` in is a raw string;
  * `body` out is always a JSON string.
@@ -77,26 +84,26 @@ let writePool;
 let poolEnvKey = null; // detects a changed connection string (tests swap env)
 
 function sslFor(env) {
-  return env.CAPTAIN_PG_SSL === 'false' ? false : { rejectUnauthorized: false };
+  return env.KRIS_PG_SSL === 'false' ? false : { rejectUnauthorized: false };
 }
 
 /** How long to wait for a TCP+TLS connection before giving up (default 8s). */
 /**
  * Turn a raw pg/network error into a short operator-facing cause. Each hint
  * names what to change; none includes the connection string, password, or
- * the raw message. Shown in the widget while CAPTAIN_DIAGNOSTICS is not '0'.
+ * the raw message. Shown in the widget while KRIS_DIAGNOSTICS is not '0'.
  */
 function classifyDbError(err) {
   const msg = String((err && err.message) || '');
   const code = String((err && err.code) || '');
   if (code === '28P01' || /password authentication failed/i.test(msg)) {
-    return { code: 'DB_AUTH', hint: 'The database rejected the password. CAPTAIN_READ_URL still has a wrong or placeholder password - replace [YOUR-PASSWORD] with the real one and URL-encode special characters (@ becomes %40).' };
+    return { code: 'DB_AUTH', hint: 'The database rejected the password. KRIS_READ_URL still has a wrong or placeholder password - replace [YOUR-PASSWORD] with the real one and URL-encode special characters (@ becomes %40).' };
   }
   if (/tenant or user not found/i.test(msg)) {
     return { code: 'DB_TENANT', hint: 'The pooler could not find the project. With the pooler host the username must be postgres.<project-ref>, not plain postgres.' };
   }
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
-    return { code: 'DB_DNS', hint: 'The database hostname could not be resolved - check the host part of CAPTAIN_READ_URL for typos.' };
+    return { code: 'DB_DNS', hint: 'The database hostname could not be resolved - check the host part of KRIS_READ_URL for typos.' };
   }
   if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') {
     return { code: 'DB_NO_ROUTE', hint: 'No network route to the database. db.<ref>.supabase.co is IPv6-only; use the pooler host aws-0-<region>.pooler.supabase.com instead.' };
@@ -117,20 +124,20 @@ function classifyDbError(err) {
     return { code: 'DB_POOL_FULL', hint: 'The pooler has no free client slots right now. Retry shortly; if persistent, raise the pool size in Supabase.' };
   }
   if (/certificate|ssl|tls/i.test(msg)) {
-    return { code: 'DB_TLS', hint: 'TLS problem talking to the database. Leave CAPTAIN_PG_SSL unset (the default accepts Supabase certificates).' };
+    return { code: 'DB_TLS', hint: 'TLS problem talking to the database. Leave KRIS_PG_SSL unset (the default accepts Supabase certificates).' };
   }
   if (code === '3D000') {
-    return { code: 'DB_NAME', hint: 'The database name in CAPTAIN_READ_URL does not exist (Supabase projects use "postgres").' };
+    return { code: 'DB_NAME', hint: 'The database name in KRIS_READ_URL does not exist (Supabase projects use "postgres").' };
   }
   if (code === '28000') {
-    return { code: 'DB_ROLE', hint: 'That database role is not allowed to connect - check the username in CAPTAIN_READ_URL.' };
+    return { code: 'DB_ROLE', hint: 'That database role is not allowed to connect - check the username in KRIS_READ_URL.' };
   }
   const safe = msg.replace(/https?:\/\/\S+/g, '<url>').replace(/password.*/i, 'password ...').slice(0, 120);
   return { code: code || 'DB_ERROR', hint: safe || 'Unclassified database error - see server log.' };
 }
 
 function diagnosticsOn(env) {
-  return String(env.CAPTAIN_DIAGNOSTICS || '1') !== '0';
+  return String(env.KRIS_DIAGNOSTICS || '1') !== '0';
 }
 
 function typeErrorDetail(err) {
@@ -141,60 +148,113 @@ function typeErrorDetail(err) {
 }
 
 function connectTimeoutMs(env) {
-  const n = parseInt(env.CAPTAIN_PG_CONNECT_TIMEOUT_MS || '8000', 10);
+  const n = parseInt(env.KRIS_PG_CONNECT_TIMEOUT_MS || '8000', 10);
   return Number.isFinite(n) && n > 0 ? n : 8000;
 }
 
+/** Idle connections are kept (default 5 min) so the next data question skips the TCP + TLS + auth handshake. */
+function idleMs(env) {
+  const n = parseInt(env.KRIS_PG_IDLE_MS || '300000', 10);
+  return Number.isFinite(n) && n >= 1000 ? n : 300000;
+}
+
+function makePool(connectionString, max, queryTimeout, env, label) {
+  const pool = new Pool({
+    connectionString,
+    max,
+    idleTimeoutMillis: idleMs(env),
+    // pg's default is 0 = wait forever. Against a host that silently drops
+    // packets (an IPv6-only endpoint from an IPv4 network, a firewall, a
+    // wrong region) the request would hang until the platform killed it.
+    connectionTimeoutMillis: connectTimeoutMs(env),
+    // query_timeout is enforced CLIENT-side by node-postgres. statement_timeout
+    // would be sent as a server startup parameter, which connection poolers
+    // (Supavisor transaction mode, PgBouncer) can reject with
+    // "unsupported startup parameter" - breaking every connection.
+    query_timeout: queryTimeout,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000,
+    ssl: sslFor(env),
+  });
+  // An idle client that the pooler drops emits 'error' on the POOL. Without a
+  // listener Node treats that as an unhandled 'error' event and the whole
+  // process crashes. Log it; the pool discards the client and reconnects.
+  pool.on('error', (err) => {
+    console.error('kris: idle ' + label + ' connection dropped -', (err && err.message) || err);
+  });
+  return pool;
+}
+
 function pools(env) {
-  const key = (env.CAPTAIN_READ_URL || '') + '|' + (env.CAPTAIN_WRITE_URL || '');
-  if (key !== poolEnvKey) { readPool = null; writePool = null; poolEnvKey = key; }
-  if (!writePool && env.CAPTAIN_WRITE_URL) {
-    writePool = new Pool({
-      connectionString: env.CAPTAIN_WRITE_URL,
-      max: 2,
-      idleTimeoutMillis: 10000,
-      connectionTimeoutMillis: connectTimeoutMs(env),
-      query_timeout: 5000,
-      ssl: sslFor(env),
-    });
+  const key = (env.KRIS_READ_URL || '') + '|' + (env.KRIS_WRITE_URL || '');
+  if (key !== poolEnvKey) {
+    if (readPool) readPool.end().catch(() => {});
+    if (writePool) writePool.end().catch(() => {});
+    readPool = null; writePool = null; poolEnvKey = key;
+  }
+  if (!writePool && env.KRIS_WRITE_URL) {
+    writePool = makePool(env.KRIS_WRITE_URL, 2, 5000, env, 'writer');
   }
   if (!readPool) {
-    if (!env.CAPTAIN_READ_URL) {
-      const e = new Error('CAPTAIN_READ_URL is not set');
+    if (!env.KRIS_READ_URL) {
+      const e = new Error('KRIS_READ_URL is not set');
       e.code = 'DB_NOT_CONFIGURED';
       throw e;
     }
-    readPool = new Pool({
-      connectionString: env.CAPTAIN_READ_URL,
-      max: 3,
-      idleTimeoutMillis: 10000,
-      // pg's default is 0 = wait forever. Against a host that silently drops
-      // packets (an IPv6-only endpoint from an IPv4 network, a firewall, a
-      // wrong region) the request would hang until the platform killed it.
-      connectionTimeoutMillis: connectTimeoutMs(env),
-      // query_timeout is enforced CLIENT-side by node-postgres. statement_timeout
-      // would be sent as a server startup parameter, which connection poolers
-      // (Supavisor transaction mode, PgBouncer) can reject with
-      // "unsupported startup parameter" - breaking every connection.
-      query_timeout: LIMITS.statementTimeoutMs,
-      ssl: sslFor(env),
-    });
+    readPool = makePool(env.KRIS_READ_URL, 3, LIMITS.statementTimeoutMs, env, 'reader');
   }
   return { readPool, writePool };
+}
+
+/** The read pool if configured, else null. Never throws. For background work. */
+function readPoolOrNull(env) {
+  try { return pools(env).readPool; } catch (_) { return null; }
+}
+
+/**
+ * Open one database connection in the background so the first data question
+ * does not pay for it, and keep one warm with a trivial query every few
+ * minutes (poolers and NAT gateways drop idle TCP connections). Never blocks
+ * a request, never throws. KRIS_PG_KEEPALIVE_MS=0 turns the ping off.
+ */
+let warmingDb = null;
+let keepAliveTimer = null;
+function warmDb(env) {
+  if (!env.KRIS_READ_URL || warmingDb) return warmingDb;
+  const pool = readPoolOrNull(env);
+  if (!pool) return null;
+  warmingDb = pool.query('SELECT 1').catch((err) => {
+    recordError('database warm-up', err);
+  }).then(() => { warmingDb = null; });
+  const every = parseInt(env.KRIS_PG_KEEPALIVE_MS || '240000', 10);
+  if (!keepAliveTimer && Number.isFinite(every) && every > 0) {
+    keepAliveTimer = setInterval(() => {
+      const p = readPoolOrNull(env);
+      if (p && p.idleCount > 0) p.query('SELECT 1').catch(() => {});
+    }, every);
+    if (keepAliveTimer.unref) keepAliveTimer.unref();
+  }
+  return warmingDb;
+}
+
+/** Warm everything a first message might need: DB connection, model connection. */
+function warmUp(env) {
+  try { warmDb(env); } catch (_) { /* best-effort */ }
+  try { warmLLM(env); } catch (_) { /* best-effort */ }
 }
 
 /**
  * Replace this with your real session check. Must return
  *   { userId, orgId, departments?, vesselIds? }   or   null.
  *
- * PROTOTYPE MODE — CAPTAIN_DEV_SESSION=1
+ * PROTOTYPE MODE — KRIS_DEV_SESSION=1
  *   Accepts an UNSIGNED token: base64 JSON like
  *     { "sub": "demo", "org": "geoserves", "departments": ["Emission"] }
  *   Convenient for demos. Trusts whatever the browser claims, so it must
  *   never be enabled on a site real users can reach.
  */
 async function verifyToken(token, env) {
-  if (env.CAPTAIN_DEV_SESSION === '1') {
+  if (env.KRIS_DEV_SESSION === '1') {
     try {
       const raw = token.includes('.') ? token.split('.')[1] : token;
       const claims = JSON.parse(Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
@@ -210,22 +270,29 @@ async function verifyToken(token, env) {
   return null;
 }
 
-async function resolveSession(headers, env) {
+/**
+ * The token may arrive in the Authorization header OR in the JSON body as
+ * `token`. The widget sends it in the body with Content-Type text/plain: that
+ * makes every message a CORS "simple request", so the browser sends it
+ * immediately instead of first doing an OPTIONS preflight round trip.
+ */
+async function resolveSession(headers, env, bodyToken) {
   const auth = headers.authorization || headers.Authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null;
+  let token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null;
+  if (!token && typeof bodyToken === 'string' && bodyToken.length < 8192) token = bodyToken.trim();
   if (!token) return null;
   return verifyToken(token, env);
 }
 
 // --- CORS: works the same regardless of host --------------------------------
-// CAPTAIN_ALLOW_ORIGIN may be one origin, a comma-separated list, "*" for
+// KRIS_ALLOW_ORIGIN may be one origin, a comma-separated list, "*" for
 // any origin, or a subdomain wildcard like "*.netlify.app" or
 // "*.geoserves.com" \u2014 the last matches every subdomain (including Netlify's
 // per-deploy preview URLs) under that domain, without matching arbitrary
 // third-party sites the way a bare "*" would. Entries can be mixed freely:
 // "https://perform.geoserves.com,*.netlify.app" is valid.
 function allowedOriginsList(env) {
-  return String(env.CAPTAIN_ALLOW_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return String(env.KRIS_ALLOW_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 /** True if `hostname` is exactly `suffixDomain` or a subdomain of it. */
@@ -266,7 +333,8 @@ function corsHeaders(requestOrigin, env) {
     h['Access-Control-Allow-Origin'] = allow;
     h['Access-Control-Allow-Headers'] = 'Content-Type, Authorization';
     h['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
-    h['Access-Control-Max-Age'] = '600';
+    h['Access-Control-Max-Age'] = '7200';   // browsers cap this at 2h; preflights are rare anyway
+    h['Access-Control-Expose-Headers'] = 'Server-Timing';
   }
   return h;
 }
@@ -279,24 +347,25 @@ function health(env) {
   const llm = llmConfig(env);
   return {
     status: 'ok',
-    service: 'captain',
-    build: CAPTAIN_BUILD,
+    service: 'kris',
+    build: KRIS_BUILD,
     // Every file that matters reports its own stamp. If these disagree, a
     // deploy shipped a mix of old and new files - the exact failure mode a
     // copy/paste pipeline produces.
-    builds: { httpHandler: CAPTAIN_BUILD, router: router.ROUTER_BUILD || 'pre-2026-09-04', agent: safeAgentBuild() },
-    database: !!env.CAPTAIN_READ_URL,
-    writer: !!env.CAPTAIN_WRITE_URL,
-    auth: env.CAPTAIN_DEV_SESSION === '1' ? 'prototype' : 'production',
+    builds: { httpHandler: KRIS_BUILD, router: router.ROUTER_BUILD || 'pre-2026-09-04', agent: safeAgentBuild() },
+    database: !!env.KRIS_READ_URL,
+    writer: !!env.KRIS_WRITE_URL,
+    auth: env.KRIS_DEV_SESSION === '1' ? 'prototype' : 'production',
     companion: llm.enabled ? { provider: llm.provider, model: llm.model, url: llm.url ? '(configured)' : null } : { enabled: false },
     sources: Object.values(SOURCES).map((s) => s.description),
     metrics: METRICS.filter((m) => !m.finerVersionOf).length,
     allowedOrigins: allowedOriginsList(env),
-    mode: String(env.CAPTAIN_MODE || 'router'),
+    mode: String(env.KRIS_MODE || 'router'),
+    features: { stream: true, bodyToken: true, fastLane: true },
     diagnostics: diagnosticsOn(env),
     node: process.version,
-    recentErrors: env.CAPTAIN_DEV_SESSION === '1' ? RECENT_ERRORS : undefined,
-    files: env.CAPTAIN_DEV_SESSION === '1' ? fileFingerprints() : undefined,
+    recentErrors: env.KRIS_DEV_SESSION === '1' ? RECENT_ERRORS : undefined,
+    files: env.KRIS_DEV_SESSION === '1' ? fileFingerprints() : undefined,
   };
 }
 
@@ -304,7 +373,7 @@ function health(env) {
  * Handle one request to the question endpoint.
  * @param {object} req  { method, headers (lowercase keys), body (raw string), env }
  */
-async function handleCaptain(req) {
+async function handleKris(req) {
   const env = req.env || process.env;
   const headers = lowercaseKeys(req.headers || {});
   const origin = headers.origin || '';
@@ -312,7 +381,10 @@ async function handleCaptain(req) {
   const reply = (statusCode, obj) => ({ statusCode, headers: cors, body: JSON.stringify(obj) });
 
   if (req.method === 'OPTIONS') return { statusCode: 204, headers: cors, body: '' };
-  if (req.method === 'GET') return reply(200, health(env));
+  // GET doubles as the widget's warm-up ping: it answers at once and, in the
+  // background, opens a database connection and the model connection so the
+  // first real message pays for neither.
+  if (req.method === 'GET') { warmUp(env); return reply(200, health(env)); }
   if (req.method !== 'POST') return reply(405, { error: 'Use POST.' });
 
   let payload;
@@ -322,11 +394,14 @@ async function handleCaptain(req) {
   const text = String(payload.text || '').slice(0, 1000);
   if (!text.trim()) return reply(400, { error: 'Ask a question.' });
 
+  const t0 = Date.now();
+  const streaming = payload.stream === true && typeof req.onEvent === 'function';
+
   let session;
   try {
-    session = await resolveSession(headers, env);
+    session = await resolveSession(headers, env, payload.token);
   } catch (err) {
-    console.error('captain: auth error', err);
+    console.error('kris: auth error', err);
     return reply(500, { status: 'error', text: 'Authentication is misconfigured.' });
   }
   if (!session) return reply(401, { status: 'unauthenticated', text: 'Sign in and I can look at your vessel data.' });
@@ -343,12 +418,12 @@ async function handleCaptain(req) {
       client = await p.readPool.connect();
     } catch (err) {
       if (!(err && err.code === 'DB_NOT_CONFIGURED')) {
-        console.error('captain: database connect failed', err);
+        console.error('kris: database connect failed', err);
         recordError('database connect', err);
         const d = classifyDbError(err);
         const e = (err && typeof err === 'object') ? err : new Error(String(err));
-        e.captainCode = d.code;     // never carries secrets
-        e.captainHint = d.hint;
+        e.krisCode = d.code;     // never carries secrets
+        e.krisHint = d.hint;
         lastDbError = e;
         throw e;                    // router turns this into a plain answer
       }
@@ -357,6 +432,9 @@ async function handleCaptain(req) {
     return client;
   };
   const wp = writePoolIfConfigured(env);
+
+  // Client went away (stop button, closed tab): cancel model work.
+  const signal = req.signal || undefined;
 
   try {
     const out = await router.route(
@@ -380,10 +458,20 @@ async function handleCaptain(req) {
           : null,
       },
       getDb,
-      { orgId: session.orgId, writeDb: wp, dateOrder: env.CAPTAIN_DATE_ORDER || 'DMY', env }
+      {
+        orgId: session.orgId, writeDb: wp, dateOrder: env.KRIS_DATE_ORDER || 'DMY', env,
+        // Reuse RBAC scope + vocabulary for a minute; refresh caches in the
+        // background on the pool, never on this request's connection.
+        scopeCache: true,
+        pool: () => readPoolOrNull(env),
+        signal,
+        onDelta: streaming ? (evt) => { try { req.onEvent(evt); } catch (_) { /* client gone */ } } : undefined,
+      }
     );
+    const ms = Date.now() - t0;
+    out.ms = ms;
 
-    if (out.provenance && env.CAPTAIN_EXPOSE_SQL !== '1') {
+    if (out.provenance && env.KRIS_EXPOSE_SQL !== '1') {
       delete out.provenance.sql;
       delete out.provenance.sqlValues;
       delete out.provenance.table;
@@ -395,39 +483,41 @@ async function handleCaptain(req) {
     // context; this is the one place all of them funnel through before the
     // response leaves the server, so it is caught here regardless of source.
     if (out.error) {
-      console.error('captain: error surfaced to user -', out.source || 'unknown', out.reason || '', '-', out.error);
+      console.error('kris: error surfaced to user -', out.source || 'unknown', out.reason || '', '-', out.error);
       recordError('router:' + (out.reason || out.source || ''), { name: 'Error', message: out.error });
       delete out.error;
     }
     if (out.status === 'error') {
-      out.build = CAPTAIN_BUILD;
+      out.build = KRIS_BUILD;
       // Belt and braces: if the router did not attach the cause (older
       // router.js), attach it here from the connection error we saw.
       if (!out.code && lastDbError && /^db_/.test(out.reason || '')) {
-        out.code = lastDbError.captainCode;
-        out.detail = lastDbError.captainHint;
+        out.code = lastDbError.krisCode;
+        out.detail = lastDbError.krisHint;
       }
       // A mixed deploy (new handler, old router) is the failure mode a copy /
       // paste pipeline produces. Say so on the card instead of hiding it.
       const rb = router.ROUTER_BUILD || 'pre-2026-09-04';
-      if (rb !== CAPTAIN_BUILD) {
-        out.detail = (out.detail ? out.detail + ' | ' : '') + 'FILES OUT OF SYNC: router.js is build ' + rb + ', httpHandler.js is ' + CAPTAIN_BUILD + ' - redeploy every file from the same delivery.';
+      if (rb !== KRIS_BUILD) {
+        out.detail = (out.detail ? out.detail + ' | ' : '') + 'FILES OUT OF SYNC: router.js is build ' + rb + ', httpHandler.js is ' + KRIS_BUILD + ' - redeploy every file from the same delivery.';
       }
       if (!diagnosticsOn(env)) { delete out.detail; delete out.code; }
     }
     // A database problem is reported as 503 so monitoring can see it, but only
     // for the message that actually needed the database.
     const status = out.status === 'error' && /^db_|^query_failed$/.test(out.reason || '') ? 503 : 200;
-    return reply(status, out);
+    const r = reply(status, out);
+    r.headers = Object.assign({}, r.headers, { 'Server-Timing': 'kris;desc="' + String(out.source || 'route') + '";dur=' + ms });
+    return r;
   } catch (err) {
-    console.error('captain: query failed', err);
-    recordError('handleCaptain catch-all', err, { text: String(text || '').slice(0, 80) });
+    console.error('kris: query failed', err);
+    recordError('handleKris catch-all', err, { text: String(text || '').slice(0, 80) });
     // The error's class/code is safe to expose and is often all that is needed
     // to diagnose from a screenshot; the message itself stays in the log.
     return reply(500, {
       status: 'error',
       text: 'Something went wrong on my side. Nothing was changed \u2014 please try again in a moment.',
-      build: CAPTAIN_BUILD,
+      build: KRIS_BUILD,
       code: String((err && (err.code || err.name)) || 'Error').slice(0, 40),
       // A TypeError is a programming error, not a data error: its message
       // ("x is not a function", "cannot read properties of undefined") never
@@ -442,7 +532,7 @@ async function handleCaptain(req) {
 
 /** The writer pool is only for vocabulary and logging; never a reason to fail a request. */
 function writePoolIfConfigured(env) {
-  if (!env.CAPTAIN_WRITE_URL) return null;
+  if (!env.KRIS_WRITE_URL) return null;
   try { return pools(env).writePool; } catch (_) { return null; }
 }
 
@@ -457,20 +547,20 @@ async function handleSync(req) {
   const headers = lowercaseKeys(req.headers || {});
   const reply = (statusCode, obj) => ({ statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
 
-  const key = headers['x-captain-sync-key'];
-  if (!env.CAPTAIN_SYNC_KEY || key !== env.CAPTAIN_SYNC_KEY) {
+  const key = headers['x-kris-sync-key'];
+  if (!env.KRIS_SYNC_KEY || key !== env.KRIS_SYNC_KEY) {
     return reply(401, { error: 'sync key required' });
   }
-  if (!env.CAPTAIN_WRITE_URL) return reply(400, { error: 'CAPTAIN_WRITE_URL is not set' });
+  if (!env.KRIS_WRITE_URL) return reply(400, { error: 'KRIS_WRITE_URL is not set' });
 
   const { Client } = require('pg');
-  const db = new Client({ connectionString: env.CAPTAIN_WRITE_URL, ssl: sslFor(env) });
+  const db = new Client({ connectionString: env.KRIS_WRITE_URL, ssl: sslFor(env) });
   await db.connect();
   try {
-    const stats = await sync({ db, env, log: (m) => console.log('captain-sync:', m) });
+    const stats = await sync({ db, env, log: (m) => console.log('kris-sync:', m) });
     return reply(200, stats);
   } catch (err) {
-    console.error('captain-sync failed', err);
+    console.error('kris-sync failed', err);
     return reply(500, { error: err.message });
   } finally {
     await db.end();
@@ -483,4 +573,4 @@ function lowercaseKeys(obj) {
   return out;
 }
 
-module.exports = { handleCaptain, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList, classifyDbError, CAPTAIN_BUILD };
+module.exports = { handleKris, handleSync, health, corsHeaders, verifyToken, resolveSession, allowedOriginsList, classifyDbError, warmUp, readPoolOrNull, KRIS_BUILD };

@@ -22,9 +22,13 @@ async function buildBriefing(vesselIds, vesselNames, db) {
   if (!vesselIds.length) return { text: 'You are not scoped to any vessel, so there is nothing to brief.', findings: [] };
 
   const findings = [];
+  // Set when a rule's query fails (e.g. its source table is not present in the
+  // database yet). We degrade to a partial briefing rather than failing the whole
+  // request, and we never claim "all clear" on a check we could not actually run.
+  let degraded = false;
 
   // 1) Compliance balance trend: latest leg vs the one before it, per vessel.
-  {
+  try {
     const { rows } = await db.query(
       `SELECT imo, vessel_name, compliance_balance, leg_date,
               LAG(compliance_balance) OVER (PARTITION BY imo ORDER BY leg_date) AS prev_balance
@@ -52,10 +56,13 @@ async function buildBriefing(vesselIds, vesselNames, db) {
         });
       }
     }
+  } catch (err) {
+    degraded = true;
+    console.error('kris briefing: compliance-balance rule skipped —', err && err.message);
   }
 
   // 2) Off-hire in the last 30 days above a threshold.
-  {
+  try {
     const { rows } = await db.query(
       `SELECT imo, vessel_name, SUM(offhire_hours)::double precision AS hours, COUNT(*) AS events
          FROM veson_offhire
@@ -72,11 +79,14 @@ async function buildBriefing(vesselIds, vesselNames, db) {
         text: `${r.vessel_name || r.imo} logged ${fmt(r.hours)} off-hire hours over ${r.events} event${r.events === 1 ? '' : 's'} in the last 30 days.`,
       });
     }
+  } catch (err) {
+    degraded = true;
+    console.error('kris briefing: off-hire rule skipped —', err && err.message);
   }
 
   // 3) Reporting gap: no Geoform report in the last 3 days for a vessel that
   //    has reported before (so a brand-new vessel doesn't trigger a false alarm).
-  {
+  try {
     const { rows } = await db.query(
       `SELECT v.id AS imo, v.name,
               (SELECT MAX(report_date) FROM geoform_reports g WHERE g.imo = v.id) AS last_report
@@ -96,15 +106,22 @@ async function buildBriefing(vesselIds, vesselNames, db) {
         });
       }
     }
+  } catch (err) {
+    degraded = true;
+    console.error('kris briefing: reporting-gap rule skipped —', err && err.message);
   }
 
   findings.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'warning' ? -1 : 1));
 
   if (!findings.length) {
-    return { text: `Nothing flagged for ${vesselNames.join(', ')}. Reports are current and compliance balances are positive.`, findings: [] };
+    const text = degraded
+      ? `Nothing actionable surfaced for ${vesselNames.join(', ')} from the checks I could run — I could not complete all of them just now, so treat this as partial.`
+      : `Nothing flagged for ${vesselNames.join(', ')}. Reports are current and compliance balances are positive.`;
+    return { text, findings: [], degraded };
   }
   const head = findings.length === 1 ? '1 thing worth a look:' : `${findings.length} things worth a look:`;
-  return { text: [head, ...findings.slice(0, 6).map((f) => '\u2022 ' + f.text)].join('\n'), findings };
+  const tail = degraded ? ['', '(Some checks could not run, so this may be incomplete.)'] : [];
+  return { text: [head, ...findings.slice(0, 6).map((f) => '\u2022 ' + f.text), ...tail].join('\n'), findings, degraded };
 }
 
 function fmt(n) { return Number(n).toLocaleString('en-GB', { maximumFractionDigits: 1 }); }

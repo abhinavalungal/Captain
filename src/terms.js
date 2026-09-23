@@ -6,13 +6,13 @@ const { normalizeTerm, foldTokens } = require('./normalize');
 /**
  * Learned vocabulary.
  *
- * Learning changes what words Captain recognises. It never changes, adds to,
+ * Learning changes what words K.R.1.S recognises. It never changes, adds to,
  * or overrides a value read from your operational tables. The only table
- * touched here is captain_term_mappings, and the database role Captain uses
+ * touched here is kris_term_mappings, and the database role K.R.1.S uses
  * has INSERT/UPDATE granted on that table and nothing else.
  */
 
-const TABLE = 'captain_term_mappings';
+const TABLE = 'kris_term_mappings';
 
 async function loadMappings(db, orgId) {
   const { rows } = await db.query(

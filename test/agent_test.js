@@ -19,11 +19,11 @@ const NOW = new Date('2026-09-03T06:30:00Z');
 // real scope against the fake database below.
 const session = { userId: 'u', orgId: 'o', vesselIds: ['v1'] };
 const ENV = {
-  CAPTAIN_MODE: 'agent',
-  CAPTAIN_LLM_URL: 'https://openrouter.ai/api',
-  CAPTAIN_LLM_MODEL: 'test/model',
-  CAPTAIN_LLM_API_KEY: 'sk-test',
-  CAPTAIN_APP_NAME: 'Geo Monitor',
+  KRIS_MODE: 'agent',
+  KRIS_LLM_URL: 'https://openrouter.ai/api',
+  KRIS_LLM_MODEL: 'test/model',
+  KRIS_LLM_API_KEY: 'sk-test',
+  KRIS_APP_NAME: 'Shuddha now',
 };
 
 /**
@@ -91,8 +91,8 @@ const run = (text, script, extra, opts) => agent.run(
   });
 
   await ta('typos and fragments are the model\'s problem, not a matcher\'s', async () => {
-    const out = await run('whats you name >?', [say("I'm Captain Nav. What's yours?")]);
-    assert.ok(/Captain Nav/.test(out.text));
+    const out = await run('whats you name >?', [say("I'm K.R.1.S. What's yours?")]);
+    assert.ok(/K\.R\.1\.S/.test(out.text));
   });
 
   // --- request shape ----------------------------------------------------------
@@ -104,7 +104,7 @@ const run = (text, script, extra, opts) => agent.run(
   await ta('every request carries the tools, the key and OpenRouter attribution', async () => {
     const fetchImpl = fakeModel([say('hello')]);
     await agent.run({ text: 'hi', session, now: NOW, history: [], context: {} }, NO_DB,
-      { orgId: 'o', env: Object.assign({}, ENV, { CAPTAIN_LLM_REFERER: 'https://perform.geoserves.com' }), fetchImpl });
+      { orgId: 'o', env: Object.assign({}, ENV, { KRIS_LLM_REFERER: 'https://perform.geoserves.com' }), fetchImpl });
     const req = fetchImpl.seen[0];
     assert.ok(/\/v1\/chat\/completions$/.test(req.url), req.url);
     assert.strictEqual(req.headers.Authorization, 'Bearer sk-test');
@@ -123,7 +123,7 @@ const run = (text, script, extra, opts) => agent.run(
     }, NO_DB, { orgId: 'o', env: ENV, fetchImpl });
     const msgs = fetchImpl.seen[0].body.messages;
     assert.strictEqual(msgs[0].role, 'system');
-    assert.ok(/Captain Nav/.test(msgs[0].content));
+    assert.ok(/K\.R\.1\.S/.test(msgs[0].content));
     assert.ok(/name is Nav/.test(msgs[0].content));
     assert.ok(/Aurora Trader/.test(msgs[0].content));
     assert.strictEqual(msgs[msgs.length - 1].content, 'and last week?');
@@ -218,7 +218,7 @@ const run = (text, script, extra, opts) => agent.run(
   await ta('the loop stops at max steps and still answers', async () => {
     const fetchImpl = fakeModel([callTool('list_available_data', {})]); // loops forever if unbounded
     const out = await agent.run({ text: 'what can you read', session, now: NOW, history: [], context: {} }, NO_DB,
-      { orgId: 'o', env: Object.assign({}, ENV, { CAPTAIN_AGENT_MAX_STEPS: '2' }), fetchImpl });
+      { orgId: 'o', env: Object.assign({}, ENV, { KRIS_AGENT_MAX_STEPS: '2' }), fetchImpl });
     assert.strictEqual(out.status, 'answer');
     assert.ok(fetchImpl.seen.length <= 4, 'too many model calls: ' + fetchImpl.seen.length);
     const forced = fetchImpl.seen[fetchImpl.seen.length - 1].body.messages.slice(-1)[0];
@@ -273,7 +273,7 @@ const run = (text, script, extra, opts) => agent.run(
 
   await ta('a missing model name fails loudly in the log and softly to the user', async () => {
     const out = await agent.run({ text: 'hi', session, now: NOW, history: [], context: {} }, NO_DB,
-      { orgId: 'o', env: { CAPTAIN_MODE: 'agent' }, fetchImpl: fakeModel([say('x')]) });
+      { orgId: 'o', env: { KRIS_MODE: 'agent' }, fetchImpl: fakeModel([say('x')]) });
     assert.strictEqual(out.reason, 'no_model');
   });
 
@@ -282,27 +282,41 @@ const run = (text, script, extra, opts) => agent.run(
       init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
     });
     const out = await agent.run({ text: 'hi', session, now: NOW, history: [], context: {} }, NO_DB,
-      { orgId: 'o', env: Object.assign({}, ENV, { CAPTAIN_AGENT_TIMEOUT_MS: '3000' }), fetchImpl });
+      { orgId: 'o', env: Object.assign({}, ENV, { KRIS_AGENT_TIMEOUT_MS: '3000' }), fetchImpl });
     assert.strictEqual(out.reason, 'timeout');
   });
 
   // --- router integration -------------------------------------------------------
-  await ta('CAPTAIN_MODE=agent bypasses the rule ladder entirely', async () => {
+  await ta('KRIS_MODE=agent: a greeting is answered by the fast lane with ZERO model calls', async () => {
     const fetchImpl = fakeModel([say('Morning, Nav.')]);
+    const t0 = Date.now();
     const out = await router.route(
       { text: 'hi', session, now: NOW, history: [], context: { userName: 'Nav' } },
       NO_DB,
       { orgId: 'o', env: ENV, fetchImpl }
     );
-    assert.strictEqual(out.source, 'agent', 'small-talk matcher must not claim this in agent mode');
+    assert.strictEqual(out.source, 'router');
+    assert.strictEqual(out.instant, true);
+    assert.strictEqual(fetchImpl.seen.length, 0, 'a greeting must never reach the model');
+    assert.ok(Date.now() - t0 < 20, 'fast lane took ' + (Date.now() - t0) + 'ms');
+  });
+
+  await ta('KRIS_MODE=agent: an open-ended message still goes to the model', async () => {
+    const fetchImpl = fakeModel([say('Here is one about a ship.')]);
+    const out = await router.route(
+      { text: 'tell me a joke about ships', session, now: NOW, history: [], context: { userName: 'Nav' } },
+      NO_DB,
+      { orgId: 'o', env: ENV, fetchImpl }
+    );
+    assert.strictEqual(out.source, 'agent');
     assert.strictEqual(fetchImpl.seen.length, 1);
   });
 
-  await ta('without CAPTAIN_MODE the deterministic router is unchanged', async () => {
+  await ta('without KRIS_MODE the deterministic router is unchanged', async () => {
     const out = await router.route(
       { text: 'hi', session, now: NOW, history: [], context: {} },
       NO_DB,
-      { orgId: 'o', env: { CAPTAIN_ENABLE_LLM: '0' }, fetchImpl: async () => { throw new Error('no model'); } }
+      { orgId: 'o', env: { KRIS_ENABLE_LLM: '0' }, fetchImpl: async () => { throw new Error('no model'); } }
     );
     assert.strictEqual(out.source, 'router');
     assert.strictEqual(out.instant, true);
@@ -312,17 +326,17 @@ const run = (text, script, extra, opts) => agent.run(
     const out = await router.route(
       { text: 'hi', session, now: NOW, history: [], context: {} },
       NO_DB,
-      { orgId: 'o', env: Object.assign({}, ENV, { CAPTAIN_ENABLE_LLM: '0' }), fetchImpl: async () => { throw new Error('connect ECONNREFUSED'); } }
+      { orgId: 'o', env: Object.assign({}, ENV, { KRIS_ENABLE_LLM: '0' }), fetchImpl: async () => { throw new Error('connect ECONNREFUSED'); } }
     );
     assert.strictEqual(out.status, 'answer', 'user must still get an answer');
     assert.strictEqual(out.source, 'router');
   });
 
-  await ta('CAPTAIN_AGENT_FALLBACK=0 surfaces the outage instead of falling back', async () => {
+  await ta('KRIS_AGENT_FALLBACK=0 surfaces the outage instead of falling back', async () => {
     const out = await router.route(
-      { text: 'hi', session, now: NOW, history: [], context: {} },
+      { text: 'tell me a joke about ships', session, now: NOW, history: [], context: {} },
       NO_DB,
-      { orgId: 'o', env: Object.assign({}, ENV, { CAPTAIN_AGENT_FALLBACK: '0' }), fetchImpl: async () => { throw new Error('down'); } }
+      { orgId: 'o', env: Object.assign({}, ENV, { KRIS_AGENT_FALLBACK: '0' }), fetchImpl: async () => { throw new Error('down'); } }
     );
     assert.strictEqual(out.status, 'error');
     assert.strictEqual(out.source, 'agent');

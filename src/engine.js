@@ -5,6 +5,7 @@ const parser = require('./parser');
 const sqlBuilder = require('./sql');
 const rbac = require('./rbac');
 const terms = require('./terms');
+const { scopeCache, learnedCache, scopeKey } = require('./cache');
 const { humanDate } = require('./dates');
 
 /**
@@ -374,7 +375,12 @@ function coverageNote(plan, n) {
  * @param {object} opts  { orgId, writeDb, log }
  */
 async function ask(input, db, opts = {}) {
-  const scope = await rbac.resolveScope(input.session, db);
+  // opts.scopeCache (set by the HTTP layer): reuse the RBAC scope and the
+  // learned vocabulary for up to a minute instead of re-reading them on every
+  // question. Two round-trips to Postgres saved per data question.
+  const scope = opts.scopeCache
+    ? await scopeCache.load(scopeKey(input.session), () => rbac.resolveScope(input.session, db))
+    : await rbac.resolveScope(input.session, db);
 
   if (!scope.authenticated) {
     return { status: 'unauthenticated', text: 'Sign in and I can look at your vessel data.' };
@@ -383,7 +389,10 @@ async function ask(input, db, opts = {}) {
     return { status: 'no_scope', text: 'Your account is not linked to any vessel, so there is nothing for me to read.' };
   }
 
-  const learned = opts.orgId ? await terms.loadMappings(db, opts.orgId).catch(() => []) : [];
+  const learned = !opts.orgId ? []
+    : opts.scopeCache
+      ? await learnedCache.load(opts.orgId, () => terms.loadMappings(db, opts.orgId)).catch(() => [])
+      : await terms.loadMappings(db, opts.orgId).catch(() => []);
 
   // Confirming a term the previous turn proposed.
   if (input.pending && input.pending.kind === 'teach') {
@@ -396,6 +405,7 @@ async function ask(input, db, opts = {}) {
       metricKey: input.pending.metricKey,
       userId: input.session && input.session.userId,
     });
+    if (saved.ok) learnedCache.delete(opts.orgId);
     if (!saved.ok) {
       const why = saved.reason === 'collides_with_config'
         ? `"${input.pending.term}" already means ${saved.collidesWith} here, so I have not changed it.`
@@ -424,7 +434,7 @@ async function ask(input, db, opts = {}) {
   }
 
   if (parsed.status === 'clarify') {
-    await logQuery(opts, input, 'clarify', parsed.reason);
+    logQuery(opts, input, 'clarify', parsed.reason);
     return {
       status: 'clarify',
       text: parsed.question,
@@ -434,12 +444,12 @@ async function ask(input, db, opts = {}) {
   }
 
   if (parsed.status === 'unsupported') {
-    await logQuery(opts, input, 'unsupported', parsed.reason);
+    logQuery(opts, input, 'unsupported', parsed.reason);
     return { status: 'unsupported', text: parsed.message, options: parsed.options || null };
   }
 
   if (parsed.status === 'unparsed') {
-    await logQuery(opts, input, 'unparsed', (parsed.missing || []).join(','));
+    logQuery(opts, input, 'unparsed', (parsed.missing || []).join(','));
     return {
       status: 'unparsed',
       text: `${parsed.message} I can read: ${(parsed.suggestions || []).join(', ')}. Ask me "help" for the full list.`,
@@ -456,7 +466,7 @@ async function ask(input, db, opts = {}) {
   }
 
   const out = await execute(parsed.plan, scope, db, opts);
-  await logQuery(opts, input, out.status === 'answer' ? (out.empty ? 'empty' : 'answered') : out.status, parsed.plan.metricKey);
+  logQuery(opts, input, out.status === 'answer' ? (out.empty ? 'empty' : 'answered') : out.status, parsed.plan.metricKey);
   return out;
 }
 
@@ -464,7 +474,7 @@ async function logQuery(opts, input, outcome, detail) {
   if (!opts.writeDb || opts.disableLog) return;
   try {
     await opts.writeDb.query(
-      `INSERT INTO captain_query_log (org_id, user_id, question, outcome, detail)
+      `INSERT INTO kris_query_log (org_id, user_id, question, outcome, detail)
        VALUES ($1, $2, $3, $4, $5)`,
       [opts.orgId || null, (input.session && input.session.userId) || null, String(input.text || '').slice(0, 500), outcome, String(detail || '').slice(0, 200)]
     );

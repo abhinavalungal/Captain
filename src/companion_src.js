@@ -10,8 +10,8 @@
  *   openai_compat   any OpenAI-compatible /v1/chat/completions server:
  *                   vLLM, llama.cpp server, LM Studio, LocalAI, text-generation-webui
  *
- * Pick with CAPTAIN_LLM_PROVIDER, point at it with CAPTAIN_LLM_URL, choose a
- * model with CAPTAIN_LLM_MODEL. Nothing here is specific to a vendor.
+ * Pick with KRIS_LLM_PROVIDER, point at it with KRIS_LLM_URL, choose a
+ * model with KRIS_LLM_MODEL. Nothing here is specific to a vendor.
  *
  * This module is never the path for a vessel figure — the router only reaches
  * it after the data parser and the guide matcher have both had a turn. Two
@@ -27,6 +27,8 @@
  *      This holds even if the model ignores its instructions, and it is
  *      unit-tested directly.
  */
+
+const { readSSE, readNDJSON, SentenceGate, anySignal } = require('./stream');
 
 const DEFAULTS = {
   provider: 'ollama',
@@ -137,7 +139,7 @@ function systemPrompt(opts) {
     : '';
 
   return think
-    + 'You are Captain Nav, the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is Captain Nav; if asked, say so. You are a capable general assistant with the manner of an experienced, trustworthy ship\'s captain: warm, direct, precise.\n\n'
+    + 'You are K.R.1.S (say it "Kris"), the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is K.R.1.S; if asked, say so. K.R.1.S is a codename inspired by Lord Krishna, the calm charioteer who guides without taking the wheel. You are a capable general assistant in that spirit: serene, warm, clear-sighted and gently playful, never preachy. Do not quote scripture or make religious claims unless the user raises the subject, and treat it with respect when they do.\n\n'
     + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), arithmetic and unit conversions, comparing numbers the user gives you, writing help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. Match the depth to the question: one line for a quick fact, a short structured answer for something that needs it. Show working for calculations.\n\n'
     + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data.\n\n'
     + 'Charts: when a chart would genuinely help and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
@@ -149,26 +151,26 @@ function systemPrompt(opts) {
 
 function readEnv(env) {
   return {
-    provider: (env.CAPTAIN_LLM_PROVIDER || DEFAULTS.provider).toLowerCase(),
-    url: (env.CAPTAIN_LLM_URL || DEFAULTS.url).replace(/\/+$/, ''),
-    model: env.CAPTAIN_LLM_MODEL || DEFAULTS.model,
-    apiKey: env.CAPTAIN_LLM_API_KEY || null,   // only for self-hosted servers that require one; never a vendor key
-    enabled: env.CAPTAIN_ENABLE_LLM !== '0',
-    timeoutMs: parseInt(env.CAPTAIN_LLM_TIMEOUT_MS || String(DEFAULTS.timeoutMs), 10),
-    appName: env.CAPTAIN_APP_NAME || 'this application',
+    provider: (env.KRIS_LLM_PROVIDER || DEFAULTS.provider).toLowerCase(),
+    url: (env.KRIS_LLM_URL || DEFAULTS.url).replace(/\/+$/, ''),
+    model: env.KRIS_LLM_MODEL || DEFAULTS.model,
+    apiKey: env.KRIS_LLM_API_KEY || null,   // only for self-hosted servers that require one; never a vendor key
+    enabled: env.KRIS_ENABLE_LLM !== '0',
+    timeoutMs: parseInt(env.KRIS_LLM_TIMEOUT_MS || String(DEFAULTS.timeoutMs), 10),
+    appName: env.KRIS_APP_NAME || 'this application',
     // Reasoning models think for many seconds before speaking. That is wasted
     // time for conversation and app help, so it is off by default. Set
-    // CAPTAIN_LLM_REASONING=on to keep it.
-    reasoningOff: (env.CAPTAIN_LLM_REASONING || 'off').toLowerCase() !== 'on',
-    reasoningEffort: (env.CAPTAIN_LLM_REASONING_EFFORT || DEFAULTS.reasoningEffort).toLowerCase(),
+    // KRIS_LLM_REASONING=on to keep it.
+    reasoningOff: (env.KRIS_LLM_REASONING || 'off').toLowerCase() !== 'on',
+    reasoningEffort: (env.KRIS_LLM_REASONING_EFFORT || DEFAULTS.reasoningEffort).toLowerCase(),
     // A second, smaller model for short questions. Falls back to the main
     // model if unset, so this is optional configuration, not required.
-    fastModel: env.CAPTAIN_LLM_FAST_MODEL || null,
-    fastTimeoutMs: parseInt(env.CAPTAIN_LLM_FAST_TIMEOUT_MS || String(DEFAULTS.fastTimeoutMs), 10),
+    fastModel: env.KRIS_LLM_FAST_MODEL || null,
+    fastTimeoutMs: parseInt(env.KRIS_LLM_FAST_TIMEOUT_MS || String(DEFAULTS.fastTimeoutMs), 10),
     // Ollama unloads a model after ~5 idle minutes by default; the NEXT message
     // then waits 20-60s while it reloads from disk. Keeping it resident is the
     // single biggest latency fix for a self-hosted setup.
-    keepAlive: env.CAPTAIN_LLM_KEEP_ALIVE || '30m',
+    keepAlive: env.KRIS_LLM_KEEP_ALIVE || '30m',
   };
 }
 
@@ -186,26 +188,42 @@ function rejectsReasoning(status, detail) {
   return status === 400 && /reasoning/i.test(String(detail || ''));
 }
 
-function buildRequest(cfg, system, messages, light) {
+/**
+ * OpenRouter only: prefer the provider with the lowest latency for this model.
+ * Other OpenAI-compatible servers never see the field. Override with
+ * KRIS_LLM_PROVIDER_SORT=throughput|price, or "off" to leave routing alone.
+ */
+function providerRouting(env, url) {
+  if (!/openrouter\.ai/i.test(String(url || ''))) return null;
+  const sort = String((env && env.KRIS_LLM_PROVIDER_SORT) || 'latency').toLowerCase();
+  if (sort === 'off' || sort === 'none') return null;
+  return { sort: sort };
+}
+
+function buildRequest(cfg, system, messages, light, stream) {
   if (cfg.provider === 'openai_compat') {
+    const routing = providerRouting(cfg.env, cfg.url);
     return {
       url: cfg.url + '/v1/chat/completions',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, cfg.apiKey ? { Authorization: 'Bearer ' + cfg.apiKey } : {}),
+      headers: Object.assign({ 'Content-Type': 'application/json' }, cfg.apiKey ? { Authorization: 'Bearer ' + cfg.apiKey } : {},
+        /openrouter\.ai/i.test(cfg.url) ? { 'X-Title': 'K.R.1.S' } : {}),
       body: Object.assign({
         model: (light && cfg.fastModel) ? cfg.fastModel : cfg.model,
         messages: [{ role: 'system', content: system }].concat(messages),
         max_tokens: light ? DEFAULTS.fastMaxTokens : DEFAULTS.maxTokens,
         temperature: DEFAULTS.temperature,
-        stream: false,
+        stream: !!stream,
       },
       // OpenRouter's unified switch for reasoning models. Other OpenAI-compatible
       // servers ignore unknown fields, but we only send it where it is known to
       // be understood, to avoid a strict server rejecting the request.
-      (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) ? { reasoning: reasoningDirective(cfg) } : {}),
+      (cfg.reasoningOff && /openrouter\.ai/i.test(cfg.url)) ? { reasoning: reasoningDirective(cfg) } : {},
+      routing ? { provider: routing } : {}),
       extract: function (data) {
         const c = data && data.choices && data.choices[0];
         return c && c.message && typeof c.message.content === 'string' ? c.message.content : '';
       },
+      streamKind: 'sse',
     };
   }
   // Ollama native
@@ -215,26 +233,59 @@ function buildRequest(cfg, system, messages, light) {
     body: {
       model: (light && cfg.fastModel) ? cfg.fastModel : cfg.model,
       messages: [{ role: 'system', content: system }].concat(messages),
-      stream: false,
+      stream: !!stream,
       keep_alive: cfg.keepAlive,
       options: { temperature: DEFAULTS.temperature, num_predict: light ? DEFAULTS.fastMaxTokens : DEFAULTS.maxTokens },
     },
     extract: function (data) {
       return data && data.message && typeof data.message.content === 'string' ? data.message.content : '';
     },
+    streamKind: 'ndjson',
   };
 }
 
 /**
+ * Open the TLS connection to the model host before the first real message
+ * needs it. Node's fetch (undici) keeps connections alive and pools them per
+ * origin, so a warm connection saves the TCP + TLS handshake (often 150-400 ms
+ * to a hosted provider) on the next request. Fire-and-forget, at most once a
+ * minute, never throws.
+ */
+let lastWarm = 0;
+function warmLLM(env, fetchImpl) {
+  try {
+    const cfg = readEnv(env || process.env);
+    if (!cfg.enabled || !cfg.url) return;
+    if (Date.now() - lastWarm < 60000) return;
+    lastWarm = Date.now();
+    const f = fetchImpl || globalThis.fetch;
+    if (typeof f !== 'function') return;
+    const url = cfg.provider === 'openai_compat' ? cfg.url + '/v1/models' : cfg.url + '/api/tags';
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const t = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
+    if (t && t.unref) t.unref();
+    Promise.resolve(f(url, { method: 'GET', headers: cfg.apiKey ? { Authorization: 'Bearer ' + cfg.apiKey } : {}, signal: ctrl ? ctrl.signal : undefined }))
+      .then((r) => (r && r.body && typeof r.body.cancel === 'function' ? r.body.cancel() : r && r.text && r.text()))
+      .catch(() => {})
+      .then(() => { if (t) clearTimeout(t); });
+  } catch (_) { /* warming is best-effort */ }
+}
+
+/**
  * @param {string} text
- * @param {object} opts  { env, guideSnippets, history, context, fetchImpl }
- * @returns {Promise<{ text, blocked, disabled?, error?, provider?, model? }>}
+ * @param {object} opts  { env, guideSnippets, history, context, fetchImpl,
+ *                         onDelta?, signal?, vesselNames? }
+ *   onDelta(evt)  when present the reply is STREAMED: evt is
+ *                 { t: 'delta', text } for each released, guard-checked
+ *                 sentence, or { t: 'replace', text } if the guard stopped it.
+ * @returns {Promise<{ text, blocked, disabled?, error?, provider?, model?, streamed? }>}
  */
 async function converse(text, opts) {
   opts = opts || {};
   const cfg = readEnv(opts.env || process.env);
+  cfg.env = opts.env || process.env;
   if (!cfg.enabled) {
-    return { text: 'I can help with vessel data and app questions \u2014 what would you like to know?', blocked: false, disabled: true };
+    return { text: 'I can help with vessel data and app questions — what would you like to know?', blocked: false, disabled: true };
   }
 
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
@@ -244,8 +295,9 @@ async function converse(text, opts) {
     .concat([{ role: 'user', content: String(text || '').slice(0, 1000) }]);
 
   const light = !!opts.light;
+  const streaming = typeof opts.onDelta === 'function';
   const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, reasoningOff: cfg.reasoningOff, light: light, nowLabel: opts.nowLabel, userName: opts.userName || null });
-  const req = buildRequest(cfg, system, messages, light);
+  const req = buildRequest(cfg, system, messages, light, streaming);
   // No tools field in either request shape. That is the structural guarantee.
 
   // A light message gets a short leash: better a fast honest fallback than a
@@ -253,46 +305,99 @@ async function converse(text, opts) {
   const budgetMs = light ? cfg.fastTimeoutMs : cfg.timeoutMs;
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, budgetMs) : null;
+  const signal = anySignal([ctrl ? ctrl.signal : null, opts.signal || null]);
+  const names = [].concat(opts.vesselNames || [], opts.context && opts.context.vesselName ? [opts.context.vesselName] : []);
+  const fail = function (error) {
+    if (timer) clearTimeout(timer);
+    return { text: UNAVAILABLE, blocked: false, error: error, provider: cfg.provider, model: cfg.model };
+  };
+
+  const send = function (body) {
+    return fetchImpl(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(body), signal: signal });
+  };
 
   let res;
   try {
-    res = await fetchImpl(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: ctrl ? ctrl.signal : undefined });
+    res = await send(req.body);
   } catch (e) {
-    if (timer) clearTimeout(timer);
-    return { text: UNAVAILABLE, blocked: false, error: e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message, provider: cfg.provider, model: cfg.model };
+    return fail(e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message);
   }
 
   if (!res.ok) {
     let detail = '';
     try { detail = await res.text(); } catch (_) { /* ignore */ }
-    // A provider that does not understand the reasoning field says so with a
-    // 400. Send the same request once more without it.
-    if (rejectsReasoning(res.status, detail) && req.body.reasoning) {
-      const body2 = Object.assign({}, req.body); delete body2.reasoning;
-      try {
-        res = await fetchImpl(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(body2), signal: ctrl ? ctrl.signal : undefined });
-      } catch (e) {
-        if (timer) clearTimeout(timer);
-        return { text: UNAVAILABLE, blocked: false, error: e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message, provider: cfg.provider, model: cfg.model };
-      }
+    // A provider that does not understand the reasoning (or routing) field says
+    // so with a 400. Send the same request once more without them.
+    if (res.status === 400 && (req.body.reasoning || req.body.provider) && /reasoning|provider/i.test(String(detail))) {
+      const body2 = Object.assign({}, req.body); delete body2.reasoning; delete body2.provider;
+      try { res = await send(body2); } catch (e) { return fail(e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message); }
       if (!res.ok) { try { detail = await res.text(); } catch (_) { /* ignore */ } }
     }
-    if (!res.ok) {
+    if (!res.ok) return fail('HTTP ' + res.status + ': ' + String(detail).slice(0, 150));
+  }
+
+  // --- non-streamed: unchanged behaviour ----------------------------------------
+  if (!streaming) {
+    if (timer) clearTimeout(timer);
+    let data;
+    try { data = await res.json(); } catch (_) { return { text: UNAVAILABLE, blocked: false, error: 'non-JSON response', provider: cfg.provider, model: cfg.model }; }
+    const raw = (req.extract(data) || '').trim();
+    if (!raw) return { text: UNAVAILABLE, blocked: false, error: 'empty reply', provider: cfg.provider, model: cfg.model };
+    if (containsStatedFigure(raw, names)) return { text: SAFE_REDIRECT, blocked: true, rawBlocked: raw, provider: cfg.provider, model: cfg.model };
+    const parsed = extractChart(raw);
+    return { text: parsed.text, chart: parsed.chart, blocked: false, provider: cfg.provider, model: cfg.model };
+  }
+
+  // --- streamed: released a sentence at a time, each one guard-checked ----------
+  const gate = new SentenceGate({
+    check: function (piece) { return containsStatedFigure(piece, names); },
+    emit: function (piece) { opts.onDelta({ t: 'delta', text: piece }); },
+  });
+  const isJsonBody = /application\/json/i.test(String((res.headers && res.headers.get && res.headers.get('content-type')) || ''));
+  try {
+    if (isJsonBody) {
+      // A server that ignored stream:true and answered in one piece.
+      const data = await res.json();
+      gate.push(req.extract(data) || '');
+    } else if (req.streamKind === 'sse') {
+      await readSSE(res, function (chunk) {
+        const c = chunk && chunk.choices && chunk.choices[0];
+        const d = c && (c.delta || c.message);
+        if (d && typeof d.content === 'string') gate.push(d.content);
+        if (gate.blocked && ctrl) ctrl.abort();
+      });
+    } else {
+      await readNDJSON(res, function (obj) {
+        if (obj && obj.message && typeof obj.message.content === 'string') gate.push(obj.message.content);
+        if (gate.blocked) { if (ctrl) ctrl.abort(); return false; }
+        return true;
+      });
+    }
+  } catch (e) {
+    if (!gate.blocked) {
       if (timer) clearTimeout(timer);
-      return { text: UNAVAILABLE, blocked: false, error: 'HTTP ' + res.status + ': ' + detail.slice(0, 150), provider: cfg.provider, model: cfg.model };
+      const partial = gate.released.trim();
+      if (partial) {
+        // Keep what was already shown; say plainly that it was cut short.
+        return { text: partial + '\n\n_(I lost the connection before finishing that answer.)_', blocked: false, streamed: true, error: e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message, provider: cfg.provider, model: cfg.model };
+      }
+      return fail(e.name === 'AbortError' ? 'timed out after ' + budgetMs + 'ms' : e.message);
     }
   }
   if (timer) clearTimeout(timer);
 
-  let data;
-  try { data = await res.json(); } catch (_) { return { text: UNAVAILABLE, blocked: false, error: 'non-JSON response', provider: cfg.provider, model: cfg.model }; }
-
-  const raw = (req.extract(data) || '').trim();
+  if (gate.blocked) {
+    opts.onDelta({ t: 'replace', text: SAFE_REDIRECT });
+    return { text: SAFE_REDIRECT, blocked: true, streamed: true, provider: cfg.provider, model: cfg.model };
+  }
+  const raw = gate.end().trim();
+  if (gate.blocked) {
+    opts.onDelta({ t: 'replace', text: SAFE_REDIRECT });
+    return { text: SAFE_REDIRECT, blocked: true, streamed: true, provider: cfg.provider, model: cfg.model };
+  }
   if (!raw) return { text: UNAVAILABLE, blocked: false, error: 'empty reply', provider: cfg.provider, model: cfg.model };
-  const names = [].concat(opts.vesselNames || [], opts.context && opts.context.vesselName ? [opts.context.vesselName] : []);
-  if (containsStatedFigure(raw, names)) return { text: SAFE_REDIRECT, blocked: true, rawBlocked: raw, provider: cfg.provider, model: cfg.model };
   const parsed = extractChart(raw);
-  return { text: parsed.text, chart: parsed.chart, blocked: false, provider: cfg.provider, model: cfg.model };
+  return { text: parsed.text, chart: parsed.chart, blocked: false, streamed: true, provider: cfg.provider, model: cfg.model };
 }
 
-module.exports = { converse: converse, reasoningDirective: reasoningDirective, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
+module.exports = { converse: converse, warmLLM: warmLLM, providerRouting: providerRouting, reasoningDirective: reasoningDirective, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };

@@ -1,6 +1,6 @@
 -- ============================================================================
 --  TEST FIXTURE ONLY — NOT A MIGRATION, NOT FOR PRODUCTION.
---  Fills Captain's synced tables with formula-generated rows so the suite has
+--  Fills K.R.1.S's synced tables with formula-generated rows so the suite has
 --  something to query. Every number is meaningless as vessel data.
 --  Run db/002_veson_geoform.sql first.
 -- ============================================================================

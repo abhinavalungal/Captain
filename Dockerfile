@@ -1,4 +1,4 @@
-# Captain — plain Node server, runs anywhere Docker runs: a VPS, Render,
+# K.R.1.S — plain Node server, runs anywhere Docker runs: a VPS, Render,
 # Railway, Fly.io, your own machine. No platform-specific build step.
 FROM node:20-slim
 

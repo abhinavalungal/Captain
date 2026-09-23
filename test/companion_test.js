@@ -4,7 +4,7 @@
  * Companion-layer tests: app guide matching, the LLM numeric-figure guard,
  * router precedence (data > guide > briefing > companion), and briefing SQL.
  *
- *   CAPTAIN_TEST_URL='postgres://...' node test/companion_test.js
+ *   KRIS_TEST_URL='postgres://...' node test/companion_test.js
  *
  * No real model is called. The router and companion tests use an injected
  * fetchImpl shaped exactly like Ollama's /api/chat response (and, in one
@@ -34,7 +34,7 @@ const ollamaStub = (replyText) => async (url, init) => {
   assert.ok(system && /Never state, estimate or guess a figure as if it were one of their vessels/.test(system.content), 'system prompt must carry the one rule');
   return { ok: true, status: 200, json: async () => ({ model: body.model, message: { role: 'assistant', content: replyText }, done: true }) };
 };
-const LLM_ENV = { CAPTAIN_ENABLE_LLM: '1', CAPTAIN_LLM_URL: 'http://llm.test:11434', CAPTAIN_LLM_MODEL: 'llama3.1:8b', CAPTAIN_APP_NAME: 'Geo Monitor' };
+const LLM_ENV = { KRIS_ENABLE_LLM: '1', KRIS_LLM_URL: 'http://llm.test:11434', KRIS_LLM_MODEL: 'llama3.1:8b', KRIS_APP_NAME: 'Shuddha now' };
 
 // --- guide -------------------------------------------------------------------
 t('guide: exact phrasing matches', () => {
@@ -109,7 +109,7 @@ t('guard: a clean reply passes through unchanged', async () => {
 });
 t('guard: with the model disabled, companion answers safely without calling out', async () => {
   const calls = [];
-  const out = await converse('hello', { env: { CAPTAIN_ENABLE_LLM: '0' }, fetchImpl: async (...a) => { calls.push(a); throw new Error('should not be called'); } });
+  const out = await converse('hello', { env: { KRIS_ENABLE_LLM: '0' }, fetchImpl: async (...a) => { calls.push(a); throw new Error('should not be called'); } });
   assert.strictEqual(calls.length, 0);
   assert.strictEqual(out.disabled, true);
 });
@@ -127,7 +127,7 @@ t('provider: ollama request shape', () => {
   assert.strictEqual(req.extract({ message: { content: 'yo' } }), 'yo');
 });
 t('provider: openai-compatible request shape (vLLM / llama.cpp / LM Studio)', () => {
-  const cfg = readEnv(Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat', CAPTAIN_LLM_URL: 'http://vllm.test:8000/' }));
+  const cfg = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'http://vllm.test:8000/' }));
   const req = buildRequest(cfg, 'SYS', [{ role: 'user', content: 'hi' }]);
   assert.strictEqual(req.url, 'http://vllm.test:8000/v1/chat/completions');
   assert.ok(!req.headers.Authorization, 'no auth header unless a local key is configured');
@@ -135,7 +135,7 @@ t('provider: openai-compatible request shape (vLLM / llama.cpp / LM Studio)', ()
 });
 t('provider: openai-compatible replies are guarded exactly like Ollama ones', async () => {
   const out = await converse('what was my fuel', {
-    env: Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat' }),
+    env: Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat' }),
     fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Your fleet used about 41.2 MT.' } }] }) }),
   });
   assert.strictEqual(out.blocked, true);
@@ -196,9 +196,9 @@ t('speed: greetings resolve in single-digit milliseconds', async () => {
   assert.ok(elapsed < 100, 'six greetings took ' + elapsed + 'ms; they must be effectively instant');
 });
 
-t('speed: CAPTAIN_SMALLTALK_MODEL=1 opts back in to model-handled greetings', async () => {
+t('speed: KRIS_SMALLTALK_MODEL=1 opts back in to model-handled greetings', async () => {
   let called = 0;
-  const env = Object.assign({}, LLM_ENV, { CAPTAIN_SMALLTALK_MODEL: '1' });
+  const env = Object.assign({}, LLM_ENV, { KRIS_SMALLTALK_MODEL: '1' });
   const out = await router.route({ text: 'hi', session: { userId: 'u', orgId: 'o', vesselIds: [] }, now: NOW },
     async () => { throw new Error('no db'); },
     { orgId: 'o', env: env, fetchImpl: (u, i) => { called++; return ollamaStub('Hello there!')(u, i); } });
@@ -215,7 +215,7 @@ t('speed: short questions use the fast model, substantial ones the strong model'
 });
 
 t('speed: the fast tier swaps model, token budget and timeout together', () => {
-  const cfg = readEnv(Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat', CAPTAIN_LLM_MODEL: 'strong', CAPTAIN_LLM_FAST_MODEL: 'fast' }));
+  const cfg = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_MODEL: 'strong', KRIS_LLM_FAST_MODEL: 'fast' }));
   const lightReq = buildRequest(cfg, 'S', [], true);
   const heavyReq = buildRequest(cfg, 'S', [], false);
   assert.strictEqual(lightReq.body.model, 'fast');
@@ -225,12 +225,12 @@ t('speed: the fast tier swaps model, token budget and timeout together', () => {
 });
 
 t('speed: with no fast model configured, the light path still works on the main model', () => {
-  const cfg = readEnv({ CAPTAIN_LLM_MODEL: 'only' });
+  const cfg = readEnv({ KRIS_LLM_MODEL: 'only' });
   assert.strictEqual(buildRequest(cfg, 'S', [], true).body.model, 'only');
 });
 
 t('speed: a light request that hangs is abandoned on the SHORT timeout, not the long one', async () => {
-  const env = Object.assign({}, LLM_ENV, { CAPTAIN_LLM_FAST_TIMEOUT_MS: '150', CAPTAIN_LLM_TIMEOUT_MS: '20000' });
+  const env = Object.assign({}, LLM_ENV, { KRIS_LLM_FAST_TIMEOUT_MS: '150', KRIS_LLM_TIMEOUT_MS: '20000' });
   const started = Date.now();
   const out = await converse('what is CII', {
     env: env,
@@ -251,16 +251,16 @@ t('speed: light messages are told to answer briefly', () => {
 });
 
 t('speed: OpenRouter is asked for LOW-effort reasoning (not "off", which mandatory-reasoning models reject); other servers are not sent unknown fields', () => {
-  const cfgOR = readEnv(Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat', CAPTAIN_LLM_URL: 'https://openrouter.ai/api' }));
+  const cfgOR = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'https://openrouter.ai/api' }));
   const reqOR = buildRequest(cfgOR, 'SYS', [{ role: 'user', content: 'hi' }]);
   assert.deepStrictEqual(reqOR.body.reasoning, { effort: 'low', exclude: true });
-  const cfgV = readEnv(Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat', CAPTAIN_LLM_URL: 'http://vllm.test:8000' }));
+  const cfgV = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'http://vllm.test:8000' }));
   assert.strictEqual(buildRequest(cfgV, 'SYS', []).body.reasoning, undefined);
-  const cfgOn = readEnv(Object.assign({}, LLM_ENV, { CAPTAIN_LLM_PROVIDER: 'openai_compat', CAPTAIN_LLM_URL: 'https://openrouter.ai/api', CAPTAIN_LLM_REASONING: 'on' }));
+  const cfgOn = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'https://openrouter.ai/api', KRIS_LLM_REASONING: 'on' }));
   assert.strictEqual(buildRequest(cfgOn, 'SYS', []).body.reasoning, undefined);
 });
 t('system prompt: tells the model to answer general questions, and to disable thinking when reasoning is off', () => {
-  const p = systemPrompt({ appName: 'Geo Monitor', guideSnippets: [], reasoningOff: true });
+  const p = systemPrompt({ appName: 'Shuddha now', guideSnippets: [], reasoningOff: true });
   assert.ok(/^\/no_think/.test(p));
   assert.ok(/Do not steer unrelated questions back to vessels/.test(p));
   assert.ok(/CHART \{/.test(p));
@@ -277,7 +277,7 @@ t('general question: a chart from user-supplied numbers comes back as data', asy
   assert.deepStrictEqual(out.chart.values, [120, 150]);
 });
 t('system prompt: page context names the vessel without granting any figure', () => {
-  const p = systemPrompt({ appName: 'Geo Monitor', guideSnippets: [], context: { vesselName: 'Aurora Trader' } });
+  const p = systemPrompt({ appName: 'Shuddha now', guideSnippets: [], context: { vesselName: 'Aurora Trader' } });
   assert.ok(p.includes('"Aurora Trader"'));
   assert.ok(/you have no data about it/.test(p));
 });
@@ -286,8 +286,8 @@ t('guard: an upstream failure never throws to the caller', async () => {
   assert.ok(/couldn.t reach/.test(out.text));
 });
 t('system prompt names the app and includes only the passed guide snippets', () => {
-  const p = systemPrompt({ appName: 'Geo Monitor', guideSnippets: [{ title: 'Exporting', answer: 'Use the button.' }] });
-  assert.ok(p.includes('Geo Monitor'));
+  const p = systemPrompt({ appName: 'Shuddha now', guideSnippets: [{ title: 'Exporting', answer: 'Use the button.' }] });
+  assert.ok(p.includes('Shuddha now'));
   assert.ok(p.includes('Exporting: Use the button.'));
 });
 
@@ -299,8 +299,8 @@ t('briefing trigger phrases are recognised', () => {
 });
 
 (async () => {
-  if (!process.env.CAPTAIN_TEST_URL) { finish(); return; }
-  const db = new Client({ connectionString: process.env.CAPTAIN_TEST_URL });
+  if (!process.env.KRIS_TEST_URL) { finish(); return; }
+  const db = new Client({ connectionString: process.env.KRIS_TEST_URL });
   await db.connect();
   const session = { userId: 'u1', orgId: 'test-org', vesselIds: ['9851701'] };
   const wideSession = { userId: 'u1', orgId: 'test-org', vesselIds: ['9851701', '9234567'] };
@@ -337,7 +337,7 @@ t('briefing trigger phrases are recognised', () => {
 
   await ta('router: a greeting is answered instantly by the router, not the companion', async () => {
     const out = await router.route(
-      { text: 'good morning captain', session, now: NOW }, db,
+      { text: 'good morning kris', session, now: NOW }, db,
       { orgId: 'test-org', env: LLM_ENV, fetchImpl: ollamaStub('should never be called') }
     );
     assert.strictEqual(out.source, 'router', 'greetings must not reach a model');
@@ -365,7 +365,7 @@ t('briefing trigger phrases are recognised', () => {
   });
 
   await ta('router: with the LLM disabled, an unparsed question returns the honest data-side message', async () => {
-    const out = await router.route({ text: 'zzz nonsense qqq', session, now: NOW }, db, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } });
+    const out = await router.route({ text: 'zzz nonsense qqq', session, now: NOW }, db, { orgId: 'test-org', env: { KRIS_ENABLE_LLM: '0' } });
     assert.strictEqual(out.source, 'data');
     assert.strictEqual(out.status, 'unparsed');
   });
@@ -415,13 +415,13 @@ t('briefing trigger phrases are recognised', () => {
   });
   await ta('router: with the database DOWN, a greeting still gets a normal reply', async () => {
     const downDb = async () => { const e = new Error('connect ECONNREFUSED'); throw e; };
-    const out = await router.route({ text: 'hello captain', session, now: NOW }, downDb, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } });
+    const out = await router.route({ text: 'hello kris', session, now: NOW }, downDb, { orgId: 'test-org', env: { KRIS_ENABLE_LLM: '0' } });
     assert.strictEqual(out.status, 'answer');
     assert.ok(!/database/.test(out.text));
   });
   await ta('router: with the database DOWN, a data question gets a plain, actionable error', async () => {
     const downDb = async () => { throw new Error('connect ECONNREFUSED'); };
-    const out = await router.route({ text: 'fuel consumption for Aurora Trader last month', session, now: NOW }, downDb, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } });
+    const out = await router.route({ text: 'fuel consumption for Aurora Trader last month', session, now: NOW }, downDb, { orgId: 'test-org', env: { KRIS_ENABLE_LLM: '0' } });
     assert.strictEqual(out.status, 'error');
     assert.strictEqual(out.reason, 'db_unreachable');
     assert.ok(!/\d{3,}/.test(out.text), 'error text must not contain a figure');
@@ -450,7 +450,7 @@ t('briefing trigger phrases are recognised', () => {
   });
 
   await ta('charts: comparing two named vessels returns one figure each plus bar-chart data from SQL', async () => {
-    const out = await router.route({ text: 'compare fuel consumption for Aurora Trader and Northern Pearl last month', session: wideSession, now: NOW }, db, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } });
+    const out = await router.route({ text: 'compare fuel consumption for Aurora Trader and Northern Pearl last month', session: wideSession, now: NOW }, db, { orgId: 'test-org', env: { KRIS_ENABLE_LLM: '0' } });
     assert.strictEqual(out.source, 'data');
     assert.strictEqual(out.status, 'answer');
     assert.ok(out.chart && out.chart.type === 'bar' && out.chart.values.length === 2, JSON.stringify(out.chart));
@@ -462,12 +462,12 @@ t('briefing trigger phrases are recognised', () => {
     }
   });
   await ta('charts: a two-period comparison also carries bar-chart data', async () => {
-    const out = await router.route({ text: 'compare fuel consumption for Aurora Trader this month vs last month', session: wideSession, now: NOW }, db, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } });
+    const out = await router.route({ text: 'compare fuel consumption for Aurora Trader this month vs last month', session: wideSession, now: NOW }, db, { orgId: 'test-org', env: { KRIS_ENABLE_LLM: '0' } });
     assert.ok(out.chart && out.chart.values.length === 2);
     assert.strictEqual(out.chart.values[0], out.comparison.a.value);
   });
   await ta('charts: a companion chart is passed through to the client', async () => {
-    const out = await router.route({ text: 'compare 120 and 150', session, now: NOW }, db, { orgId: 'test-org', env: LLM_ENV, fetchImpl: ollamaStub('150 is 25% more.\nCHART {"type":"bar","labels":["a","b"],"values":[120,150]}') });
+    const out = await router.route({ text: 'chart 120 against 150 for me', session, now: NOW }, db, { orgId: 'test-org', env: LLM_ENV, fetchImpl: ollamaStub('150 is 25% more.\nCHART {"type":"bar","labels":["a","b"],"values":[120,150]}') });
     assert.strictEqual(out.source, 'companion');
     assert.deepStrictEqual(out.chart.values, [120, 150]);
   });
@@ -475,7 +475,7 @@ t('briefing trigger phrases are recognised', () => {
   await ta('context: an unqualified question defaults to the vessel on screen', async () => {
     const out = await router.route(
       { text: 'shaft power on 15 August 2026', session: wideSession, now: NOW, context: { vesselId: '9234567', vesselName: 'Northern Pearl' } },
-      db, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } }
+      db, { orgId: 'test-org', env: { KRIS_ENABLE_LLM: '0' } }
     );
     assert.strictEqual(out.status, 'answer', out.text);
     assert.deepStrictEqual(out.provenance.vessels, ['Northern Pearl']);
@@ -483,14 +483,14 @@ t('briefing trigger phrases are recognised', () => {
   await ta('context: naming another vessel overrides the page context', async () => {
     const out = await router.route(
       { text: 'shaft power for Aurora Trader on 15 August 2026', session: wideSession, now: NOW, context: { vesselId: '9234567', vesselName: 'Northern Pearl' } },
-      db, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } }
+      db, { orgId: 'test-org', env: { KRIS_ENABLE_LLM: '0' } }
     );
     assert.deepStrictEqual(out.provenance.vessels, ['Aurora Trader']);
   });
   await ta('context: an out-of-scope vessel id in the page context is ignored, never trusted', async () => {
     const out = await router.route(
       { text: 'shaft power on 15 August 2026', session: { userId: 'u', orgId: 'o', vesselIds: ['9851701'] }, now: NOW, context: { vesselId: '9345678', vesselName: 'Kaveri Star' } },
-      db, { orgId: 'test-org', env: { CAPTAIN_ENABLE_LLM: '0' } }
+      db, { orgId: 'test-org', env: { KRIS_ENABLE_LLM: '0' } }
     );
     // Single-vessel scope: resolves to the one vessel the user may see, not the one the page claimed.
     assert.strictEqual(out.status, 'answer');

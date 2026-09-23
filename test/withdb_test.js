@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('assert');
 const router = require('../src/router');
-const { handleCaptain } = require('../src/httpHandler');
+const { handleKris } = require('../src/httpHandler');
 
 (async () => {
   const session = { userId: 'u', orgId: 'o', vesselIds: ['v1'] };
@@ -9,12 +9,12 @@ const { handleCaptain } = require('../src/httpHandler');
   // A live-looking client that CONNECTS fine but whose QUERY throws - this is
   // exactly "database reachable, but the schema doesn't match" (e.g. a view
   // that hasn't been created yet, a renamed column).
-  const flakyClient = { query: async () => { throw new Error('relation "captain_fueleu_final" does not exist'); } };
+  const flakyClient = { query: async () => { throw new Error('relation "kris_fueleu_final" does not exist'); } };
 
   const out = await router.route(
     { text: 'gross cb for aurora trader this month', session, now: new Date(), history: [], context: {} },
     async () => flakyClient,
-    { orgId: 'o', env: { CAPTAIN_ENABLE_LLM: '0' } }
+    { orgId: 'o', env: { KRIS_ENABLE_LLM: '0' } }
   );
   assert.strictEqual(out.status, 'error');
   assert.strictEqual(out.reason, 'query_failed');
@@ -28,7 +28,7 @@ const { handleCaptain } = require('../src/httpHandler');
   // exercises the router-level contract only (the piece that was actually
   // broken); the HTTP layer change (stripping .error) is asserted directly.
   const withError = { status: 'answer', text: 'ok', error: 'super secret internal detail leaked from pg' };
-  // simulate what handleCaptain does with a router result carrying .error
+  // simulate what handleKris does with a router result carrying .error
   const clone = Object.assign({}, withError);
   if (clone.error) delete clone.error;
   assert.strictEqual(clone.error, undefined);

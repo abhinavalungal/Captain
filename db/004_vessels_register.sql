@@ -1,6 +1,6 @@
--- Captain - vessel register + housekeeping tables
+-- K.R.1.S - vessel register + housekeeping tables
 --
--- WHY: Captain scopes every query to the vessels a user may see (RBAC) and
+-- WHY: K.R.1.S scopes every query to the vessels a user may see (RBAC) and
 -- resolves vessel names/IMOs through ONE register table. Your project has no
 -- such table, so this creates it and seeds it from the vessels that already
 -- appear in fueleu_final and dnv. Nothing about those two tables is changed.
@@ -41,8 +41,8 @@ from (
 order by v.imo, v.name
 on conflict (id) do nothing;
 
--- 3. Learned vocabulary (optional but used by the "teach Captain a word" flow)
-create table if not exists public.captain_term_mappings (
+-- 3. Learned vocabulary (optional but used by the "teach K.R.1.S a word" flow)
+create table if not exists public.kris_term_mappings (
   id              bigserial primary key,
   org_id          text not null,
   term            text not null,
@@ -58,8 +58,8 @@ create table if not exists public.captain_term_mappings (
 );
 
 -- 4. Query log (optional; every answer/clarify/unparsed outcome is recorded here
---    so you can see what people ask and what Captain could not answer)
-create table if not exists public.captain_query_log (
+--    so you can see what people ask and what K.R.1.S could not answer)
+create table if not exists public.kris_query_log (
   id          bigserial primary key,
   org_id      text,
   user_id     text,
@@ -69,7 +69,7 @@ create table if not exists public.captain_query_log (
   created_at  timestamptz not null default now()
 );
 
-create index if not exists captain_query_log_created_idx on public.captain_query_log (created_at desc);
+create index if not exists kris_query_log_created_idx on public.kris_query_log (created_at desc);
 
 -- 5. See what got registered ---------------------------------------------------
 select id, name, imo, department from public.vessels order by name;

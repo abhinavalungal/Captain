@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Identity — who Captain is, and who the user is.
+ * Identity — who K.R.1.S is, and who the user is.
  *
  * All of this is deterministic string work: no model, no database,
  * microseconds. It sits in the router ABOVE the companion, so "what's your
@@ -9,26 +9,40 @@
  *
  * The user's name is remembered by the WIDGET, not the server. The server is
  * stateless: when a name is captured here, the reply carries
- * `remember: { userName }`; the widget stores it in memory for the page's
- * lifetime and sends it back inside `context.userName` on every message.
- * Nothing is written to disk or localStorage, matching the widget's
- * no-storage design.
+ * `remember: { userName }`; the widget keeps it with the conversation (in
+ * memory, and in this tab's sessionStorage unless persist: false) and sends
+ * it back inside `context.userName` on every message. Nothing is stored
+ * server-side.
  */
 
-const CAPTAIN_NAME = 'Captain Nav';
+const KRIS_NAME = 'K.R.1.S';
 
 // --- what is YOUR name / who are you ---------------------------------------
 
 // Matched against a cleaned string (trailing punctuation stripped, spaces
 // collapsed), and deliberately loose about typos: "whats you name", "wats ur
-// name", "who r u" are all someone asking who Captain is, and none of them
+// name", "who r u" are all someone asking who K.R.1.S is, and none of them
 // should ever fall through to a model or, worse, an error.
-const CAPTAIN_NAME_RE = new RegExp(
+const KRIS_NAME_RE = new RegExp(
   "\\b(?:wh?[ao]t(?:'?s| is| was| are)?|may i know|tell me|say)\\s+(?:your|you|ur|yr|yor|thy)\\s+names?\\b"
   + "|\\bwho\\s+(?:are|r)\\s+(?:you|u)\\b"
   + '|\\bwhat are you called\\b|\\bdo you have a name\\b|\\bwhat should i call you\\b'
   + "|^(?:your|ur) name$"
   + '|\\bwho am i (?:talking|speaking|chatting) (?:to|with)\\b', 'i');
+
+// --- what does K.R.1.S mean ---------------------------------------------------
+// "what does K.R.1.S stand for", "why are you called kris", "are you krishna".
+// Answered here, deterministically, so the explanation of the codename is
+// always the same respectful sentence and never a model's improvisation.
+const KRIS_SPELL = '(?:k\\.?\\s?r\\.?\\s?[1i]\\.?\\s?s\\.?|kris)';
+const NAME_MEANING_RE = new RegExp(
+  '\\bwhat (?:does|do|is) (?:the name )?(?:' + KRIS_SPELL + '|your name) (?:stand for|mean|short for)\\b'
+  + '|\\bwhy (?:are you|r u|is it) (?:called|named) ' + KRIS_SPELL + '\\b'
+  + '|\\bwhy (?:the name )?' + KRIS_SPELL + '$'
+  + '|\\bmeaning (?:of|behind) (?:your name|the name|' + KRIS_SPELL + ')\\b'
+  + '|\\bare (?:you|u) (?:lord |shri |sri )?krishna\\b', 'i');
+
+const NAME_MEANING = `${KRIS_NAME} is a codename inspired by Lord Krishna \u2014 the calm charioteer who guided Arjuna without ever taking the reins from him. That is the idea here: I guide you through your fleet's records and the app, and you stay in charge. Say it "Kris".`;
 
 // --- what can you do (malformed variants) ------------------------------------
 // The exact phrases "help" / "what can you do" are claimed earlier by the
@@ -44,8 +58,8 @@ const CAPABILITY_RE = new RegExp(
 /** Text answered for capability questions; single source is the guide entry. */
 function capabilityAnswer() {
   const { GUIDE } = require('./guide');
-  const g = GUIDE.find((e) => e.id === 'what-is-captain');
-  return g ? g.answer : `I'm ${CAPTAIN_NAME}. I answer questions about your vessel data, help with the app, and chat. Ask "help" for the full list of measurements I can read.`;
+  const g = GUIDE.find((e) => e.id === 'what-is-kris');
+  return g ? g.answer : `I'm ${KRIS_NAME}. I answer questions about your vessel data, help with the app, and chat. Ask "help" for the full list of measurements I can read.`;
 }
 
 /** Trailing decoration people type — ">?", "??!", stray punctuation. */
@@ -79,7 +93,7 @@ const NOT_A_NAME = new Set([
   // time and metric vocabulary — a data question must never read as a name
   'yesterday', 'today', 'tomorrow', 'week', 'month', 'year', 'quarter',
   'power', 'fuel', 'speed', 'distance', 'consumption', 'shaft', 'rpm',
-  'help', 'hello', 'hi', 'hey', 'thanks', 'thank', 'captain',
+  'help', 'hello', 'hi', 'hey', 'thanks', 'thank', 'kris',
 ]);
 
 const DECLINE_RE = /^\s*(?:no(?:pe)?|nah|rather not|i'?d rather not|prefer not|none of your business|why|skip|never ?mind|doesn'?t matter|not telling|secret|guess|na)\b/i;
@@ -134,7 +148,7 @@ function resolveNameReply(text, ctx = {}) {
 function greetByName(name, ctx = {}) {
   const vessel = ctx.vesselName ? ` I see you're on the ${ctx.vesselName} page — ask away and I'll default to her.` : '';
   return {
-    text: `Pleasure to meet you, ${name}. I'll remember that while we talk.${vessel} What can I look up for you?`,
+    text: `Lovely to meet you, ${name}. I'll remember that while we talk.${vessel} What can I look up for you?`,
     kind: 'name_captured',
     remember: { userName: name },
   };
@@ -151,16 +165,20 @@ function answerIdentity(text, ctx = {}) {
   const raw = scrub(text);
   if (!raw) return null;
 
-  if (CAPTAIN_NAME_RE.test(raw)) {
+  if (NAME_MEANING_RE.test(raw)) {
+    return { text: NAME_MEANING, kind: 'kris_meaning' };
+  }
+
+  if (KRIS_NAME_RE.test(raw)) {
     if (ctx.userName) {
       return {
-        text: `I'm ${CAPTAIN_NAME} — your assistant for the fleet's records and the app. And you're ${ctx.userName}, if I have it right.`,
-        kind: 'captain_name',
+        text: `I'm ${KRIS_NAME} — say it "Kris". I'm your calm guide to the fleet's records and the app. And you're ${ctx.userName}, if I have it right.`,
+        kind: 'kris_name',
       };
     }
     return {
-      text: `I'm ${CAPTAIN_NAME} — your assistant for the fleet's records and the app. What's your name?`,
-      kind: 'captain_name',
+      text: `I'm ${KRIS_NAME} — say it "Kris". I'm your calm guide to the fleet's records and the app. What's your name?`,
+      kind: 'kris_name',
       pending: { kind: 'name' },
     };
   }
@@ -180,4 +198,4 @@ function answerIdentity(text, ctx = {}) {
   return null;
 }
 
-module.exports = { answerIdentity, resolveNameReply, extractName, titleCase, CAPTAIN_NAME, CAPABILITY_RE, capabilityAnswer };
+module.exports = { answerIdentity, resolveNameReply, extractName, titleCase, KRIS_NAME, NAME_MEANING_RE, CAPABILITY_RE, capabilityAnswer };

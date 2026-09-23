@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * Captain test suite.
+ * K.R.1.S test suite.
  *
  *   node test/run.js
  *
  * Needs a Postgres loaded with test/fixtures/example_schema.sql and the
- * connection string in CAPTAIN_TEST_URL. Set CAPTAIN_TEST_URL='' to run only
+ * connection string in KRIS_TEST_URL. Set KRIS_TEST_URL='' to run only
  * the offline tests (dates, parser, SQL shape).
  */
 
@@ -444,9 +444,9 @@ t('rbac: a vessel outside the scope cannot even be named', () => {
 // ===========================================================================
 
 async function e2e() {
-  const url = process.env.CAPTAIN_TEST_URL;
+  const url = process.env.KRIS_TEST_URL;
   if (!url) {
-    console.log('\n(skipping live database tests — CAPTAIN_TEST_URL not set)');
+    console.log('\n(skipping live database tests — KRIS_TEST_URL not set)');
     return;
   }
 

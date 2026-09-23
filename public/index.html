@@ -3,104 +3,111 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Geo Monitor — Captain prototype</title>
+<title>Shuddha now — K.R.1.S prototype</title>
+<meta name="description" content="Shuddha now — powering the transition to zero carbon shipping. Prototype page for the K.R.1.S vessel-data assistant.">
+<meta name="application-name" content="Shuddha now">
+<meta name="apple-mobile-web-app-title" content="Shuddha now">
+<meta name="theme-color" content="#0F3D2E">
+<meta property="og:site_name" content="Shuddha now">
+<meta property="og:title" content="Shuddha now — K.R.1.S prototype">
+<meta property="og:image" content="assets/shuddha-now-social.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Shuddha now — Powering the transition to zero carbon shipping">
 <meta name="robots" content="noindex">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%2316293D'/%3E%3Cpath d='M16 7v13M11 15q5 7 10 0M12 10h8' fill='none' stroke='%23C9A43E' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='5.5' r='1.6' fill='none' stroke='%23C9A43E' stroke-width='1.6'/%3E%3C/svg%3E">
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+<link rel="preload" href="assets/fonts/manrope-700.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 /* ---------------------------------------------------------------------------
-   Prototype host page. Stands in for perform.geoserves.com/pages/ while
-   Captain is a prototype. Shares the widget's palette on purpose so the
-   two read as one product. No external assets; works offline.
+   Prototype host page, branded Shuddha now. Stands in for
+   perform.geoserves.com/pages/ while K.R.1.S is a prototype. The page wears
+   the Shuddha now identity — Deep Pine, Jade and Sage on Paper, set in
+   Manrope (brand/Shuddha-now-brand-guide.pdf); the K.R.1.S widget keeps its
+   own look inside its shadow root. Only same-origin assets (logo, icons and
+   fonts in assets/); works offline.
 --------------------------------------------------------------------------- */
+@font-face{font-family:"Manrope";font-weight:400;font-style:normal;font-display:swap;src:url(assets/fonts/manrope-400.woff2) format("woff2")}
+@font-face{font-family:"Manrope";font-weight:600;font-style:normal;font-display:swap;src:url(assets/fonts/manrope-600.woff2) format("woff2")}
+@font-face{font-family:"Manrope";font-weight:700;font-style:normal;font-display:swap;src:url(assets/fonts/manrope-700.woff2) format("woff2")}
 :root{
-  --paper:#F3F6F6;--paper-2:#FFFFFF;--shallow:#D3E4E7;--shallow-deep:#B4D2D7;
-  --ink:#12232B;--ink-soft:#4A6069;--ink-faint:#8AA0A7;--rule:#C2D3D6;
-  --accent:#16293D;--accent-2:#1B3550;--gold:#C9A43E;--sea:#26697A;--magenta:#A81F73;
-  --ok:#2E7D5B;--warn:#B8860B;--off:#8AA0A7;
-  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --bg:#F7F6F1;--surface:#FFFFFF;--ink:#0F3D2E;--ink-2:#44564F;--ink-3:#6E7F78;--line:#E3E8E4;--line-2:#CFD9D3;
+  --deep:#0F3D2E;--deep-2:#0B3024;--jade:#2F7D5B;--jade-2:#276B4E;--jade-soft:rgba(47,125,91,.1);--sage:#8DBBA1;--mist:#E4EFE8;
+  --ok:#2F9E6B;--warn:#B7791F;--off:#A6B3AC;
+  --font:"Manrope","Segoe UI Variable Text","Segoe UI",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Roboto,Arial,sans-serif;
+  --display:"Manrope","Segoe UI Variable Display","Segoe UI",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Roboto,Arial,sans-serif;
+  --mono:"Cascadia Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 var(--sans)}
-a{color:var(--sea)}
-code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--font);-webkit-font-smoothing:antialiased}
+a{color:var(--jade)}
+code,pre{font-family:var(--mono)}
 
-/* app bar: the shape of a real fleet dashboard, so the corner widget has a home */
-.bar{background:linear-gradient(180deg,var(--accent-2),var(--accent));color:#fff;border-bottom:2px solid var(--gold)}
-.bar .in{max-width:1100px;margin:0 auto;padding:0 20px;height:56px;display:flex;align-items:center;gap:26px}
-.brand{font:600 17px/1 var(--sans);letter-spacing:.01em;color:#fff;text-decoration:none}
-.bar nav{display:flex;gap:18px;font-size:14px}
-.bar nav span{color:rgba(255,255,255,.7);padding:6px 0;border-bottom:2px solid transparent}
-.bar nav span.on{color:#fff;border-bottom-color:var(--gold)}
-.proto{margin-left:auto;font-size:12px;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.14);color:#fff}
-.who{display:flex;align-items:center;gap:8px;font-size:13px;color:rgba(255,255,255,.85)}
-.who select{font:inherit;font-size:13px;padding:5px 8px;border-radius:5px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);color:#fff}
-.who select option{color:var(--ink)}
+.bar{background:var(--deep);border-bottom:1px solid rgba(255,255,255,.06)}
+.bar .in{max-width:1120px;margin:0 auto;padding:0 24px;height:72px;display:flex;align-items:center;gap:28px}
+.brand{display:flex;align-items:center;flex:none;border-radius:6px}
+.brand img{display:block;height:38px;width:auto}
+.brand:focus-visible{outline:2px solid var(--jade);outline-offset:3px}
+.bar nav{display:flex;gap:4px;font-size:14.5px}
+.bar nav span{color:rgba(255,255,255,.72);padding:7px 11px;border-radius:8px;font-weight:500}
+.bar nav span.on{color:#FFFFFF;background:rgba(255,255,255,.1)}
+.proto{margin-left:auto;font:600 11px/1 var(--font);letter-spacing:.12em;text-transform:uppercase;padding:7px 11px;border-radius:999px;background:rgba(141,187,161,.12);color:var(--sage);border:1px solid rgba(141,187,161,.4)}
+.who{display:flex;align-items:center;gap:8px;font-size:13px;color:rgba(255,255,255,.72)}
+.who select{font:inherit;font-size:13px;padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.22);background:var(--deep-2);color:#FFFFFF}
 
-main{max-width:1100px;margin:0 auto;padding:36px 20px 96px}
-h1{font:400 34px/1.15 var(--serif);letter-spacing:-.01em;margin:0 0 10px;max-width:30ch}
-.lede{max-width:62ch;color:var(--ink-soft);margin:0 0 30px;font-size:16px}
-h2{font:600 16px/1.3 var(--sans);margin:44px 0 10px}
+main{max-width:1120px;margin:0 auto;padding:44px 24px 110px}
+h1{font:650 34px/1.15 var(--display);letter-spacing:-.028em;margin:0 0 12px;max-width:26ch}
+h1 em{font-style:normal;color:var(--jade)}
+.lede{max-width:62ch;color:var(--ink-2);margin:0 0 32px;font-size:16px}
+h2{font:600 16px/1.3 var(--display);letter-spacing:-.01em;margin:48px 0 10px}
 p{max-width:66ch}
 
-/* the one bold element: a live connection readout */
-.readout{
-  display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--rule);
-  background:var(--paper-2);border-radius:8px;overflow:hidden;
-}
-.readout > div{padding:16px 18px;border-right:1px solid var(--rule)}
-.readout > div:last-child{border-right:0}
-.lamp{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink-soft)}
-.lamp i{width:10px;height:10px;border-radius:50%;background:var(--off);flex:none}
-.lamp.ok i{background:var(--ok);box-shadow:0 0 0 3px rgba(46,125,91,.18)}
-.lamp.warn i{background:var(--warn);box-shadow:0 0 0 3px rgba(184,134,11,.18)}
-.readout b{display:block;font:400 22px/1.2 var(--serif);margin-top:6px;color:var(--ink)}
-.readout small{display:block;color:var(--ink-faint);font-size:12px;margin-top:2px}
-.readout .checking b{color:var(--ink-faint)}
+.readout{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.readout > div{padding:16px 18px;background:var(--surface);border:1px solid var(--line);border-radius:14px}
+.lamp{display:flex;align-items:center;gap:8px;font:500 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.lamp i{width:8px;height:8px;border-radius:50%;background:var(--off);flex:none}
+.lamp.ok i{background:var(--ok)}
+.lamp.warn i{background:var(--warn)}
+.readout b{display:block;font:600 19px/1.25 var(--display);letter-spacing:-.015em;margin-top:10px;color:var(--ink)}
+.readout small{display:block;color:var(--ink-3);font-size:12.5px;margin-top:2px}
+.readout .checking b{color:var(--ink-3)}
 
-.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px}
-button.act{font:inherit;font-size:14px;font-weight:600;padding:8px 14px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
-button.act:hover{background:var(--accent-2)}
-button.quiet{font:inherit;font-size:13.5px;padding:7px 12px;border-radius:14px;border:1px solid var(--rule);background:var(--paper-2);color:var(--ink-soft);cursor:pointer}
-button.quiet:hover{border-color:var(--shallow-deep);color:var(--ink);background:var(--shallow)}
-button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
-input.txt{font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--rule);border-radius:6px;background:var(--paper-2);color:var(--ink);min-width:200px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
+button.act{font:inherit;font-size:14px;font-weight:600;padding:9px 18px;border-radius:999px;border:0;background:var(--jade);color:#fff;cursor:pointer;box-shadow:0 6px 14px -8px rgba(15,61,46,.55)}
+button.act:hover{background:var(--jade-2)}
+button.quiet{font:inherit;font-size:13.5px;padding:8px 13px;border-radius:999px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);cursor:pointer}
+button.quiet:hover{border-color:var(--jade);color:var(--ink)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--jade);outline-offset:2px}
+input.txt{font:inherit;font-size:14px;padding:8px 12px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--ink);min-width:200px}
 
-.note{border-left:3px solid var(--gold);background:var(--paper-2);padding:10px 14px;border-radius:0 6px 6px 0;max-width:66ch;font-size:14px}
-.note.hard{border-left-color:var(--magenta)}
+.note{border:1px solid var(--line);background:var(--surface);padding:12px 16px;border-radius:12px;max-width:66ch;font-size:14px;color:var(--ink-2)}
+.note.hard{background:#FDF2F1;border-color:#F4D6D2}
 
-pre.embed{
-  margin:12px 0 0;padding:16px 18px;background:#0F1E2E;color:#E6EDF1;border-radius:8px;
-  font-size:13px;line-height:1.55;overflow-x:auto;position:relative;white-space:pre;
-}
-pre.embed .c{color:#8FB4C7}
-pre.embed .s{color:#F1D58A}
-.copy{position:absolute;top:10px;right:10px;font:inherit;font-size:12px;padding:4px 9px;border-radius:5px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.08);color:#fff;cursor:pointer}
-.copy:hover{background:rgba(255,255,255,.16)}
+pre.embed{margin:12px 0 0;padding:18px 20px;background:var(--deep-2);color:#E4EFE8;border-radius:14px;font-size:13px;line-height:1.6;overflow-x:auto;position:relative;white-space:pre}
+pre.embed .c{color:#8DA79A}
+pre.embed .s{color:#8DBBA1}
+.copy{position:absolute;top:10px;right:10px;font:inherit;font-size:12px;padding:5px 10px;border-radius:7px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#fff;cursor:pointer}
+.copy:hover{background:rgba(255,255,255,.12)}
 
-ol.steps{padding-left:22px;max-width:66ch}
+ol.steps{padding-left:22px;max-width:66ch;color:var(--ink-2)}
 ol.steps li{margin:8px 0}
-ol.steps code{background:var(--shallow);padding:1px 5px;border-radius:3px;font-size:13px}
+ol.steps code{background:var(--surface);border:1px solid var(--line);padding:1px 6px;border-radius:5px;font-size:12.5px;color:var(--ink)}
 
-@media (max-width:760px){
-  .readout{grid-template-columns:1fr 1fr}
-  .readout > div:nth-child(2){border-right:0}
-  .readout > div:nth-child(1),.readout > div:nth-child(2){border-bottom:1px solid var(--rule)}
-  .bar nav{display:none}
-  h1{font-size:28px}
-}
-@media (max-width:480px){.readout{grid-template-columns:1fr}.readout > div{border-right:0;border-bottom:1px solid var(--rule)}.readout > div:last-child{border-bottom:0}}
+@media (max-width:860px){.readout{grid-template-columns:1fr 1fr}.bar nav{display:none}h1{font-size:28px}}
+@media (max-width:480px){.readout{grid-template-columns:1fr}.who{display:none}.proto{display:none}.bar .in{padding:0 16px}.brand img{height:30px}main{padding:32px 16px 110px}}
 </style>
 </head>
 <body>
 
 <header class="bar">
   <div class="in">
-    <a class="brand" href="#">Geo Monitor</a>
+    <a class="brand" href="#" aria-label="Shuddha now — home"><img src="assets/shuddha-now-logo-reverse.svg" width="187" height="38" alt="Shuddha now"></a>
     <nav aria-label="Dashboard sections (placeholder)">
       <span class="on">Fleet</span><span>Compliance</span><span>Voyages</span><span>Reports</span>
     </nav>
-    <span class="proto">Captain prototype</span>
+    <span class="proto">K.R.1.S prototype</span>
     <label class="who">Department
       <select id="dept" aria-label="Sign in as department">
         <option>Emission</option><option>Performance</option><option>Pool</option><option>Unassigned</option>
@@ -110,20 +117,20 @@ ol.steps code{background:var(--shallow);padding:1px 5px;border-radius:3px;font-s
 </header>
 
 <main>
-  <h1>Captain is live on this site. Your page is next.</h1>
-  <p class="lede">This page stands in for <code>perform.geoserves.com/pages/</code> while Captain is a prototype. The captain in the bottom-right corner is the real widget, served from this server, talking to the real backend. Moving him to your page later is one script tag, shown at the bottom.</p>
+  <h1><em>K.R.1.S</em> is live on this site. Your page is next.</h1>
+  <p class="lede">This page stands in for <code>perform.geoserves.com/pages/</code> while K.R.1.S is a prototype. K.R.1.S, in the bottom-right corner, is the real widget, served from this server and talking to the real backend. Moving it to your page later is one script tag, shown at the bottom.</p>
 
   <div class="readout" id="readout" aria-live="polite">
     <div class="checking"><span class="lamp"><i></i>Backend</span><b>Checking</b><small>&nbsp;</small></div>
     <div class="checking"><span class="lamp"><i></i>Database</span><b>Checking</b><small>&nbsp;</small></div>
-    <div class="checking"><span class="lamp"><i></i>Companion model</span><b>Checking</b><small>&nbsp;</small></div>
+    <div class="checking"><span class="lamp"><i></i>Model</span><b>Checking</b><small>&nbsp;</small></div>
     <div class="checking"><span class="lamp"><i></i>Sign-in mode</span><b>Checking</b><small>&nbsp;</small></div>
   </div>
 
   <h2>Try it</h2>
-  <p>You are signed in as the <strong id="deptName">Emission</strong> department (change it in the top bar). Captain will only see that department's vessels, exactly as it will on your page.</p>
+  <p>You are signed in as the <strong id="deptName">Emission</strong> department (change it in the top bar). K.R.1.S will only see that department's vessels, exactly as it will on your page.</p>
   <div class="row">
-    <button class="act" id="open">Open Captain</button>
+    <button class="act" id="open">Open K.R.1.S</button>
     <button class="quiet" data-ask="Anything I should know?">Anything I should know?</button>
     <button class="quiet" data-ask="Fuel consumption last month">Fuel consumption last month</button>
     <button class="quiet" data-ask="How do I export a report?">How do I export a report?</button>
@@ -131,7 +138,7 @@ ol.steps code{background:var(--shallow);padding:1px 5px;border-radius:3px;font-s
   <div class="note" id="authNote" style="margin-top:16px;display:none"></div>
 
   <h2>Following the page</h2>
-  <p>On a vessel's page your app will tell Captain which vessel is on screen, so "fuel consumption last month" needs no vessel name. Simulate that here:</p>
+  <p>On a vessel's page your app will tell K.R.1.S which vessel is on screen, so "fuel consumption last month" needs no vessel name. Simulate that here:</p>
   <div class="row">
     <input class="txt" id="ctxImo" placeholder="IMO number, e.g. 9851701" inputmode="numeric" aria-label="Vessel IMO">
     <input class="txt" id="ctxName" placeholder="Vessel name" aria-label="Vessel name">
@@ -139,29 +146,29 @@ ol.steps code{background:var(--shallow);padding:1px 5px;border-radius:3px;font-s
     <button class="quiet" id="ctxClear">Leave vessel page</button>
   </div>
 
-  <h2>Add Captain to perform.geoserves.com</h2>
+  <h2>Add K.R.1.S to perform.geoserves.com</h2>
   <p>Paste this before <code>&lt;/body&gt;</code> on the page. The widget works out its own API address from where the script was loaded, so nothing else on your page needs configuring — it works the same regardless of what this is hosted on.</p>
   <pre class="embed" id="embed"><button class="copy" id="copyEmbed" type="button">Copy</button></pre>
 
   <p style="margin-top:22px">Then, on wherever this is deployed (its environment variables):</p>
   <ol class="steps">
-    <li>Set <code>CAPTAIN_ALLOW_ORIGIN</code> to <code>https://perform.geoserves.com</code> so the browser is allowed to call Captain from your domain.</li>
-    <li>Replace <code>verifyToken()</code> in <code>src/httpHandler.js</code> with your real session check, and remove <code>CAPTAIN_DEV_SESSION</code>. The department dropdown on this page only works because prototype sign-in is on; on your page, <code>getToken</code> should return the user's real session token.</li>
-    <li>On vessel pages, call <code>Captain.setContext({ vesselId, vesselName })</code> when the page loads.</li>
+    <li>Set <code>KRIS_ALLOW_ORIGIN</code> to <code>https://perform.geoserves.com</code> so the browser is allowed to call K.R.1.S from your domain.</li>
+    <li>Replace <code>verifyToken()</code> in <code>src/httpHandler.js</code> with your real session check, and remove <code>KRIS_DEV_SESSION</code>. The department dropdown on this page only works because prototype sign-in is on; on your page, <code>getToken</code> should return the user's real session token.</li>
+    <li>On vessel pages, call <code>KRIS.setContext({ vesselId, vesselName })</code> when the page loads.</li>
   </ol>
   <div class="note hard" style="margin-top:14px">Prototype sign-in trusts whatever department the browser claims. It exists so this page can be demonstrated before real authentication is wired. It must be off on any site real users can reach.</div>
 </main>
 
-<script src="/captain-widget.js"></script>
+<script src="/kris-widget.js"></script>
 <script>
 (function () {
   'use strict';
 
-  var origin = (window.Captain && window.Captain.scriptOrigin) || window.location.origin;
-  var api = origin + '/api/captain';
+  var origin = (window.KRIS && window.KRIS.scriptOrigin) || window.location.origin;
+  var api = origin + '/api/kris';
 
   // --- prototype sign-in: an unsigned claims token, honoured only when the
-  //     backend runs with CAPTAIN_DEV_SESSION=1. Nothing is stored.
+  //     backend runs with KRIS_DEV_SESSION=1. Nothing is stored.
   var dept = document.getElementById('dept');
   function token() {
     var claims = { sub: 'prototype-user', org: 'geoserves', departments: [dept.value] };
@@ -171,15 +178,15 @@ ol.steps code{background:var(--shallow);padding:1px 5px;border-radius:3px;font-s
     document.getElementById('deptName').textContent = dept.value;
   });
 
-  Captain.init({
+  KRIS.init({
     getToken: token,
     theme: 'light',
-    nudgeText: 'Ask me about your fleet'
+    nudgeText: 'Namaste! Ask me anything about your fleet.'
   });
 
-  document.getElementById('open').addEventListener('click', function () { Captain.open(); });
+  document.getElementById('open').addEventListener('click', function () { KRIS.open(); });
   Array.prototype.forEach.call(document.querySelectorAll('[data-ask]'), function (b) {
-    b.addEventListener('click', function () { Captain.ask(b.getAttribute('data-ask')); });
+    b.addEventListener('click', function () { KRIS.ask(b.getAttribute('data-ask')); });
   });
 
   // --- page context demo
@@ -187,19 +194,19 @@ ol.steps code{background:var(--shallow);padding:1px 5px;border-radius:3px;font-s
     var imo = document.getElementById('ctxImo').value.trim();
     var name = document.getElementById('ctxName').value.trim();
     if (!imo && !name) return;
-    Captain.setContext({ vesselId: imo || null, vesselName: name || imo, page: 'vessel' });
-    Captain.open();
+    KRIS.setContext({ vesselId: imo || null, vesselName: name || imo, page: 'vessel' });
+    KRIS.open();
   });
-  document.getElementById('ctxClear').addEventListener('click', function () { Captain.clearContext(); });
+  document.getElementById('ctxClear').addEventListener('click', function () { KRIS.clearContext(); });
 
   // --- embed snippet for the real page, with this site's origin filled in
   var pre = document.getElementById('embed');
   var segs = [
-    ['c', '<!-- Captain -->\n'],
-    ['t', '<script src="'], ['s', origin + '/captain-widget.js'], ['t', '"><\/script>\n'],
-    ['t', '<script>\n  Captain.init({\n    getToken: function () { return window.SESSION_TOKEN; },  '],
+    ['c', '<!-- K.R.1.S -->\n'],
+    ['t', '<script src="'], ['s', origin + '/kris-widget.js'], ['t', '"><\/script>\n'],
+    ['t', '<script>\n  KRIS.init({\n    getToken: function () { return window.SESSION_TOKEN; },  '],
     ['c', '// your real session token\n'],
-    ['t', '    theme: '], ['s', "'auto'"], ['t', ',\n    brand: { accent: '], ['s', "'#16293D'"], ['t', ' }\n  });\n<\/script>']
+    ['t', '    theme: '], ['s', "'auto'"], ['t', ',\n    brand: { accent: '], ['s', "'#2B3A9E'"], ['t', ' }\n  });\n<\/script>']
   ];
   var plain = '';
   segs.forEach(function (seg) {
@@ -226,20 +233,20 @@ ol.steps code{background:var(--shallow);padding:1px 5px;border-radius:3px;font-s
   }
   fetch(api, { method: 'GET' }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); }).then(function (h) {
     set(0, 'ok', 'Connected', origin.replace(/^https?:\/\//, ''));
-    set(1, h.database ? 'ok' : 'warn', h.database ? 'Configured' : 'Not configured', h.database ? (h.writer ? 'read + sync' : 'read only') : 'set CAPTAIN_READ_URL');
-    if (h.companion && h.companion.provider) set(2, 'ok', h.companion.model, h.companion.provider + ', self-hosted');
+    set(1, h.database ? 'ok' : 'warn', h.database ? 'Configured' : 'Not configured', h.database ? (h.writer ? 'read + sync' : 'read only') : 'set KRIS_READ_URL');
+    if (h.companion && h.companion.provider) set(2, 'ok', h.companion.model, h.mode === 'agent' ? 'agent mode, streaming' : 'companion, streaming');
     else set(2, 'off', 'Off', 'data and guide still work');
     var proto = h.auth === 'prototype';
     set(3, proto ? 'warn' : 'ok', proto ? 'Prototype' : 'Production', proto ? 'department dropdown is trusted' : 'real session required');
     var note = document.getElementById('authNote');
     if (!proto) {
       note.style.display = '';
-      note.textContent = 'Prototype sign-in is off on this backend, so the department dropdown has no effect and Captain will ask you to sign in. That is the correct state once your page supplies a real token.';
+      note.textContent = 'Prototype sign-in is off on this backend, so the department dropdown has no effect and K.R.1.S will ask you to sign in. That is the correct state once your page supplies a real token.';
     }
     if (h.allowedOrigins && h.allowedOrigins.indexOf('https://perform.geoserves.com') === -1 && h.allowedOrigins.indexOf('*') === -1) {
       var s = document.createElement('div');
       s.className = 'note'; s.style.marginTop = '12px';
-      s.textContent = 'CAPTAIN_ALLOW_ORIGIN does not include https://perform.geoserves.com yet. Captain works on this page, but your page will be blocked by the browser until that is set.';
+      s.textContent = 'KRIS_ALLOW_ORIGIN does not include https://perform.geoserves.com yet. K.R.1.S works on this page, but your page will be blocked by the browser until that is set.';
       pre.parentNode.insertBefore(s, pre.nextSibling);
     }
   }).catch(function () {
