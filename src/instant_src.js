@@ -22,20 +22,40 @@ const DEFAULT_LOCALE = 'en-GB';
 
 // --- time zone handling --------------------------------------------------------
 
+// Building an Intl.DateTimeFormat costs about a millisecond; formatting with
+// one costs microseconds. Every message formats the date, so build each one once.
+const FORMATTERS = new Map();
+function formatter(tz, opts) {
+  const key = (tz || 'UTC') + '|' + JSON.stringify(opts);
+  let f = FORMATTERS.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(DEFAULT_LOCALE, Object.assign({ timeZone: tz || 'UTC' }, opts));
+    if (FORMATTERS.size >= 500) FORMATTERS.delete(FORMATTERS.keys().next().value);
+    FORMATTERS.set(key, f);
+  }
+  return f;
+}
+
+const TZ_OK = new Map();
 function validTz(tz) {
   if (!tz || typeof tz !== 'string' || tz.length > 64) return null;
-  try { new Intl.DateTimeFormat('en-GB', { timeZone: tz }); return tz; } catch (_) { return null; }
+  let ok = TZ_OK.get(tz);
+  if (ok === undefined) {
+    try { formatter(tz, {}); ok = true; } catch (_) { ok = false; }
+    if (TZ_OK.size >= 500) TZ_OK.delete(TZ_OK.keys().next().value);
+    TZ_OK.set(tz, ok);
+  }
+  return ok ? tz : null;
 }
 
 function fmt(now, tz, opts) {
-  return new Intl.DateTimeFormat(DEFAULT_LOCALE, Object.assign({ timeZone: tz || 'UTC' }, opts)).format(now);
+  return formatter(tz, opts).format(now);
 }
 
+const PARTS_OPTS = { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long', hour: '2-digit', minute: '2-digit', hour12: false };
 /** Calendar parts of `now` as seen in `tz` (for day arithmetic). */
 function localParts(now, tz) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: tz || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(now).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+  const parts = formatter(tz, PARTS_OPTS).formatToParts(now).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
   return {
     y: +parts.year, m: +parts.month, d: +parts.day,
     weekday: parts.weekday, hour: +parts.hour === 24 ? 0 : +parts.hour, minute: +parts.minute,

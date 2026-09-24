@@ -39,7 +39,7 @@ const identity = require('./identity');
 const agent = require('./agent');
 const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-24.kris-8';
+const ROUTER_BUILD = '2026-09-24.kris-9';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -108,6 +108,9 @@ async function route(input, db, opts) {
       const direct = await directData(text, input, getDb, opts);
       if (direct) return direct;
     }
+    // The model takes seconds; the connection the direct check may have
+    // opened goes back to the pool first (a tool call takes a fresh one).
+    if (typeof opts.releaseDb === 'function') opts.releaseDb();
     let agentOut = null;
     try {
       agentOut = await agent.run(input, getDb, Object.assign({}, opts, { fleetNames: fleetNamesFor(input, getDb, opts) }));

@@ -122,6 +122,35 @@ exposes `memory`, `settings`, `view`, `conversation`, `open`, `close` and
 `answer` events. Voice, files, tools, other models or workspace knowledge
 can be added on these seams without rebuilding the widget.
 
+### Upgrading to kris-9 (ready for many users)
+
+- Deploy `server.js`, `src/ratelimit.js` (new), `src/httpHandler.js`,
+  `src/router.js`, `src/agent.js`, `src/parser.js`, `src/instant_src.js`,
+  `src/envcheck.js` and `public/kris-widget.js` (build `2026-09-24.kris-9`).
+- **Database connections are held only while records are read.** A data
+  question used to keep its connection until the whole reply was written,
+  model time included, and the pool had 3 — so a fourth simultaneous data
+  question waited 8 s and then failed. The connection now goes back to the
+  pool the moment the lookup is done, and the pool size is
+  `KRIS_PG_POOL_MAX` (default 10). With several instances, keep
+  instances × pool within your database's limit (on Supabase, use the
+  pooler URL).
+- **A per-user message limit.** `KRIS_RATE_PER_MIN` (default 20) messages a
+  minute per user; past it the reply is a 429 with `Retry-After` and a plain
+  "give me N seconds" card. Prototype sign-in gives every visitor the same
+  claims, so there visitors are told apart by address. The count lives in
+  each process; with several instances it is per instance.
+- **Less CPU per message.** The metric classifier runs once per distinct text
+  (it used to run several times per message, once per history turn for the
+  follow-up check), and date/time-zone formatters are built once. Measured on
+  one process (mock model, 1 s to first token): 1,000 questions spread over
+  10 s went from 25 s to first words to 1.1 s; 1,000 at the same instant from
+  27 s to 10 s; 1,000 instant-lane answers from 2.5 s to 0.4 s.
+- **Hosting.** Render's free plan sleeps after 15 minutes and has a small
+  slice of CPU; for real users, run an always-on paid instance. The server
+  keeps no per-user state (memory and history live in each browser), so it
+  scales out by adding instances behind the load balancer.
+
 ### Upgrading to kris-8 (answers, not essays)
 
 - Deploy `src/companion_src.js`, `src/agent.js`, `src/router.js`,
@@ -498,6 +527,8 @@ upstream APIs exist.
 | `KRIS_EXPOSE_SQL` | `1` to send generated SQL to the browser |
 | `KRIS_ENABLE_LLM` | `0` to run without a conversation model |
 | `KRIS_LLM_API_KEY` | OpenRouter key for GLM-5.3-Flash (the only model setting you need) |
+| `KRIS_PG_POOL_MAX` | read connections per server process (default 10) |
+| `KRIS_RATE_PER_MIN` | messages per user per minute, per process (default 20, `0` = off) |
 | `KRIS_MODE` | `agent` (default: model + tools) or `router` |
 | `KRIS_LLM_REASONING_EFFORT` | pin `low` / `medium` / `high`; unset follows the question |
 | `KRIS_LLM_PROVIDER`, `KRIS_LLM_URL`, `KRIS_LLM_MODEL` | only to self-host instead (`ollama` or `openai_compat`) |

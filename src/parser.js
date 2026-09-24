@@ -616,7 +616,28 @@ function priorPeriod(range) {
  * passes them in so an organisation's own vocabulary is recognised as data;
  * without them the check still works on the built-in aliases.
  */
+/**
+ * classify() is pure and a message is classified several times over (the fast
+ * lane, the follow-up check across the history, the agent's direct-data
+ * check), each time scanning every metric alias with typo tolerance. The
+ * answer for a given text, vocabulary and day is remembered.
+ */
+const CLASSIFY_MEMO = new Map();          // built-in vocabulary
+const LEARNED_MEMO = new WeakMap();       // per learned-vocabulary array (the cache hands out the same array)
 function classify(text, learned = [], now) {
+  const list = learned || [];
+  let memo = CLASSIFY_MEMO;
+  if (list.length) { memo = LEARNED_MEMO.get(list); if (!memo) { memo = new Map(); LEARNED_MEMO.set(list, memo); } }
+  const key = String(text || '') + '\u0000' + (now ? Math.floor(new Date(now).getTime() / 86400000) : '');
+  const hit = memo.get(key);
+  if (hit !== undefined) return hit;
+  const out = classifyText(text, list, now);
+  if (memo.size >= 2000) memo.delete(memo.keys().next().value);
+  memo.set(key, out);
+  return out;
+}
+
+function classifyText(text, learned, now) {
   const raw = String(text || '').trim();
   if (!raw) return 'other';
   if (HELP_RE.test(raw)) return 'help';

@@ -159,7 +159,7 @@ async function handleApi(req, res) {
     res.write(JSON.stringify(evt) + '\n');
   };
 
-  const out = await handleKris({ method: req.method, headers: req.headers, body, env: process.env, onEvent, signal: ctrl.signal });
+  const out = await handleKris({ method: req.method, headers: req.headers, body, env: process.env, onEvent, signal: ctrl.signal, remote: req.socket && req.socket.remoteAddress });
   if (started) {
     let data;
     try { data = JSON.parse(out.body); } catch (_) { data = { status: 'error', text: 'Something went wrong.' }; }

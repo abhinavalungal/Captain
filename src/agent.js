@@ -46,7 +46,7 @@ const { profilePrompt, userFactsFrom } = require('./profile');
 const { METRICS } = require('./config');
 const { MODEL_LABEL } = require('./identity');
 
-const AGENT_BUILD = '2026-09-24.kris-8';
+const AGENT_BUILD = '2026-09-24.kris-9';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -619,6 +619,9 @@ async function run(input, getDb, opts) {
           content: JSON.stringify(result).slice(0, 6000),
         });
       }
+      // The records have been read: give the connection back before the
+      // model writes its answer (seconds), so it can serve another user.
+      if (typeof opts.releaseDb === 'function') opts.releaseDb();
     }
 
     if (replaced) {

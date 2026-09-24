@@ -221,6 +221,18 @@ function boot(opts, storage) {
     assert(msg().innerHTML === streamed, 'streamed DOM differs from the final render:\nS ' + streamed + '\nF ' + msg().innerHTML);
   });
 
+  await ta('rate limited (429): a calm error card with the wait and "Try again", not a failed delivery', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({ status: 'error', reason: 'rate_limited', code: 'RATE_LIMITED', retryAfter: 4, text: 'You’re sending messages faster than I can answer them well. Give me 4 seconds and ask again.' }, 429));
+    await w.type('another question');
+    await w.idle();
+    const card = w.q('.turn.assistant.last .notice');
+    assert(card && /Give me 4 seconds/.test(card.textContent) && card.querySelector('.retry'), card && card.textContent);
+    assert(!w.q('.turn.user.failed'), 'the message was marked as not delivered');
+  });
+
   const VIS = (spec) => '```visual\n' + (typeof spec === 'string' ? spec : JSON.stringify(spec)) + '\n```';
 
   await ta('visuals: every type renders as a component, never as code; a malformed one renders nothing', async () => {

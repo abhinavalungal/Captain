@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const KRIS_BUILD = '2026-09-24.kris-8';
+const KRIS_BUILD = '2026-09-24.kris-9';
 
 // Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
@@ -62,6 +62,7 @@ function recordError(where, err, extra) {
 }
 const router = require('./router');
 const { findRenames } = require('./envcheck');
+const { takeToken } = require('./ratelimit');
 const { LIMITS, METRICS, SOURCES } = require('./config');
 const { readEnv: llmConfig, warmLLM, llmStatus, HISTORY_TURNS, HISTORY_CHARS, MESSAGE_CHARS } = require('./companion_src');
 const { MODEL_LABEL } = require('./identity');
@@ -161,6 +162,12 @@ function idleMs(env) {
   return Number.isFinite(n) && n >= 1000 ? n : 300000;
 }
 
+/** Read connections per server process (KRIS_PG_POOL_MAX, default 10). */
+function poolMax(env) {
+  const n = parseInt(env.KRIS_PG_POOL_MAX || '10', 10);
+  return Number.isFinite(n) ? Math.min(100, Math.max(1, n)) : 10;
+}
+
 function makePool(connectionString, max, queryTimeout, env, label) {
   const pool = new Pool({
     connectionString,
@@ -189,7 +196,7 @@ function makePool(connectionString, max, queryTimeout, env, label) {
 }
 
 function pools(env) {
-  const key = (env.KRIS_READ_URL || '') + '|' + (env.KRIS_WRITE_URL || '');
+  const key = (env.KRIS_READ_URL || '') + '|' + (env.KRIS_WRITE_URL || '') + '|' + poolMax(env);
   if (key !== poolEnvKey) {
     if (readPool) readPool.end().catch(() => {});
     if (writePool) writePool.end().catch(() => {});
@@ -204,7 +211,7 @@ function pools(env) {
       e.code = 'DB_NOT_CONFIGURED';
       throw e;
     }
-    readPool = makePool(env.KRIS_READ_URL, 3, LIMITS.statementTimeoutMs, env, 'reader');
+    readPool = makePool(env.KRIS_READ_URL, poolMax(env), LIMITS.statementTimeoutMs, env, 'reader');
   }
   return { readPool, writePool };
 }
@@ -440,6 +447,19 @@ function readContext(raw) {
 }
 
 /**
+ * Whose message this is, for the rate limit. A signed-in user is their own
+ * key. Prototype sign-in hands every visitor the same claims, so there (and
+ * for any session without a user id) the visitor's address tells them apart:
+ * the first X-Forwarded-For hop behind a proxy such as Render's, else the socket.
+ */
+function rateKey(session, headers, remote, env) {
+  const who = (session.orgId || '') + ':' + (session.userId || '');
+  if (env.KRIS_DEV_SESSION !== '1' && session.userId) return who;
+  const addr = String(headers['x-forwarded-for'] || headers['x-real-ip'] || remote || '').split(',')[0].trim();
+  return who + '|' + addr;
+}
+
+/**
  * Handle one request to the question endpoint.
  * @param {object} req  { method, headers (lowercase keys), body (raw string), env }
  */
@@ -448,7 +468,7 @@ async function handleKris(req) {
   const headers = lowercaseKeys(req.headers || {});
   const origin = headers.origin || '';
   const cors = corsHeaders(origin, env);
-  const reply = (statusCode, obj) => ({ statusCode, headers: cors, body: JSON.stringify(obj) });
+  const reply = (statusCode, obj, extra) => ({ statusCode, headers: extra ? Object.assign({}, cors, extra) : cors, body: JSON.stringify(obj) });
 
   if (req.method === 'OPTIONS') return { statusCode: 204, headers: cors, body: '' };
   // GET doubles as the widget's warm-up ping: it answers at once and, in the
@@ -476,6 +496,15 @@ async function handleKris(req) {
   }
   if (!session) return reply(401, refusal(headers, env, payload.token));
 
+  // One user can't crowd everyone else out, or run up the model bill.
+  const allowed = takeToken(rateKey(session, headers, req.remote, env), env);
+  if (!allowed.ok) {
+    return reply(429, {
+      status: 'error', source: 'router', reason: 'rate_limited', code: 'RATE_LIMITED', retryAfter: allowed.retryAfter,
+      text: 'You’re sending messages faster than I can answer them well. Give me ' + allowed.retryAfter + (allowed.retryAfter === 1 ? ' second' : ' seconds') + ' and ask again.',
+    }, { 'Retry-After': String(allowed.retryAfter) });
+  }
+
   // The database is NOT opened here. The router decides whether this message
   // needs vessel records at all; only then does it call getDb(). A greeting or
   // an app question is answered even when Postgres is down or not configured.
@@ -500,6 +529,12 @@ async function handleKris(req) {
       throw err;
     }
     return client;
+  };
+  const releaseDb = function () {
+    if (!client) return;
+    const c = client;
+    client = null;
+    try { c.release(); } catch (_) { /* already gone */ }
   };
   const wp = writePoolIfConfigured(env);
 
@@ -527,6 +562,7 @@ async function handleKris(req) {
         // background on the pool, never on this request's connection.
         scopeCache: true,
         pool: () => readPoolOrNull(env),
+        releaseDb,
         signal,
         onDelta: streaming ? (evt) => { try { req.onEvent(evt); } catch (_) { /* client gone */ } } : undefined,
       }
@@ -590,7 +626,7 @@ async function handleKris(req) {
       detail: (err instanceof TypeError && diagnosticsOn(env)) ? typeErrorDetail(err) : undefined,
     });
   } finally {
-    if (client) client.release();
+    releaseDb();
   }
 }
 

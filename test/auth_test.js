@@ -68,6 +68,41 @@ const LEGACY = { OLDAPP_READ_URL: 'postgres://x', OLDAPP_DEV_SESSION: '1', OLDAP
     assert.notStrictEqual(r.statusCode, 401, r.body);
   });
 
+  // --- the per-user message limit -------------------------------------------------
+  const tokenFor = (sub) => Buffer.from(JSON.stringify({ sub, org: 'o', departments: ['Emission'] })).toString('base64');
+  await ta('rate limit: past KRIS_RATE_PER_MIN a user gets a 429 with Retry-After and plain words; other users are unaffected', async () => {
+    const env = { KRIS_DEV_SESSION: '1', KRIS_ENABLE_LLM: '0', KRIS_RATE_PER_MIN: '3' };
+    for (let i = 0; i < 3; i++) {
+      const ok = await ask(env, { text: 'what is 2+2', token: tokenFor('busy-user') });
+      assert.strictEqual(ok.statusCode, 200, 'message ' + (i + 1) + ' was refused');
+    }
+    const r = await ask(env, { text: 'what is 2+2', token: tokenFor('busy-user') });
+    assert.strictEqual(r.statusCode, 429);
+    const body = JSON.parse(r.body);
+    assert.strictEqual(body.code, 'RATE_LIMITED');
+    assert.ok(/ask again/.test(body.text) && body.retryAfter >= 1, body.text);
+    assert.strictEqual(r.headers['Retry-After'], String(body.retryAfter));
+    const other = await ask(env, { text: 'what is 2+2', token: tokenFor('someone-else') });
+    assert.strictEqual(other.statusCode, 200, 'another user was limited too');
+  });
+  await ta('rate limit: prototype visitors sharing the demo sign-in are told apart by their address', async () => {
+    const env = { KRIS_DEV_SESSION: '1', KRIS_ENABLE_LLM: '0', KRIS_RATE_PER_MIN: '1' };
+    const same = tokenFor('prototype-user');
+    const a1 = await ask(env, { text: 'what is 3+3', token: same }, { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' });
+    const b1 = await ask(env, { text: 'what is 3+3', token: same }, { 'x-forwarded-for': '198.51.100.20' });
+    const a2 = await ask(env, { text: 'what is 3+3', token: same }, { 'x-forwarded-for': '203.0.113.7' });
+    assert.deepStrictEqual([a1.statusCode, b1.statusCode, a2.statusCode], [200, 200, 429]);
+  });
+  t('rate limit: the bucket refills over the minute, and 0 turns the limit off', () => {
+    const { takeToken } = require('../src/ratelimit');
+    const env = { KRIS_RATE_PER_MIN: '2' };
+    const t0 = 1e12;
+    assert.ok(takeToken('refill', env, t0).ok && takeToken('refill', env, t0).ok);
+    assert.ok(!takeToken('refill', env, t0).ok, 'third in the same instant should wait');
+    assert.ok(takeToken('refill', env, t0 + 31000).ok, 'half a minute gives one back at 2 a minute');
+    for (let i = 0; i < 50; i++) assert.ok(takeToken('off', { KRIS_RATE_PER_MIN: '0' }, t0).ok);
+  });
+
   console.log(`\nAuth: ${passed} passed, ${fails.length} failed`);
   fails.forEach((f) => console.log('  FAIL ' + f));
   process.exit(fails.length ? 1 : 0);

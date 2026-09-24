@@ -176,6 +176,35 @@ const run = (text, script, extra, opts) => agent.run(
     assert.strictEqual(second[second.length - 2].role, 'assistant');
   });
 
+  // --- a database connection is held only while the records are read ------------------
+  const connTracker = (queryImpl) => {
+    const st = { holding: false, acquired: 0, released: 0, heldDuringModel: 0 };
+    st.getDb = async () => { if (!st.holding) { st.holding = true; st.acquired++; } return { query: queryImpl }; };
+    st.releaseDb = () => { if (st.holding) { st.holding = false; st.released++; } };
+    st.model = (script) => { const f = fakeModel(script); return Object.assign(async (u, i) => { if (st.holding) st.heldDuringModel++; return f(u, i); }, { seen: f.seen }); };
+    return st;
+  };
+
+  await ta('agent: the connection goes back to the pool after the lookup, before the model writes the answer', async () => {
+    const st = connTracker(fakeDb([{ bucket: null, value: 41.5, n: 12 }]).query);
+    const fetchImpl = st.model([callTool('get_vessel_data', { question: 'fuel consumption for Aurora Trader last month' }), say('Aurora Trader burned 41.5 MT last month.')]);
+    const out = await agent.run({ text: 'how much fuel did aurora use last month', session, now: NOW, history: [], context: {} }, st.getDb,
+      { orgId: 'o', env: ENV, fetchImpl, disableLog: true, releaseDb: st.releaseDb, fleetNames: async () => [] });   // as the router passes it: names from the cache
+    assert.deepStrictEqual(out.toolsUsed, ['get_vessel_data']);
+    assert.strictEqual(st.acquired, 1);
+    assert.strictEqual(st.heldDuringModel, 0, 'a connection was held while the model was working');
+    assert.strictEqual(st.released, 1);
+  });
+
+  await ta('router: a connection the direct-data check opened is released before the agent calls the model', async () => {
+    const st = connTracker(async () => { throw new Error('relation does not exist'); });
+    const fetchImpl = st.model([say('I could not read that just now.')]);
+    await router.route({ text: 'fuel consumption for Aurora Trader last month', session, now: NOW, history: [], context: {} }, st.getDb,
+      { orgId: 'o', env: ENV, fetchImpl, releaseDb: st.releaseDb, fleetNames: async () => [] });
+    assert.ok(st.acquired >= 1, 'the direct check never opened a connection (test setup)');
+    assert.strictEqual(st.heldDuringModel, 0, 'the model call waited with a connection held');
+  });
+
   const VIS = (spec) => '```visual\n' + JSON.stringify(spec) + '\n```';
 
   await ta('an inline visual comes back in the answer text, in one model turn', async () => {
