@@ -79,8 +79,41 @@ function effortFor(text, env) {
   if (pinned) return pinned;
   const t = String(text || '');
   if (isLightMessage(t)) return 'low';
-  return HEAVY_RE.test(t) || t.length > 400 ? 'high' : 'medium';
+  return DETAIL_RE.test(t) || t.length > 400 ? 'high' : 'medium';
 }
+
+/**
+ * How long an answer should be. Reasoning depth (effortFor) and answer length
+ * are separate: a comparison deserves careful thought and a SHORT answer.
+ * Brief is the default — the direct answer, with a visual carrying the
+ * detail. A long, sectioned answer is written only when the user asks for
+ * depth (or has told K.R.1.S they prefer thorough answers).
+ */
+const DETAIL_RE = /\b(?:in (?:more |full |great |much )?detail|detailed|thorough(?:ly)?|in[- ]depth|deep[- ]?dive|comprehensive(?:ly)?|elaborate|expand on|everything (?:about|on)|full (?:explanation|breakdown|picture|guide|overview)|walk me through|step[- ]by[- ]step|explain (?:fully|properly|thoroughly|everything)|(?:write|draft) (?:a|an|me)|essay|report on|long(?:er)? answer|tell me more|more detail|go deeper)\b/i;
+
+function answerDepth(text, profile) {
+  const t = String(text || '');
+  if (DETAIL_RE.test(t)) return 'detailed';
+  if (profile && profile.style && profile.style.length === 'detailed') return 'detailed';
+  return isLightMessage(t) ? 'short' : 'brief';
+}
+
+const ANSWER_SHAPE = {
+  short: 'ANSWER SHAPE — a short question: answer it directly in one or two sentences. No visual unless they asked to see something; no lists, caveats or restating the question.',
+  brief: 'ANSWER SHAPE — brief (the default): give the answer, not an essay. Lead with the direct answer in one or two plain sentences. When a visual fits, put it right after and let it carry the detail: text between or after visuals is at most one short line, never a paragraph that repeats them. All prose together stays under about 70 words. No headings, no sections, no bullet lists, no background, history or scope rules they did not ask for, no closing nuance or summary. If they want more, they will ask.',
+  detailed: 'ANSWER SHAPE — detailed (they asked for depth): a complete, well-organised answer. Lead with the answer, then short sections (### headings are fine) and visuals where they help. Tight wording, no padding, and never repeat in prose what a visual already shows.',
+};
+
+/**
+ * The figures K.R.1.S's domain turns on, stated once so the model never
+ * improvises them. (Public regulation, not user data: the fabrication guard
+ * only stops figures presented as the user's own.)
+ */
+const DOMAIN_FACTS = 'REFERENCE — the regulations this app is about. These figures are authoritative: use them exactly when relevant and never contradict them.\n'
+  + '- EU ETS for shipping (Directive (EU) 2023/959): from 2024, ships of 5,000 GT and above. Covers 100% of emissions on voyages between EU/EEA ports and at berth there, 50% on voyages into or out of the EU/EEA. The shipping company surrenders allowances (EUAs) by 30 September for the previous year, phased in at 40% of 2024 emissions, 70% of 2025 and 100% from 2026. CO₂ from 2024; methane and N₂O from 2026. Offshore ships of 5,000 GT and above from 2027.\n'
+  + '- FuelEU Maritime (Regulation (EU) 2023/1805): from 2025, ships of 5,000 GT and above. Caps the well-to-wake GHG intensity of the energy used on board against a 2020 reference of 91.16 gCO₂e/MJ: −2% from 2025 (89.34), −6% from 2030 (85.69), −14.5% from 2035 (77.94), −31% from 2040 (62.90), −62% from 2045 (34.64), −80% from 2050 (18.23). Covers 100% of energy on intra-EU voyages and at berth, 50% into or out of the EU. A deficit costs €2,400 per tonne of VLSFO-equivalent energy (41,000 MJ per tonne), 10% more for each consecutive year in deficit; a surplus can be banked or pooled with other ships, and up to 2% of the limit can be borrowed from the next year. From 2030, container and passenger ships must use shore power at berth in major (TEN-T core) EU ports.\n'
+  + '- CII (IMO, MARPOL Annex VI): from 2023, ships of 5,000 GT and above get an annual A–E rating against a required value that tightens each year (5% below 2019 in 2023, 7% in 2024, 9% in 2025, 11% in 2026). A D three years running, or one E, requires a corrective action plan in the SEEMP.\n'
+  + '- EEXI (IMO): a one-off technical efficiency requirement for existing ships of 400 GT and above, in force from 2023.';
 
 /** A model is set up: a key for the default hosted endpoint, or a server of your own. */
 function llmConfigured(env) {
@@ -170,7 +203,9 @@ const VISUAL_GUIDE = 'VISUALS: when a picture makes the answer clearer, include 
   + '- a process or procedure: {"type":"steps","title":"…","steps":[{"title":"…","detail":"…"}]}\n'
   + '- dated milestones or a phase-in: {"type":"timeline","title":"…","events":[{"when":"2025","title":"…","detail":"…"}]}\n'
   + '- several views of one subject: {"type":"dashboard","title":"…","blocks":[ any of the above ]}\n'
-  + 'Strict JSON: double quotes, plain numbers (no units, thousands separators or % signs inside numbers), short labels, 2 to 12 points per chart. Every number must come from the user, from a tool result in this conversation, or be a well-established public figure (a regulation\'s threshold or phase-in, a conversion factor); never an estimate presented as the user\'s own data.';
+  + 'Keep visuals compact: a comparison of two to four options is ONE compare card with 2 to 4 points each, a few words per point, and a one-line verdict; dates or a phase-in are ONE timeline of 2 to 6 events. Strict JSON: double quotes, plain numbers (no units, thousands separators or % signs inside numbers), short labels, 2 to 12 points per chart. Every number must come from the user, from a tool result in this conversation, or be a well-established public figure (a regulation\'s threshold or phase-in, a conversion factor); never an estimate presented as the user\'s own data.';
+
+const FORMATTING = 'Formatting (Markdown): plain prose. **Bold** sparingly, for the one or two key terms. A list only for steps or options the user asked for; a table only to compare several items across several attributes when no visual fits; ### headings only in a detailed answer; fenced code blocks with a language for code. Link only to well-known official sources you are sure exist.';
 
 const SAFE_REDIRECT =
   "I don't want to guess at a number in conversation \u2014 ask me directly (for example \"fuel consumption for <vessel> last month\") and I'll pull it from the records.";
@@ -195,14 +230,17 @@ function systemPrompt(opts) {
     : '';
   const about = profilePrompt(opts.profile, opts.userName);
   const profileBlock = about ? '\n\n' + about : '';
+  const depth = ANSWER_SHAPE[opts.depth] ? opts.depth
+    : opts.profile && opts.profile.style && opts.profile.style.length === 'detailed' ? 'detailed' : opts.light ? 'short' : 'brief';
 
   return 'You are K.R.1.S (say it "Kris"), the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is K.R.1.S; if asked, say so. K.R.1.S is a codename inspired by Lord Krishna, the calm charioteer who guides without taking the wheel. You are a capable general assistant in that spirit: serene, warm, clear-sighted and gently playful, never preachy. Do not quote scripture or make religious claims unless the user raises the subject, and treat it with respect when they do. You run on ' + MODEL_LABEL + ': if asked what model, LLM or AI you are, say you are K.R.1.S running on ' + MODEL_LABEL + ', and never name any other model, vendor or company.\n\n'
     + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), regulation (EU ETS, FuelEU Maritime, CII, EEXI, IMO), arithmetic and unit conversions, comparing numbers the user gives you, writing and code help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. People type fast: read past typos and missing punctuation to what they mean ("whoch" is "which", "bisually" is "visually") and never comment on spelling. Work out what they actually need before answering; if a question is genuinely ambiguous, answer the most likely reading and say which one you took.\n\n'
-    + 'Lead with the answer in your first sentence. Match the depth to the question: one sentence for a quick fact or a comparison of two numbers; for anything substantial, a complete, well-organised answer that covers what matters and stops there. Think multi-step problems through before you answer, check arithmetic and logic, and state results plainly; show working only where it helps the user follow. Be accurate rather than confident: if you are unsure, or something may have changed since your training, say so briefly.\n\n'
+    + 'Lead with the answer in your first sentence. Think multi-step problems through before you answer, check arithmetic and logic, and state results plainly. Be accurate rather than confident: if you are unsure, or something may have changed since your training, say so briefly.\n\n'
+    + ANSWER_SHAPE[depth] + '\n\n'
+    + DOMAIN_FACTS + '\n\n'
     + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data.\n\n'
     + VISUAL_GUIDE + '\n\n'
-    + (opts.light && !(opts.profile && opts.profile.style && opts.profile.style.length === 'detailed') ? 'This is a short question: answer it directly in one or two sentences. Do not pad, do not add caveats, do not restate the question.\n\n' : '')
-    + 'Formatting (Markdown): plain prose for short answers. For longer ones, use structure where it helps reading: **bold** for key terms, bullet or numbered lists for steps and options, a table to compare several items across the same attributes, ### headings only to separate the sections of a long answer, and fenced code blocks with a language for code. Link only to well-known official sources you are sure exist. No filler, and no closing summary of what you just said.' + nowLine + userLine + profileBlock + guideBlock + ctx;
+    + FORMATTING + nowLine + userLine + profileBlock + guideBlock + ctx;
 }
 
 function readEnv(env) {
@@ -373,7 +411,7 @@ async function converse(text, opts) {
 
   const light = opts.light != null ? !!opts.light : isLightMessage(text);
   const streaming = typeof opts.onDelta === 'function';
-  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, light: light, nowLabel: opts.nowLabel, userName: opts.userName || null, profile: opts.profile || null });
+  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, light: light, depth: light ? 'short' : answerDepth(text, opts.profile), nowLabel: opts.nowLabel, userName: opts.userName || null, profile: opts.profile || null });
   const req = buildRequest(cfg, system, messages, effortFor(text, cfg.env), streaming);
   // No tools field in either request shape. That is the structural guarantee.
 
@@ -487,4 +525,4 @@ async function converse(text, opts) {
   return { text: parsed.text, chart: parsed.chart, blocked: false, streamed: true, provider: cfg.provider, model: cfg.model };
 }
 
-module.exports = { VISUAL_GUIDE: VISUAL_GUIDE, converse: converse, warmLLM: warmLLM, llmStatus: llmStatus, llmConfigured: llmConfigured, providerRouting: providerRouting, reasoningDirective: reasoningDirective, effortFor: effortFor, isLightMessage: isLightMessage, HISTORY_TURNS: HISTORY_TURNS, HISTORY_CHARS: HISTORY_CHARS, MESSAGE_CHARS: MESSAGE_CHARS, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
+module.exports = { VISUAL_GUIDE: VISUAL_GUIDE, ANSWER_SHAPE: ANSWER_SHAPE, DOMAIN_FACTS: DOMAIN_FACTS, FORMATTING: FORMATTING, answerDepth: answerDepth, converse: converse, warmLLM: warmLLM, llmStatus: llmStatus, llmConfigured: llmConfigured, providerRouting: providerRouting, reasoningDirective: reasoningDirective, effortFor: effortFor, isLightMessage: isLightMessage, HISTORY_TURNS: HISTORY_TURNS, HISTORY_CHARS: HISTORY_CHARS, MESSAGE_CHARS: MESSAGE_CHARS, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };

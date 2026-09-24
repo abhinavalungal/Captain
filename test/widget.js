@@ -123,6 +123,9 @@ function boot(opts, storage) {
     await wait(20);
     w.window.KRIS.open();
     const before = w.posts().length;
+    // Warm the path once: the first reply in a fresh page pays for compiling it.
+    await w.type('hello');
+    await w.idle();
     const t0 = Date.now();
     await w.type('Hi');
     await w.idle();

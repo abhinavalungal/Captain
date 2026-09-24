@@ -111,6 +111,19 @@ const run = (text, script, extra, opts) => agent.run(
     assert.ok(/```visual|"visual"/.test(agent.systemPrompt({ appName: 'X' })) && /"type":"meter"/.test(agent.systemPrompt({ appName: 'X' })), 'the visual guide is missing');
   });
 
+  await ta('the reported question gets the brief answer shape, the reference figures and medium reasoning', async () => {
+    const fetchImpl = fakeModel([say('ok')]);
+    await agent.run({ text: 'How do the EU ETS and FuelEU Maritime differ?', session, now: NOW, history: [], context: {} }, NO_DB, { orgId: 'o', env: ENV, fetchImpl });
+    const body = fetchImpl.seen[0].body;
+    const sys = body.messages[0].content;
+    assert.ok(/ANSWER SHAPE — brief/.test(sys) && !/ANSWER SHAPE — detailed/.test(sys), 'not asked to be brief');
+    assert.ok(/€2,400 per tonne of VLSFO-equivalent energy/.test(sys), 'the penalty fact is missing');
+    assert.deepStrictEqual(body.reasoning, { effort: 'medium' });
+    const deep = fakeModel([say('ok')]);
+    await agent.run({ text: 'Explain in detail how the EU ETS and FuelEU Maritime differ', session, now: NOW, history: [], context: {} }, NO_DB, { orgId: 'o', env: ENV, fetchImpl: deep });
+    assert.ok(/ANSWER SHAPE — detailed/.test(deep.seen[0].body.messages[0].content), 'depth asked for, not given');
+  });
+
   await ta('every request carries the tools, the key and OpenRouter attribution', async () => {
     const fetchImpl = fakeModel([say('hello')]);
     await agent.run({ text: 'hi', session, now: NOW, history: [], context: {} }, NO_DB,

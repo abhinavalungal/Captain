@@ -122,6 +122,28 @@ exposes `memory`, `settings`, `view`, `conversation`, `open`, `close` and
 `answer` events. Voice, files, tools, other models or workspace knowledge
 can be added on these seams without rebuilding the widget.
 
+### Upgrading to kris-8 (answers, not essays)
+
+- Deploy `src/companion_src.js`, `src/agent.js`, `src/router.js`,
+  `src/httpHandler.js` and `public/kris-widget.js` (build `2026-09-24.kris-8`).
+- **Brief is the default.** "How do the EU ETS and FuelEU Maritime differ?"
+  used to come back as a six-section essay. Answer length is now decided
+  separately from reasoning depth (`answerDepth` in `src/companion_src.js`):
+  - *short* — a quick fact: one or two sentences;
+  - *brief* (default) — the direct answer in one or two sentences, then a
+    visual that carries the detail (one compare card, one timeline), at most
+    one short line around it, under about 70 words of prose, no headings;
+  - *detailed* — only when the user asks for depth ("explain in detail",
+    "walk me through", "deep dive", "tell me more", "write a…") or has set
+    Answer length to Thorough.
+  A comparison is now reasoned at medium effort; high effort is kept for
+  requests for depth.
+- **Reference figures.** Both prompts carry the figures the domain turns on —
+  EU ETS scope and phase-in, FuelEU limits and the €2,400 per tonne
+  VLSFO-equivalent penalty, CII reduction factors and the D/E rule, EEXI — so
+  the model states them exactly instead of improvising (it had written the
+  penalty as "per gram of shortfall per MJ").
+
 ### Upgrading to kris-7 (knowing the user, visual answers)
 
 - Deploy together: `src/identity.js`, `src/guide.js`, `src/profile.js`,

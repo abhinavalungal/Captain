@@ -39,7 +39,7 @@ const identity = require('./identity');
 const agent = require('./agent');
 const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-24.kris-7';
+const ROUTER_BUILD = '2026-09-24.kris-8';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 

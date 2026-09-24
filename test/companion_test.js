@@ -280,12 +280,29 @@ t('reasoning: OpenRouter gets an effort that follows the question; other servers
   const cfgV = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'http://vllm.test:8000' }));
   assert.strictEqual(buildRequest(cfgV, 'SYS', [], 'high').body.reasoning, undefined);
 });
-t('system prompt: answers general questions, allows real structure, and teaches the visual blocks', () => {
+t('system prompt: answers general questions, brief by default, with the reference figures and the visual blocks', () => {
   const p = systemPrompt({ appName: 'Shuddha now', guideSnippets: [] });
   assert.ok(!/no_think/.test(p));
   assert.ok(/Do not steer unrelated questions back to vessels/.test(p));
-  assert.ok(/a table to compare/.test(p) && !/No headings, no tables/.test(p));
+  assert.ok(/ANSWER SHAPE — brief/.test(p) && /not an essay/.test(p) && !/ANSWER SHAPE — detailed/.test(p), 'brief is the default');
+  assert.ok(!/complete, well-organised answer that covers what matters/.test(p), 'the old "write it all" instruction is back');
+  assert.ok(/ANSWER SHAPE — detailed/.test(systemPrompt({ appName: 'X', guideSnippets: [], depth: 'detailed' })), 'detailed on request');
   assert.ok(/language is "visual"/.test(p) && /"type":"stats"/.test(p) && /"type":"timeline"/.test(p), 'the visual guide is missing');
+  assert.ok(/ONE compare card with 2 to 4 points/.test(p), 'visuals are not told to stay compact');
+  for (const fact of ['89.34', '€2,400 per tonne of VLSFO-equivalent energy', '40% of 2024 emissions, 70% of 2025 and 100% from 2026', 'methane and N₂O from 2026']) {
+    assert.ok(p.indexOf(fact) >= 0, 'reference fact missing: ' + fact);
+  }
+});
+t('answer depth: the question decides the length — brief unless depth is asked for', () => {
+  const { answerDepth } = require('../src/companion_src');
+  assert.strictEqual(answerDepth('How do the EU ETS and FuelEU Maritime differ?'), 'brief');
+  assert.strictEqual(answerDepth('compare ETS and FuelEU'), 'brief');
+  assert.strictEqual(answerDepth('what does CII stand for'), 'short');
+  for (const q of ['Explain in detail how FuelEU pooling works', 'walk me through the FuelEU penalty', 'give me a deep dive on CII', 'tell me more', 'write me a summary of EU ETS for my team']) {
+    assert.strictEqual(answerDepth(q), 'detailed', q);
+  }
+  assert.strictEqual(answerDepth('How do the EU ETS and FuelEU differ?', { style: { length: 'detailed' } }), 'detailed', 'a stated preference for thorough answers');
+  assert.strictEqual(effortFor('How do the EU ETS and FuelEU Maritime differ?', {}), 'medium', 'a comparison is thought through, not agonised over');
 });
 TOP.push(ta('guard: a figure for their fleet inside a visual block is blocked, non-streamed too', async () => {
   const vis = '```visual\n' + JSON.stringify({ type: 'bar', title: 'Your vessels, fuel last month', unit: 'MT', labels: ['Jan', 'Feb'], values: [412, 398] }) + '\n```';

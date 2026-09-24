@@ -39,14 +39,14 @@ const engine = require('./engine');
 const rbac = require('./rbac');
 const { searchGuide, GUIDE } = require('./guide');
 const { buildBriefing } = require('./alerts');
-const { containsStatedFigure, providerRouting, SAFE_REDIRECT, VISUAL_GUIDE, llmConfigured, effortFor, DEFAULTS: LLM, HISTORY_TURNS, HISTORY_CHARS, MESSAGE_CHARS } = require('./companion_src');
+const { containsStatedFigure, providerRouting, SAFE_REDIRECT, VISUAL_GUIDE, ANSWER_SHAPE, DOMAIN_FACTS, FORMATTING, answerDepth, llmConfigured, effortFor, DEFAULTS: LLM, HISTORY_TURNS, HISTORY_CHARS, MESSAGE_CHARS } = require('./companion_src');
 const { readSSE, accumulateOpenAI, SentenceGate, anySignal, hasReasoning, thinkingBeat, guardable } = require('./stream');
 const { formatNow } = require('./instant_src');
 const { profilePrompt, userFactsFrom } = require('./profile');
 const { METRICS } = require('./config');
 const { MODEL_LABEL } = require('./identity');
 
-const AGENT_BUILD = '2026-09-24.kris-7';
+const AGENT_BUILD = '2026-09-24.kris-8';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -197,19 +197,14 @@ function systemPrompt(opts) {
     + 'reasonably infer from the conversation.'
   );
   lines.push(
-    'Lead with the answer. Match the depth to the question: one or two sentences for a quick question; for '
-    + 'anything substantial, a complete, well-organised answer that covers what matters and stops there. Think '
-    + 'multi-step problems through before answering and check arithmetic and logic. Be accurate rather than '
-    + 'confident: if you are unsure, or something may have changed since your training, say so briefly.'
+    'Lead with the answer. Think multi-step problems through before answering and check arithmetic and logic. '
+    + 'Be accurate rather than confident: if you are unsure, or something may have changed since your training, '
+    + 'say so briefly. Never mention tools, modules, function names or internal machinery — the user sees '
+    + 'K.R.1.S, not a system.'
   );
-  lines.push(
-    'Formatting (Markdown): plain prose for short answers. For longer ones, use structure where it helps '
-    + 'reading: **bold** for key terms, bullet or numbered lists for steps and options, a table to compare '
-    + 'several items across the same attributes, ### headings only to separate the sections of a long answer, '
-    + 'fenced code blocks with a language for code. Link only to well-known official sources you are sure '
-    + 'exist. Do not pad, do not restate the question, do not add disclaimers nobody asked for. Never mention '
-    + 'tools, modules, function names or internal machinery — the user sees K.R.1.S, not a system.'
-  );
+  lines.push(ANSWER_SHAPE[ANSWER_SHAPE[opts.depth] ? opts.depth : 'brief']);
+  lines.push(FORMATTING);
+  lines.push(DOMAIN_FACTS);
   if (opts.nowLabel) {
     lines.push('Current date and time: ' + opts.nowLabel
       + '. Use it for anything involving today, dates or elapsed time; never claim not to know the date.');
@@ -480,6 +475,7 @@ async function run(input, getDb, opts) {
     userName: input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null,
     vesselName: input.context && input.context.vesselName ? String(input.context.vesselName).slice(0, 80) : null,
     profile: input.context && input.context.profile ? input.context.profile : null,
+    depth: answerDepth(input.text, input.context && input.context.profile),
   });
 
   const messages = [{ role: 'system', content: system }];
