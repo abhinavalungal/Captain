@@ -66,7 +66,7 @@ const CAPABILITY_RE = new RegExp(
   "\\b(?:wh?[ao]t|which)\\s+(?:(?:things|stuff|else)\\s+)?(?:can|could|do|does)?\\s*(?:you|u)\\s*(?:can|could)?\\s*(?:do|help(?:\\s+(?:me\\s+)?with)?)\\b"
   + "|\\bhow (?:can|could|do) (?:you|u) help\\b"
   + "|\\bwhat (?:are you|r u) (?:able to do|good at|for)\\b"
-  + "|\\bwhat do (?:you|u) (?:know|offer)\\b", 'i');
+  + "|\\bwhat do (?:you|u) (?:know|offer)\\b(?!\\s+(?:about|of|on|regarding)\\b)", 'i');
 
 /** Text answered for capability questions; single source is the guide entry. */
 function capabilityAnswer() {
@@ -167,52 +167,97 @@ function greetByName(name, ctx = {}) {
   };
 }
 
-// --- questions about the USER: "where do I work?", "tell me about me" ---------
+// --- questions about the USER: "what do you know about me?", "where do I work?" --
 //
 // Answered from what the widget sends in context.profile (what the user has
 // allowed K.R.1.S to remember, plus what they said in this chat) — never
-// from the app guide, never from a model. Typing is forgiving: "i wask were
-// do i work", "whats my comp name" are the same questions.
+// from the app guide, never from a model, never guessed.
+//
+// Recognised by the SHAPE of the question, not a list of sentences: a recall
+// verb aimed at "me" ("what have you got on me", "anything you remember of
+// me"), "who am I", or "my <name|role|company|…>" asked as a question.
+// Typing is forgiving ("wat u kno abt me", "whats my comp name").
+//
+// The widget (public/kris-widget.js) carries the same classifier, line for
+// line; test/about_me_test.js runs one corpus through both.
 
-/** Lower-case, common typos folded, padded with spaces for whole-word tests. */
+/** Lower-case, common typos and fillers folded, padded with spaces for whole-word tests. */
 function normaliseQuestion(text) {
   return ' ' + String(text || '').toLowerCase()
-    .replace(/[‘’`]/g, "'")
+    .replace(/[‘’`´]/g, "'")
     .replace(/[^a-z0-9'\s]/g, ' ')
     .replace(/\b(?:were|wher|whre|wehre)\b/g, 'where')
-    .replace(/\b(?:wat|wht|whta|waht)\b/g, 'what')
+    .replace(/\b(?:wat|wht|whta|waht|wot|wut)\b/g, 'what')
     .replace(/\bwhat'?s\b/g, 'what is')
     .replace(/\bwho'?s\b/g, 'who is')
     .replace(/\b(?:comp|compny|companey|compnay|cmpany|campany|co)\b/g, 'company')
     .replace(/\b(?:ur|yr)\b/g, 'your')
-    .replace(/\bu\b/g, 'you')
+    .replace(/\b(?:u|ya|yu|yuo)\b/g, 'you')
     .replace(/\b(?:i'?m|im)\b/g, 'i am')
     .replace(/\b(?:wrk|wok|werk)\b/g, 'work')
-    .replace(/\b(?:dept)\b/g, 'department')
-    .replace(/\s+/g, ' ') + ' ';
+    .replace(/\bdept\b/g, 'department')
+    .replace(/\b(?:abt|abut|bout|abot)\b/g, 'about')
+    .replace(/\b(?:kno|knw|knwo|nkow)\b/g, 'know')
+    .replace(/\b(?:rember|remeber|remembr|rmember|remmember|rememeber)\b/g, 'remember')
+    .replace(/\b(?:info|infos|informations)\b/g, 'information')
+    .replace(/\bdeets\b/g, 'details')
+    .replace(/\b(?:myslef|myslf|mysef)\b/g, 'myself')
+    .replace(/\bnmae\b/g, 'name')
+    .replace(/\b(?:please|pls|plz|kris|k r 1 s|k r i s|hey|hi|hello|ok|okay|so|btw|actually|exactly|really|now|again|then|anyway)\b/g, ' ')
+    .replace(/\s+/g, ' ').trim() + ' ';
 }
 
+// A statement about themselves is information, not a question about it —
+// unless it is phrased as a question ("who do I work for?", "what do you call me").
+const ABOUT_QUESTION_START_RE = /^ (?:what|who|where|which|how|do|did|does|can|could|would|will|is|are|tell|remind|show|describe|give|list|say|any|anything|my) /;
+const ABOUT_STATEMENT_RE = / (?:my name is|i am called|call me|i work (?:as|at|for|in|on|with)|i am (?:an? |the |based |from |in |at )|i live |i would like you to (?:know|remember)|i want you to (?:know|remember)) /;
+// "my <field>" asked as a question, and nothing after it but the field's name.
+const ABOUT_Q = '(?:what is|what are|what was|what were|which is|tell me|remind me(?: of)?|do you (?:know|remember|have)|did you (?:get|catch|save)|you know|remember|recall|what|which|say|confirm)';
+function aboutFieldRe(words) {
+  return new RegExp(' ' + ABOUT_Q + ' (?:\\w+ ){0,2}my (?:' + words + ')(?: name| called)? $|^ my (?:' + words + ')(?: name)? $');
+}
 const ABOUT_TOPICS = [
-  ['work', / where (?:do|did) i work | who do i work for | (?:what|which) (?:is|was) (?:my|the) company(?: name)? | (?:what|which) company (?:do|am|did) i | my company(?: name)? $| what is my (?:employer|organi[sz]ation|firm|office) /],
-  ['role', / what (?:is|was) my (?:role|job|job title|title|position|designation|work) | what do i do(?: for (?:work|a living))? $/],
-  ['department', / (?:which|what) (?:department|team|division) (?:am i|do i)| what is my (?:department|team|division) /],
-  ['location', / where am i (?:based|located|working from) | where do i live | what is my (?:location|city|base) /],
-  ['timezone', / what is my time ?zone | which time ?zone am i /],
-  ['interests', / what (?:am i interested in|are my interests|do i focus on) /],
-  ['all', / (?:tell|say|talk|share)(?: me)? (?:something )?about me | who am i $| what (?:do|did) you know about me | (?:said|asked|meant|mean|talking) (?:about )?me $| describe me | about me $| my profile $/],
+  ['name', [/ what (?:do|should|will|would) you call me | (?:know|remember) (?:what )?i am called /, aboutFieldRe('(?:full |first |last |preferred )?name|nickname')]],
+  ['role', [/ what (?:do|did) i do(?: for (?:work|a living))? $| what (?:do|did) i work as /, aboutFieldRe('role|job|job title|title|position|designation|profession|occupation')]],
+  ['work', [/ where (?:do|did) i work | who do i work for | (?:what|which) company (?:do|am|did) i /, aboutFieldRe('company|employer|organi[sz]ation|firm|workplace|office')]],
+  ['department', [/ (?:which|what) (?:department|team|division|unit) (?:am i|do i) /, aboutFieldRe('department|team|division|unit|desk')]],
+  ['location', [/ where am i (?:based|located|working from|from) | where do i (?:live|work from|stay) /, aboutFieldRe('location|city|country|base|hometown|home town')]],
+  ['timezone', [/ (?:which|what) time ?zone (?:am i|do i) /, aboutFieldRe('time ?zone')]],
+  ['interests', [/ what (?:am i interested in|are my interests|do i focus on|do i care about) /, aboutFieldRe('interests?|focus|speciali[sz]ation|speciality|specialty')]],
+];
+// Everything K.R.1.S knows about the user.
+const ABOUT_ALL = [
+  / who am i /,
+  / (?:do|did|does) you (?:still )?(?:know|remember|recogni[sz]e) (?:who i am|me) /,
+  / (?:know|remember|recall|have|got|hold|keep|kept|store|stored|save|saved|learn|learned|learnt|collect|collected|gather|gathered|noted) (?:\w+ ){0,5}(?:about|on|of|regarding) (?:me|myself) /,
+  / (?:information|details|data|facts|profile|memory|memories|notes?) (?:\w+ ){0,4}(?:about|on|of|regarding) (?:me|myself) /,
+  / (?:tell|talk|say|share|show|list|describe|summari[sz]e|give|remind) (?:me )?(?:\w+ ){0,3}(?:about|of) (?:me|myself) /,
+  / describe me /,
+  /^ (?:about|on) me $/,
+  / (?:said|asked|asking|meant|mean|talking) (?:about )?(?:me|myself) $/,
+  / (?:my|your) (?:profile|saved details|personal details|personal information)(?: on me)? $/,
+  / what is (?:in )?my (?:information|details|profile) /,
+  / who do you think i am /,
 ];
 
-/** Which question about the user this is, or null. */
+/** Which question about the user this is ('all', 'name', 'role', …), or null. */
 function aboutTopic(text) {
   const raw = String(text || '');
-  if (raw.length > 160 || /\n/.test(raw)) return null;
-  // "forget my company name" is a request about memory, not a question.
-  if (/^\s*(?:(?:hey |ok )?kris[,:]?\s+)?(?:please\s+)?(?:forget|remember|don'?t forget|stop remembering|erase|keep in mind)\b/i.test(raw)) return null;
+  if (!raw.trim() || raw.length > 200 || /\n/.test(raw)) return null;
+  // "Forget my company", "remember that I …" are memory commands, not questions.
+  if (/^\s*(?:(?:hey |ok |okay )?kris[,:]?\s+)?(?:please\s+)?(?:forget|remember|don'?t forget|stop remembering|erase|keep in mind|save|store|note)\b/i.test(raw) && !/\?\s*$/.test(raw)) return null;
   const n = normaliseQuestion(raw);
-  if (/ who am i (?:talking|speaking|chatting)/.test(n)) return null;
-  for (let i = 0; i < ABOUT_TOPICS.length; i++) if (ABOUT_TOPICS[i][1].test(n)) return ABOUT_TOPICS[i][0];
-  return null;
+  if (/ who am i (?:talking|speaking|chatting|with|to) /.test(n)) return null;
+  if (!ABOUT_QUESTION_START_RE.test(n) && !/\?\s*$/.test(raw) && ABOUT_STATEMENT_RE.test(n)) return null;
+  for (let i = 0; i < ABOUT_TOPICS.length; i++) {
+    if (ABOUT_TOPICS[i][1].some(function (re) { return re.test(n); })) return ABOUT_TOPICS[i][0];
+  }
+  return ABOUT_ALL.some(function (re) { return re.test(n); }) ? 'all' : null;
 }
+
+const UNKNOWN_USER = 'I don’t have enough information about you yet. Tell me your name and a few basics — your role, where you work, where you’re based — and I’ll use them in this chat and offer to remember them for next time.';
+
+function joinAnd(list) { return list.length <= 1 ? list.join('') : list.slice(0, -1).join(', ') + ' or ' + list[list.length - 1]; }
 
 function anArticle(s) { return /^[aeiou]/i.test(s) && !/^(?:uni|use|eu)/i.test(s) ? 'an' : 'a'; }
 function lowerRole(s) { return /^[A-Z]{2,}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1); }
@@ -227,9 +272,14 @@ function answerAboutUser(text, ctx = {}) {
   const p = Object.assign({}, ctx.profile || {});
   if (!p.name && ctx.userName) p.preferredName = p.preferredName || ctx.userName;
   const role = p.role ? anArticle(p.role) + ' ' + lowerRole(p.role) : null;
-  const tell = (what, example) => `You haven't told me ${what} yet. Tell me — for example “${example}” — and I'll keep it in mind.`;
+  const tell = (what, example) => `You haven't told me ${what} yet. Tell me — for example “${example}” — and I'll use it in this chat and offer to remember it.`;
   const out = (t) => ({ text: t, kind: 'about_user', topic: topic, actions: [{ label: 'Open profile', run: 'view:profile', icon: 'user' }] });
 
+  if (topic === 'name') {
+    const who = p.name || p.preferredName;
+    if (who) return out(`You're ${who}${p.preferredName && p.name && p.preferredName !== p.name ? ' — I call you ' + p.preferredName : ''}.`);
+    return Object.assign(out("You haven't told me your name yet. What should I call you?"), { pending: { kind: 'name' } });
+  }
   if (topic === 'work') {
     if (p.company) return out(`You work at ${p.company}${p.department ? ', in ' + p.department : ''}${role ? ', as ' + role : ''}.`);
     if (role || p.department) return out(`You haven't told me which company you work for — I do know you're ${role || 'in ' + p.department}.`);
@@ -266,13 +316,13 @@ function answerAboutUser(text, ctx = {}) {
   if (p.timezone) lines.push('- **Time zone:** ' + p.timezone);
   if (p.interests && p.interests.length) lines.push('- **Interests:** ' + p.interests.join(', '));
   if (p.notes && p.notes.length) p.notes.forEach((n) => lines.push('- ' + n));
-  // Nothing known: fall through to the name question ("who am i" asks for a
-  // name and waits for it), or say so plainly.
+  // Nothing known: say so plainly, ask, and wait for the name.
   if (!lines.length) {
-    if (MY_NAME_RE.test(scrub(text))) return null;
-    return Object.assign(out("I don't know anything about you yet. What's your name? You can tell me your role or where you work too."), { pending: { kind: 'name' } });
+    return Object.assign(out(UNKNOWN_USER), { pending: { kind: 'name' } });
   }
-  return out('Here’s what I know about you:\n\n' + lines.join('\n'));
+  const missing = [!name && 'your name', !p.role && 'your role', !p.company && 'where you work'].filter(Boolean);
+  return out('Here’s what I know about you:\n\n' + lines.join('\n')
+    + (missing.length ? '\n\nI don’t know ' + joinAnd(missing) + ' yet — tell me if you’d like me to.' : ''));
 }
 
 /**
@@ -327,4 +377,4 @@ function answerIdentity(text, ctx = {}) {
   return null;
 }
 
-module.exports = { answerIdentity, answerAboutUser, aboutTopic, normaliseQuestion, resolveNameReply, extractName, titleCase, KRIS_NAME, MODEL_LABEL, NAME_MEANING_RE, CAPABILITY_RE, capabilityAnswer };
+module.exports = { answerIdentity, answerAboutUser, aboutTopic, normaliseQuestion, UNKNOWN_USER, resolveNameReply, extractName, titleCase, KRIS_NAME, MODEL_LABEL, NAME_MEANING_RE, CAPABILITY_RE, capabilityAnswer };

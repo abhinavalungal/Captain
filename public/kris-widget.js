@@ -60,7 +60,7 @@
 
   if (global.KRIS && global.KRIS.__loaded) return;
 
-  var VERSION = '2026-09-24.kris-6';
+  var VERSION = '2026-09-24.kris-7';
 
   // Where was this script loaded from? The API lives on the same origin.
   var SCRIPT_ORIGIN = '';
@@ -1213,6 +1213,189 @@
   ].join('');
 
   // ==========================================================================
+  //  Visual styles: one design language for every chart, card and flow.
+  //  Thin marks, hairline grids, text in ink (never in a series colour), 2px
+  //  surface gaps between touching fills, status only with an icon and a word.
+  // ==========================================================================
+  CSS += [
+    '.root{--vz-1:#3B4CC0;--vz-2:#10948C;--vz-3:#E07A1F;--vz-4:#D6457C;--vz-5:#7A5BD0;--vz-6:#AD840A;--vz-mute:#CFC8B8;--vz-grid:#EFEAE0;' +
+      '--vz-good:#0CA30C;--vz-warn:#FAB219;--vz-bad:#D03B3B;--vz-good-t:rgba(12,163,12,.16);--vz-warn-t:rgba(250,178,25,.24);--vz-bad-t:rgba(208,59,59,.16);--vz-neutral-t:var(--surface-3)}',
+    '.root[data-theme="dark"]{--vz-1:#7282F2;--vz-2:#1D9E93;--vz-3:#D8772A;--vz-4:#D9558A;--vz-5:#8E73E6;--vz-6:#B0851A;--vz-mute:#3A4078;--vz-grid:#232862;' +
+      '--vz-good-t:rgba(12,163,12,.22);--vz-warn-t:rgba(250,178,25,.2);--vz-bad-t:rgba(208,59,59,.26)}',
+
+    // the card every visual sits on
+    '.vz{margin:14px 0 0;padding:14px 16px 15px;border:1px solid var(--line);border-radius:var(--r-card);background:var(--surface);box-shadow:var(--shadow-sm);min-width:0}',
+    '.msg .vz + p,.msg .vz + ul,.msg .vz + ol,.msg .vz + h4,.msg .vz + .tablewrap,.msg .vz + .vz{margin-top:14px}',
+    '.msg > .vz:first-child{margin-top:2px}',
+    // the chat's list styles are for prose, not for a visual's rows
+    '.vz ol,.vz ul{padding:0;list-style:none}',
+    '.vz li{margin:0;padding-left:0}',
+    '.vz ol.vz-flow,.vz ol.vz-tl{margin:0}',
+    '.vz ul.vz-legend{margin:13px 0 0}',
+    '.vz-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 12px}',
+    '.vz-t{font:650 13.5px/1.35 var(--display);letter-spacing:-.006em;color:var(--ink);min-width:0}',
+    '.vz-u{font:500 11px/1 var(--mono);letter-spacing:.02em;color:var(--ink-3);white-space:nowrap}',
+    '.s0{--c:var(--vz-1)}.s1{--c:var(--vz-2)}.s2{--c:var(--vz-3)}.s3{--c:var(--vz-4)}.s4{--c:var(--vz-5)}.s5{--c:var(--vz-6)}.so{--c:var(--vz-mute)}',
+
+    // status: a tint, an icon and a word — never colour alone
+    '.vz-tone{display:inline-flex;align-items:center;gap:4px;padding:3px 8px 3px 5px;border-radius:999px;font:600 11px/1.2 var(--font);color:var(--ink);white-space:nowrap}',
+    '.vz-tone .ic{display:grid;place-items:center}.vz-tone svg{width:12px;height:12px;stroke-width:2.2}',
+    '.vz-tone.t-good{background:var(--vz-good-t)}.vz-tone.t-good .ic{color:var(--vz-good)}',
+    '.vz-tone.t-warn{background:var(--vz-warn-t)}.vz-tone.t-warn .ic{color:#B87A00}',
+    '.root[data-theme="dark"] .vz-tone.t-warn .ic{color:var(--vz-warn)}',
+    '.vz-tone.t-bad{background:var(--vz-bad-t)}.vz-tone.t-bad .ic{color:var(--vz-bad)}',
+    '.vz-tone.t-neutral{background:var(--vz-neutral-t)}.vz-tone.t-neutral .ic{color:var(--ink-3)}',
+
+    // stats: tiles on one card, split by hairlines
+    '.vz.vz-stats{padding:0;overflow:hidden}',
+    '.vz.vz-stats .vz-h{padding:13px 16px 0;margin-bottom:11px}',
+    '.vz-stats-g{display:flex;flex-wrap:wrap;gap:1px;background:var(--line)}',
+    '.vz.vz-stats .vz-h + .vz-stats-g{border-top:1px solid var(--line)}',
+    '.vz-stat{flex:1 1 124px;background:var(--surface);padding:13px 16px 14px;min-width:0}',
+    '.vz-sl{font-size:12px;line-height:1.35;color:var(--ink-3);margin:0 0 6px}',
+    '.vz-sv{font:650 25px/1.1 var(--display);letter-spacing:-.022em;color:var(--ink);overflow-wrap:anywhere}',
+    '.vz-su{font:500 12.5px/1 var(--font);letter-spacing:0;color:var(--ink-3);margin-left:5px}',
+    '.vz-sn{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;font-size:12px;line-height:1.4;color:var(--ink-2)}',
+    '.vz-d{font:600 12px/1 var(--font);font-variant-numeric:tabular-nums;color:var(--ink)}',
+
+    // bars: one hue, label | bar | value; highlight = emphasis, the rest recede
+    '.vz-bars{display:grid;gap:9px}',
+    '.vz-row{display:grid;grid-template-columns:minmax(56px,32%) minmax(0,1fr) auto;align-items:center;gap:10px;font-size:12.5px;line-height:1.3}',
+    '.vz-bl{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.vz-track{position:relative;height:12px}',
+    '.vz-bars.pos .vz-track::before{content:"";position:absolute;left:0;top:-3px;bottom:-3px;width:1px;background:var(--line-2)}',
+    '.vz-track i{position:absolute;top:0;bottom:0;border-radius:0 4px 4px 0;background:var(--vz-1);transform-origin:left center;transition:filter .15s}',
+    '.vz-track i.neg{border-radius:4px 0 0 4px;transform-origin:right center}',
+    '.vz-zero{position:absolute;top:-3px;bottom:-3px;width:1px;background:var(--line-3)}',
+    '.vz-row.lo .vz-track i{background:var(--vz-mute)}',
+    '.vz-row.hi .vz-bl,.vz-row.hi .vz-bv{color:var(--ink);font-weight:650}',
+    '.vz-row:hover .vz-track i{filter:brightness(1.1) saturate(1.05)}',
+    '.vz-bv{font:500 12px/1 var(--font);font-variant-numeric:tabular-nums;color:var(--ink);text-align:right;white-space:nowrap}',
+
+    // line: SVG for the marks (non-scaling strokes), HTML for every word and dot
+    '.vz-plot{position:relative;height:148px;margin-top:16px;outline:none;touch-action:pan-y;cursor:crosshair}',
+    '.vz-plot:focus-visible{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--peacock);border-radius:4px}',
+    '.vz-gl{position:absolute;left:var(--gut,34px);right:0;height:0;border-top:1px solid var(--vz-grid)}',
+    '.vz-gl span{position:absolute;right:calc(100% + 7px);top:-6px;font:400 10.5px/1 var(--font);font-variant-numeric:tabular-nums;color:var(--ink-3);white-space:nowrap}',
+    '.vz-area{position:absolute;top:0;bottom:0;left:calc(var(--gut,34px) + 6px);right:10px}',
+    '.vz-area svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}',
+    '.vz-area path.ln{fill:none;stroke:var(--c);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}',
+    '.vz-area path.ar{fill:var(--c);stroke:none;opacity:.1}',
+    '.vz-dot{position:absolute;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:var(--c);box-shadow:0 0 0 2px var(--surface);pointer-events:none}',
+    '.vz-hd{display:none;width:11px;height:11px;margin:-5.5px 0 0 -5.5px}',
+    '.vz-endv{position:absolute;right:4px;transform:translateY(-170%);font:650 11.5px/1 var(--font);font-variant-numeric:tabular-nums;color:var(--ink);background:var(--surface);padding:2px 4px;border-radius:5px;white-space:nowrap;pointer-events:none}',
+    '.vz-x{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:var(--line-3);display:none;pointer-events:none}',
+    '.vz-tip{position:absolute;top:2px;display:none;margin-left:10px;min-width:92px;max-width:70%;padding:8px 10px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);box-shadow:var(--shadow-lift);font-size:12px;line-height:1.35;pointer-events:none;z-index:2}',
+    '.vz-tip.left{transform:translateX(-100%);margin-left:-10px}',
+    '.vz-tip .k{font:500 11px/1.3 var(--font);color:var(--ink-3);margin-bottom:3px}',
+    '.vz-tip .r{display:flex;align-items:center;gap:6px;white-space:nowrap}',
+    '.vz-tip .r i{width:12px;height:2px;border-radius:2px;background:var(--c);flex:none}',
+    '.vz-tip b{font-weight:650;color:var(--ink);font-variant-numeric:tabular-nums}',
+    '.vz-tip .r span{color:var(--ink-3)}',
+    '.vz-plot.hover .vz-x,.vz-plot.hover .vz-tip,.vz-plot.hover .vz-hd{display:block}',
+    '.vz-plot.hover .vz-endv{opacity:0}',
+    '.vz-xa{position:relative;height:15px;margin:8px 10px 0 calc(var(--gut,34px) + 6px);font:400 11px/1.3 var(--font);color:var(--ink-3)}',
+    '.vz-xa span{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap}',
+    '.vz-xa span.first{transform:none}.vz-xa span.last{transform:translateX(-100%)}',
+    '.vz-lg{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12px;color:var(--ink-2)}',
+    '.vz-lg span{display:inline-flex;align-items:center;gap:7px}',
+    '.vz-lg i{width:14px;height:2px;border-radius:2px;background:var(--c)}',
+    '.card .chart-title + .vz-linec .vz-plot,.card .chart-title + .vz-bars{margin-top:10px}',
+
+    // breakdown: one stacked bar, 2px surface gaps, and a legend that carries the numbers
+    '.vz-stack{display:flex;gap:2px;height:14px;border-radius:5px;overflow:hidden}',
+    '.vz-stack span{min-width:3px;height:100%;background:var(--c);transform-origin:left center}',
+    '.vz-legend{list-style:none;margin:13px 0 0;padding:0;display:grid;gap:7px}',
+    '.vz-legend li{display:grid;grid-template-columns:10px minmax(0,1fr) auto 3.4em;align-items:center;gap:9px;font-size:12.5px;line-height:1.3}',
+    '.vz-legend.pct li{grid-template-columns:10px minmax(0,1fr) 3.4em}',
+    '.vz-legend i{width:10px;height:10px;border-radius:3px;background:var(--c)}',
+    '.vz-legend .l{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.vz-legend .v{font-weight:550;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}',
+    '.vz-legend .p{font:500 11.5px/1 var(--mono);color:var(--ink-3);text-align:right}',
+
+    // meter: a value against a limit or a rating scale
+    '.vz-mh{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 9px}',
+    '.vz-mv{font:650 26px/1.05 var(--display);letter-spacing:-.022em;color:var(--ink)}',
+    '.vz-mu{font-size:13px;color:var(--ink-3)}',
+    '.vz-mh .vz-tone{align-self:center}',
+    '.vz-mtrack{position:relative;height:10px;margin:30px 0 0;border-radius:999px;background:var(--surface-3)}',
+    '.vz-mtrack.banded{background:transparent}',
+    '.vz-mseg{position:absolute;top:0;bottom:0;opacity:.3;transform-origin:left center}',
+    '.vz-mseg.first{border-radius:999px 0 0 999px}.vz-mseg.last{border-radius:0 999px 999px 0}.vz-mseg.first.last{border-radius:999px}',
+    '.vz-mseg.on{opacity:1}',
+    '.vz-mseg.t-good{background:var(--vz-good)}.vz-mseg.t-warn{background:var(--vz-warn)}.vz-mseg.t-bad{background:var(--vz-bad)}.vz-mseg.t-neutral{background:var(--ink-4)}',
+    '.vz-mfill{position:absolute;left:0;top:0;bottom:0;border-radius:999px;background:var(--vz-1);transform-origin:left center}',
+    '.vz-mfill.t-good{background:var(--vz-good)}.vz-mfill.t-bad{background:var(--vz-bad)}.vz-mfill.t-warn{background:var(--vz-warn)}',
+    '.vz-mk{position:absolute;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:var(--ink);box-shadow:0 0 0 3px var(--surface),0 3px 8px -2px rgba(0,0,0,.35);z-index:1}',
+    '.vz-tg{position:absolute;top:-7px;bottom:-7px;width:2px;margin-left:-1px;border-radius:2px;background:var(--ink-2)}',
+    '.vz-tg span{position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);font:500 10.5px/1 var(--font);color:var(--ink-2);white-space:nowrap}',
+    '.vz-ms{position:relative;height:14px;margin-top:9px;font:600 11px/1 var(--font);color:var(--ink-3)}',
+    '.vz-ms span{position:absolute;transform:translateX(-50%);white-space:nowrap}',
+    '.vz-ms .lo{left:0;transform:none}.vz-ms .hi{right:0;left:auto;transform:none}',
+
+    // compare: options side by side, the recommended one outlined
+    '.vz-cmp{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:10px}',
+    '.vz-card{position:relative;min-width:0;padding:13px 14px 14px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}',
+    '.vz-card.hi{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}',
+    '.vz-best{position:absolute;top:-9px;right:10px;padding:3px 8px;border-radius:999px;background:var(--accent);color:var(--on-accent);font:650 10px/1.2 var(--font);letter-spacing:.02em}',
+    '.vz-ctag{margin:0 0 6px;font:600 10px/1.2 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--gold)}',
+    '.vz-cn{font:650 14px/1.3 var(--display);letter-spacing:-.008em;color:var(--ink)}',
+    '.vz-cv{margin-top:6px;font:650 20px/1.1 var(--display);letter-spacing:-.02em;color:var(--ink)}',
+    '.vz-card ul{list-style:none;margin:9px 0 0;padding:0;display:grid;gap:6px}',
+    '.vz-card li{position:relative;padding-left:15px;font-size:12.5px;line-height:1.45;color:var(--ink-2)}',
+    '.vz-card li::before{content:"";position:absolute;left:1px;top:.5em;width:5px;height:5px;border-radius:1.5px;background:var(--vz-2);transform:rotate(45deg)}',
+    '.vz-cver{margin-top:11px;padding-top:9px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.45;color:var(--ink);font-weight:550}',
+
+    // steps: a numbered flow joined by a rail
+    '.vz-flow{list-style:none;margin:0;padding:0}',
+    '.vz-flow li{position:relative;display:grid;grid-template-columns:28px minmax(0,1fr);gap:12px;padding-bottom:14px}',
+    '.vz-flow li:last-child{padding-bottom:0}',
+    '.vz-flow li::before{content:"";position:absolute;left:13.5px;top:31px;bottom:3px;width:1px;background:var(--line-2)}',
+    '.vz-flow li:last-child::before{display:none}',
+    '.vz-n{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font:650 12.5px/1 var(--font);color:var(--accent);background:var(--gold-soft);box-shadow:inset 0 0 0 1.5px var(--gold-2)}',
+    '.vz-flow b,.vz-tl b{display:block;font:600 13.5px/1.4 var(--display);color:var(--ink)}',
+    '.vz-flow b{padding-top:4px}',
+    '.vz-flow p,.vz-tl p{margin:2px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-2)}',
+
+    // timeline: dated milestones on a rail
+    '.vz-tl{list-style:none;margin:0;padding:0}',
+    '.vz-tl li{position:relative;padding:0 0 15px 24px}',
+    '.vz-tl li:last-child{padding-bottom:0}',
+    '.vz-tl li::before{content:"";position:absolute;left:5px;top:16px;bottom:-1px;width:2px;border-radius:2px;background:var(--line)}',
+    '.vz-tl li:last-child::before{display:none}',
+    '.vz-tl li::after{content:"";position:absolute;left:0;top:3px;width:12px;height:12px;border-radius:50%;background:var(--surface);box-shadow:inset 0 0 0 2.5px var(--vz-2)}',
+    '.vz-when{display:inline-block;margin:0 0 5px;padding:3px 7px;border-radius:6px;background:var(--peacock-soft);color:var(--peacock);font:600 11px/1.2 var(--mono);letter-spacing:.03em}',
+
+    // dashboard: several views of one subject
+    '.vz.vz-dashboard{padding:14px 14px 15px;background:linear-gradient(180deg,var(--gold-soft),transparent 90px),var(--surface)}',
+    '.vz-dashboard > .vz-h .vz-t{font-size:14.5px}',
+    '.vz-dash{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,232px),1fr));gap:10px}',
+    '.vz-dash > .vz{margin:0;box-shadow:none;background:var(--surface)}',
+    '.vz-dash > .vz.vz-stats{grid-column:1 / -1}',
+
+    // the placeholder while a visual is on its way
+    '.vz-skel{margin:14px 0 0;padding:14px 16px;border:1px solid var(--line);border-radius:var(--r-card);background:var(--surface);display:grid;gap:10px}',
+    '.vz-skel .lbl{font-size:12.5px;color:var(--ink-3)}',
+    '.vz-skel i{display:block;height:10px;border-radius:5px;background:linear-gradient(90deg,var(--surface-3) 0%,var(--surface-2) 50%,var(--surface-3) 100%);background-size:200% 100%;animation:vzShimmer 1.3s linear infinite}',
+    '.vz-skel .a{width:82%}.vz-skel .b{width:58%}.vz-skel .c{width:70%}',
+    '@keyframes vzShimmer{from{background-position:100% 0}to{background-position:-100% 0}}',
+
+    // arrival: once, the first time a visual appears — never on a re-render
+    '@keyframes vzUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}',
+    '@keyframes vzGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}',
+    '@keyframes vzWipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}',
+    '@keyframes vzPop{from{opacity:0;transform:scale(.3)}to{opacity:1;transform:none}}',
+    '.turn.anim .vz.fresh{animation:vzUp .38s var(--ease) both}',
+    '.turn.anim .vz.fresh .vz-track i,.turn.anim .vz.fresh .vz-mfill,.turn.anim .vz.fresh .vz-mseg,.turn.anim .vz.fresh .vz-stack span{animation:vzGrow .7s var(--ease) both;animation-delay:calc(var(--i,0) * 45ms + 120ms)}',
+    '.turn.anim .vz.fresh .vz-area svg{animation:vzWipe .95s var(--ease) both .12s}',
+    '.turn.anim .vz.fresh .vz-area > .vz-dot:not(.vz-hd),.turn.anim .vz.fresh .vz-endv,.turn.anim .vz.fresh .vz-mk{animation:vzPop .4s var(--spring) both .85s}',
+    '.turn.anim .vz.fresh .vz-stat,.turn.anim .vz.fresh .vz-card,.turn.anim .vz.fresh .vz-flow li,.turn.anim .vz.fresh .vz-tl li{animation:vzUp .42s var(--ease) both;animation-delay:calc(var(--i,0) * 60ms + 90ms)}',
+    '@media (prefers-reduced-motion:reduce){.vz,.vz *,.vz-skel i{animation:none!important}}',
+    '@media (forced-colors:active){.vz,.vz-card,.vz-tone{border:1px solid CanvasText}.vz-track i,.vz-stack span,.vz-mfill,.vz-mk,.vz-dot{forced-color-adjust:none}}',
+    '@container kris (max-width:360px){.vz{padding:12px 13px 13px}.vz-row{grid-template-columns:minmax(48px,30%) minmax(0,1fr) auto}.vz-sv{font-size:22px}}'
+  ].join('');
+
+  // ==========================================================================
   //  Local instant replies — no network at all.
   //  Only the unambiguous: greetings, thanks, goodbyes, "how are you". Anything
   //  that could possibly be a question goes to the server.
@@ -1370,8 +1553,12 @@
   var LOC_RES = [
     new RegExp("\\b(?:i am|i'm|i’m|im)\\s+(?:currently\\s+|now\\s+)?(?:based|located|stationed) (?:in|at|out of) " + PHRASE + STOP_AFTER, 'i'),
     new RegExp("\\bi live in " + PHRASE + STOP_AFTER, 'i'),
-    new RegExp("\\bour office is in " + PHRASE + STOP_AFTER, 'i')
+    new RegExp("\\bour office is in " + PHRASE + STOP_AFTER, 'i'),
+    // "… a data engineer at GeoServe, based in Kochi"
+    new RegExp("(?:[,;]\\s*|\\band\\s+)(?:currently\\s+|now\\s+)?(?:based|located|stationed) (?:in|at|out of) " + PHRASE + STOP_AFTER, 'i')
   ];
+  // "Abhinav here" / "Priya Nair here." — a capitalised name, then "here".
+  var HERE_NAME_RE = /^\s*([A-Z][a-z'’-]{1,29}(?:\s+[A-Z][a-z'’-]{1,29})?)\s+here\b/;
   var NOT_PLACE = toSet('home office the office a meeting meetings transit a hurry the loop the middle the zone'.split(' '));
   var INTEREST_RES = [
     /\bi(?:'m|’m| am)? (?:really |mostly |mainly |particularly |especially |currently )?(?:interested in|focus(?:ed|ing)? on|specialis(?:e|ing) in|specializ(?:e|ing) in|work mostly on|mostly work on)\s+([^.;!?\n]{2,120}?)\s*(?=[.;!?\n]|$)/i,
@@ -1464,6 +1651,8 @@
         nameEnd = m.index + m[0].length;
       }
     }
+    m = !seen.name && t.match(HERE_NAME_RE);
+    if (m && nameOk(m[1], false, t)) add('name', m[1]);
 
     var roleEnd = -1;
     var roleOk = function (r) { return r && r.split(/\s+/).length <= 6 && !NOT_ROLE[r.toLowerCase()] && !NOT_ROLE[firstWord(r)] && /[a-z]/i.test(r) && !/^(?:to|about)\b/i.test(r); };
@@ -1538,41 +1727,82 @@
     [/^(?:(?:my )?(?:full )?name|who i am)$/i, ['name', 'preferredName']]
   ];
 
-  // --- questions about the user: "where do I work?", "tell me about me" ------
+  // --- questions about the user: "what do you know about me?", "where do I work?" --
   // Answered from the profile and this chat, never by the app guide or a
-  // model. Typing is forgiving: "i wask were do i work", "whats my comp name".
+  // model, never guessed. Recognised by the SHAPE of the question — a recall
+  // verb aimed at "me", "who am I", "my <field>" asked as a question — so
+  // "wat u kno abt me" and "what have you got on me" are the same question.
+  // src/identity.js carries the same classifier, line for line;
+  // test/about_me_test.js runs one corpus through both.
   function normaliseQuestion(text) {
     return ' ' + String(text || '').toLowerCase()
-      .replace(/[‘’`]/g, "'")
+      .replace(/[‘’`´]/g, "'")
       .replace(/[^a-z0-9'\s]/g, ' ')
       .replace(/\b(?:were|wher|whre|wehre)\b/g, 'where')
-      .replace(/\b(?:wat|wht|whta|waht)\b/g, 'what')
+      .replace(/\b(?:wat|wht|whta|waht|wot|wut)\b/g, 'what')
       .replace(/\bwhat'?s\b/g, 'what is')
       .replace(/\bwho'?s\b/g, 'who is')
       .replace(/\b(?:comp|compny|companey|compnay|cmpany|campany|co)\b/g, 'company')
       .replace(/\b(?:ur|yr)\b/g, 'your')
-      .replace(/\bu\b/g, 'you')
+      .replace(/\b(?:u|ya|yu|yuo)\b/g, 'you')
       .replace(/\b(?:i'?m|im)\b/g, 'i am')
       .replace(/\b(?:wrk|wok|werk)\b/g, 'work')
       .replace(/\bdept\b/g, 'department')
-      .replace(/\s+/g, ' ') + ' ';
+      .replace(/\b(?:abt|abut|bout|abot)\b/g, 'about')
+      .replace(/\b(?:kno|knw|knwo|nkow)\b/g, 'know')
+      .replace(/\b(?:rember|remeber|remembr|rmember|remmember|rememeber)\b/g, 'remember')
+      .replace(/\b(?:info|infos|informations)\b/g, 'information')
+      .replace(/\bdeets\b/g, 'details')
+      .replace(/\b(?:myslef|myslf|mysef)\b/g, 'myself')
+      .replace(/\bnmae\b/g, 'name')
+      .replace(/\b(?:please|pls|plz|kris|k r 1 s|k r i s|hey|hi|hello|ok|okay|so|btw|actually|exactly|really|now|again|then|anyway)\b/g, ' ')
+      .replace(/\s+/g, ' ').trim() + ' ';
+  }
+  // A statement about themselves is information, not a question about it —
+  // unless it is phrased as a question ("who do I work for?", "what do you call me").
+  var ABOUT_QUESTION_START_RE = /^ (?:what|who|where|which|how|do|did|does|can|could|would|will|is|are|tell|remind|show|describe|give|list|say|any|anything|my) /;
+  var ABOUT_STATEMENT_RE = / (?:my name is|i am called|call me|i work (?:as|at|for|in|on|with)|i am (?:an? |the |based |from |in |at )|i live |i would like you to (?:know|remember)|i want you to (?:know|remember)) /;
+  // "my <field>" asked as a question, and nothing after it but the field's name.
+  var ABOUT_Q = '(?:what is|what are|what was|what were|which is|tell me|remind me(?: of)?|do you (?:know|remember|have)|did you (?:get|catch|save)|you know|remember|recall|what|which|say|confirm)';
+  function aboutFieldRe(words) {
+    return new RegExp(' ' + ABOUT_Q + ' (?:\\w+ ){0,2}my (?:' + words + ')(?: name| called)? $|^ my (?:' + words + ')(?: name)? $');
   }
   var ABOUT_TOPICS = [
-    ['work', / where (?:do|did) i work | who do i work for | (?:what|which) (?:is|was) (?:my|the) company(?: name)? | (?:what|which) company (?:do|am|did) i | my company(?: name)? $| what is my (?:employer|organi[sz]ation|firm|office) /],
-    ['role', / what (?:is|was) my (?:role|job|job title|title|position|designation|work) | what do i do(?: for (?:work|a living))? $/],
-    ['department', / (?:which|what) (?:department|team|division) (?:am i|do i)| what is my (?:department|team|division) /],
-    ['location', / where am i (?:based|located|working from) | where do i live | what is my (?:location|city|base) /],
-    ['timezone', / what is my time ?zone | which time ?zone am i /],
-    ['interests', / what (?:am i interested in|are my interests|do i focus on) /],
-    ['name', / what is my name | (?:do|did) you (?:know|remember) my name | what (?:do|should) you call me /],
-    ['all', / (?:tell|say|talk|share)(?: me)? (?:something )?about me | who am i $| what (?:do|did) you know about me | (?:said|asked|meant|mean|talking) (?:about )?me $| describe me | about me $| my profile $/]
+    ['name', [/ what (?:do|should|will|would) you call me | (?:know|remember) (?:what )?i am called /, aboutFieldRe('(?:full |first |last |preferred )?name|nickname')]],
+    ['role', [/ what (?:do|did) i do(?: for (?:work|a living))? $| what (?:do|did) i work as /, aboutFieldRe('role|job|job title|title|position|designation|profession|occupation')]],
+    ['work', [/ where (?:do|did) i work | who do i work for | (?:what|which) company (?:do|am|did) i /, aboutFieldRe('company|employer|organi[sz]ation|firm|workplace|office')]],
+    ['department', [/ (?:which|what) (?:department|team|division|unit) (?:am i|do i) /, aboutFieldRe('department|team|division|unit|desk')]],
+    ['location', [/ where am i (?:based|located|working from|from) | where do i (?:live|work from|stay) /, aboutFieldRe('location|city|country|base|hometown|home town')]],
+    ['timezone', [/ (?:which|what) time ?zone (?:am i|do i) /, aboutFieldRe('time ?zone')]],
+    ['interests', [/ what (?:am i interested in|are my interests|do i focus on|do i care about) /, aboutFieldRe('interests?|focus|speciali[sz]ation|speciality|specialty')]]
   ];
+  // Everything K.R.1.S knows about the user.
+  var ABOUT_ALL = [
+    / who am i /,
+    / (?:do|did|does) you (?:still )?(?:know|remember|recogni[sz]e) (?:who i am|me) /,
+    / (?:know|remember|recall|have|got|hold|keep|kept|store|stored|save|saved|learn|learned|learnt|collect|collected|gather|gathered|noted) (?:\w+ ){0,5}(?:about|on|of|regarding) (?:me|myself) /,
+    / (?:information|details|data|facts|profile|memory|memories|notes?) (?:\w+ ){0,4}(?:about|on|of|regarding) (?:me|myself) /,
+    / (?:tell|talk|say|share|show|list|describe|summari[sz]e|give|remind) (?:me )?(?:\w+ ){0,3}(?:about|of) (?:me|myself) /,
+    / describe me /,
+    /^ (?:about|on) me $/,
+    / (?:said|asked|asking|meant|mean|talking) (?:about )?(?:me|myself) $/,
+    / (?:my|your) (?:profile|saved details|personal details|personal information)(?: on me)? $/,
+    / what is (?:in )?my (?:information|details|profile) /,
+    / who do you think i am /
+  ];
+  /** Which question about the user this is ('all', 'name', 'role', …), or null. */
   function aboutTopic(text) {
     var raw = String(text || '');
-    if (raw.length > 160 || /\n/.test(raw)) return null;
+    if (!raw.trim() || raw.length > 200 || /\n/.test(raw)) return null;
+    // "Forget my company", "remember that I …" are memory commands, not questions.
+    if (/^\s*(?:(?:hey |ok |okay )?kris[,:]?\s+)?(?:please\s+)?(?:forget|remember|don'?t forget|stop remembering|erase|keep in mind|save|store|note)\b/i.test(raw) && !/\?\s*$/.test(raw)) return null;
     var n = normaliseQuestion(raw);
-    if (/ who am i (?:talking|speaking|chatting)/.test(n)) return null;
-    for (var i = 0; i < ABOUT_TOPICS.length; i++) if (ABOUT_TOPICS[i][1].test(n)) return ABOUT_TOPICS[i][0];
+    if (/ who am i (?:talking|speaking|chatting|with|to) /.test(n)) return null;
+    if (!ABOUT_QUESTION_START_RE.test(n) && !/\?\s*$/.test(raw) && ABOUT_STATEMENT_RE.test(n)) return null;
+    for (var i = 0; i < ABOUT_TOPICS.length; i++) {
+      for (var j = 0; j < ABOUT_TOPICS[i][1].length; j++) if (ABOUT_TOPICS[i][1][j].test(n)) return ABOUT_TOPICS[i][0];
+    }
+    for (var k = 0; k < ABOUT_ALL.length; k++) if (ABOUT_ALL[k].test(n)) return 'all';
     return null;
   }
   // "what?" / "huh?" after an answer: the last reply missed.
@@ -1604,6 +1834,8 @@
   }
 
   function article(s) { return /^[aeiou]/i.test(s) && !/^(?:uni|use|eu)/i.test(s) ? 'an' : 'a'; }
+  function joinOr(list) { return list.length <= 1 ? list.join('') : list.slice(0, -1).join(', ') + ' or ' + list[list.length - 1]; }
+  var UNKNOWN_USER = 'I don’t have enough information about you yet. Tell me your name and a few basics — your role, where you work, where you’re based — and I’ll use them in this chat and offer to remember them for next time.';
 
   /** The question on the "remember this?" card for one fact. */
   function askFor(f) {
@@ -3306,11 +3538,13 @@
 
     var started = performanceNow();
     var carried = this.pending;
-    var cmd = !carried && this.memoryAllowed() ? parseMemoryCommand(body) : null;
+    var askedName = !!(carried && carried.kind === 'name');
+    var cmd = (!carried || askedName) && this.memoryAllowed() ? parseMemoryCommand(body) : null;
+    if (cmd && askedName) carried = null;
     // Conversation context: whatever the user just said about themselves
     // belongs to THIS chat at once, so the reply can already use it. ("Forget
     // that I work at Maersk" is not a statement that they do.)
-    var facts = carried || cmd ? [] : this.noticeFacts(body);
+    var facts = (carried && !askedName) || cmd ? [] : this.noticeFacts(body);
     var historySnapshot = this.history.slice(-HISTORY_TURNS);
     this.pending = null;
 
@@ -3396,7 +3630,12 @@
         if (!evt || stale()) return;
         arm();
         markDelivered();
-        if (evt.t === 'status') { label.textContent = evt.text || label.textContent; self.setStatusText((evt.text || '') + '…'); return; }
+        if (evt.t === 'status') {
+          label.textContent = evt.text || label.textContent;
+          self.setStatusText((evt.text || '') + '…');
+          if (evt.phase === 'visual') stream.hold();
+          return;
+        }
         if (evt.t === 'delta' || evt.t === 'replace') {
           if (!stream.started) { stopClock(); stream.start(); self.setStatusText('Replying…'); if (self.currentMood === 'thinking') self.setMood('idle'); }
           if (evt.t === 'replace') stream.replace(evt.text || ''); else stream.push(evt.text || '');
@@ -3515,7 +3754,7 @@
     this.setConn(this._conn);
     this.updateComposer();
     if (!this.open && !this.inline) this.badge.classList.add('unread');
-    this.live.textContent = String(data.text || '').slice(0, 400) + (offer.length ? ' ' + (offer.length === 1 ? askFor(offer[0]) : 'Would you like me to remember this for next time?') : '');
+    this.live.textContent = visualPlain(data.text).slice(0, 400) + (offer.length ? ' ' + (offer.length === 1 ? askFor(offer[0]) : 'Would you like me to remember this for next time?') : '');
     this.reveal(slot.el);
     if (this.open && this.view === 'chat' && document.activeElement !== this.input && !('ontouchstart' in global)) {
       try { this.input.focus({ preventScroll: true }); } catch (_) { /* ignore */ }
@@ -3832,8 +4071,12 @@
         return reply(only.length ? lines.concat(['', why + ' What you tell me is used in this chat only.']).join('\n') : why, [turnOn, manage]);
       }
       if (!lines.length) {
-        return reply('I don’t know anything about you yet. Tell me your name, your role or where you work — I’ll use it in this chat and ask before remembering it. Or fill in your profile yourself.', [{ label: 'Open profile', run: 'view:profile', icon: 'user' }]);
+        // Nothing known: say so, ask, and wait for the name (a bare "Abhinav" is the answer).
+        return assign(reply(UNKNOWN_USER, [{ label: 'Open profile', run: 'view:profile', icon: 'user' }]), { pending: { kind: 'name' } });
       }
+      var pv = this.profileView();
+      var missing = [!(pv.name || pv.preferredName) && 'your name', !pv.role && 'your role', !pv.company && 'where you work'].filter(Boolean);
+      if (missing.length) lines.push('', 'I don’t know ' + joinOr(missing) + ' yet — tell me if you’d like me to.');
       if (only.length) {
         lines.push('', (items.length ? 'Those aren’t' : 'None of this is') + ' saved — it’s used in this chat only.');
         return reply(lines.join('\n'), [{ label: only.length === 1 ? 'Remember it' : 'Remember these', run: 'memory:keep-conv', icon: 'memory' }, manage]);
@@ -3968,7 +4211,8 @@
         return unknown('what you focus on', 'I’m interested in FuelEU Maritime');
       case 'name':
         if (p.preferredName || p.name) return reply('You’re ' + (p.name || p.preferredName) + (p.preferredName && p.name && p.preferredName !== p.name ? ' — I call you ' + p.preferredName : '') + '.');
-        return unknown('your name', 'my name is …');
+        var askName = unknown('your name', 'my name is …');
+        return /paused/.test(askName.text) ? askName : assign(askName, { text: 'You haven’t told me your name yet. What should I call you?', pending: { kind: 'name' } });
       default:
         return null;
     }
@@ -4025,7 +4269,7 @@
     this.w = widget; this.slot = slot;
     this.target = ''; this.shown = 0; this.started = false; this.done = false;
     this.raf = null; this.resolve = null; this.last = 0;
-    this.frozen = 0; this.tail = []; this.caret = null;
+    this.frozen = 0; this.tail = []; this.caret = null; this.skel = null; this.holding = false;
   }
   Typewriter.prototype.reset = function () {
     this.slot.msg.innerHTML = '';
@@ -4037,7 +4281,9 @@
     this.reset();
     this.tick();
   };
-  Typewriter.prototype.push = function (t) { this.target += t; this.tick(); };
+  Typewriter.prototype.push = function (t) { this.target += t; this.holding = false; this.tick(); };
+  /** The server is holding a visual until it is complete: show where it will land. */
+  Typewriter.prototype.hold = function () { if (!this.started || this.holding) return; this.holding = true; this.render(); };
   Typewriter.prototype.replace = function (t) { this.target = t; this.shown = Math.min(this.shown, t.length); if (this.started) this.reset(); this.tick(); };
   Typewriter.prototype.text = function () { return this.target; };
   Typewriter.prototype.cancel = function () { this.done = true; if (this.raf) caf(this.raf); this.raf = null; if (this.resolve) { var r = this.resolve; this.resolve = null; r(); } };
@@ -4053,7 +4299,7 @@
       // Reveal faster the further behind we are: smooth when the model is
       // slow, never lagging far behind when it is fast.
       var step = this.w._reducedMotion ? remaining : Math.max(2, Math.ceil(remaining / 7));
-      this.shown = Math.min(this.target.length, this.shown + step);
+      this.shown = skipVisual(this.target, Math.min(this.target.length, this.shown + step));
       this.render(false);
     }
     if (this.shown < this.target.length) this.tick();
@@ -4063,6 +4309,7 @@
     var msg = this.slot.msg;
     var text = this.target.slice(0, this.shown);
     if (this.caret && this.caret.parentNode) this.caret.parentNode.removeChild(this.caret);
+    if (this.skel && this.skel.parentNode) this.skel.parentNode.removeChild(this.skel);
     for (var i = 0; i < this.tail.length; i++) if (this.tail[i].parentNode === msg) msg.removeChild(this.tail[i]);
     var cut = stableCut(text);
     if (cut > this.frozen) {
@@ -4079,6 +4326,7 @@
     var host = lastBlock && /^(P|LI|H4)$/.test(lastBlock.tagName) ? lastBlock
       : lastBlock && (lastBlock.tagName === 'UL' || lastBlock.tagName === 'OL') ? (lastBlock.lastElementChild || lastBlock) : msg;
     host.appendChild(caret);
+    if (this.holding) { this.skel = vzSkeleton(); msg.appendChild(this.skel); }
     this.w.stick();
   };
 
@@ -4088,7 +4336,7 @@
     var lines = String(text).split('\n'), pos = 0, cut = 0, fence = false;
     for (var i = 0; i < lines.length - 1; i++) {   // the last line may still be growing
       var line = lines[i];
-      if (fence) { if (FENCE_CLOSE_RE.test(line)) fence = false; }
+      if (fence) { if (FENCE_CLOSE_RE.test(line)) { fence = false; cut = pos + line.length + 1; } }
       else if (FENCE_OPEN_RE.test(line)) fence = true;
       else if (!line.trim()) cut = pos + line.length + 1;
       pos += line.length + 1;
@@ -4509,7 +4757,7 @@
   }
 
   function plainText(data) {
-    var t = String(data.text || '');
+    var t = visualPlain(data.text);
     var p = data.provenance;
     if (p && (p.period || (p.vessels && p.vessels.length))) {
       t += '\n\n' + [p.vessels && p.vessels.length ? 'Vessel: ' + p.vessels.join(', ') : null, p.period ? 'Period: ' + p.period : null, data.rowsUsed != null ? 'Reports: ' + data.rowsUsed : null, p.source ? 'Source: ' + p.source : null].filter(Boolean).join(' · ');
@@ -4545,7 +4793,22 @@
         var code = [];
         i++;
         while (i < lines.length && !FENCE_CLOSE_RE.test(lines[i])) { code.push(lines[i]); i++; }
+        var closed = i < lines.length;
         i++;
+        if (/^visual$/i.test(fence[1])) {
+          // Still arriving: a placeholder. Complete: the component, or nothing
+          // if it is malformed — the prose around it still reads on its own.
+          if (!closed && streaming) { container.appendChild(vzSkeleton()); continue; }
+          var json = code.join('\n'), spec = null;
+          try { spec = JSON.parse(json); } catch (_) { spec = null; }
+          var fig = spec ? renderVisual(spec) : null;
+          if (fig) {
+            var sig = hashStr(json);
+            if (!VZ_SEEN[sig]) { VZ_SEEN[sig] = 1; fig.classList.add('fresh'); }
+            container.appendChild(fig);
+          }
+          continue;
+        }
         container.appendChild(codeBlock(code.join('\n'), fence[1]));
         continue;
       }
@@ -4680,83 +4943,531 @@
   }
 
   // --- charts ----------------------------------------------------------------
-  function renderBars(chart) {
-    var ns = 'http://www.w3.org/2000/svg';
-    var n = chart.values.length;
-    var w = 640, barH = 22, gap = 12, padT = 4;
-    var fmtV = function (v) {
-      var d = chart.decimals != null ? chart.decimals : (Math.abs(v) >= 1000 ? 1 : 3);
-      return Number(v).toLocaleString('en-GB', { maximumFractionDigits: d }) + (chart.unit ? ' ' + chart.unit : '');
-    };
-    var h = padT + n * (barH + gap);
-    var max = Math.max.apply(null, chart.values.map(function (v) { return Math.abs(v); })) || 1;
-    var svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('class', 'bars');
-    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
-    svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', (chart.title || 'Comparison') + ': ' + chart.labels.map(function (l, i) { return l + ' ' + fmtV(chart.values[i]); }).join(', '));
-    var labelW = 170, valW = 120;
-    var plotW = w - labelW - valW;
-    chart.values.forEach(function (v, i) {
-      var y = padT + i * (barH + gap);
-      var len = Math.max(3, Math.round((Math.abs(v) / max) * plotW));
-      var lab = document.createElementNS(ns, 'text');
-      lab.setAttribute('x', 0); lab.setAttribute('y', y + barH * 0.7);
-      lab.textContent = String(chart.labels[i]).length > 24 ? String(chart.labels[i]).slice(0, 23) + '…' : chart.labels[i];
-      svg.appendChild(lab);
-      var track = document.createElementNS(ns, 'rect');
-      track.setAttribute('class', 'track');
-      track.setAttribute('x', labelW); track.setAttribute('y', y); track.setAttribute('width', plotW); track.setAttribute('height', barH); track.setAttribute('rx', 4);
-      svg.appendChild(track);
-      var r = document.createElementNS(ns, 'rect');
-      r.setAttribute('class', 'bar');
-      r.setAttribute('x', labelW); r.setAttribute('y', y);
-      r.setAttribute('width', len); r.setAttribute('height', barH); r.setAttribute('rx', 4);
-      svg.appendChild(r);
-      var val = document.createElementNS(ns, 'text');
-      val.setAttribute('class', 'val');
-      val.setAttribute('x', labelW + plotW + 10); val.setAttribute('y', y + barH * 0.7);
-      val.textContent = fmtV(v);
-      svg.appendChild(val);
+  // ==========================================================================
+  //  Visuals — a ```visual {json}``` block in an answer becomes a component.
+  //
+  //  The model picks the form (stats, bar, line, breakdown, meter, compare,
+  //  steps, timeline, or a dashboard of them); this code owns how it looks.
+  //  Every spec is untrusted: known types and fields only, every string capped
+  //  and set with textContent, every number checked, colours from the palette
+  //  below and never from the spec. Anything malformed renders nothing, and
+  //  the prose around it still stands.
+  //
+  //  Palette: categorical slots validated (dataviz six checks) against the
+  //  panel surface in each theme; one series always takes slot 1; status
+  //  colours are reserved for good / watch / risk and always carry an icon
+  //  and a word.
+  // ==========================================================================
+  var VZ_SEEN = {};   // specs already animated on this page: a re-render stays still
+
+  function vzStr(v, max) { return typeof v === 'string' || typeof v === 'number' ? oneLine(String(v), max || 80) : ''; }
+  function vzNum(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    if (typeof v === 'string' && /^\s*[-+]?(?:\d{1,3}(?:,\d{3})+|\d*)(?:\.\d+)?\s*$/.test(v) && /\d/.test(v)) { var n = Number(v.replace(/[,\s]/g, '')); return isFinite(n) ? n : null; }
+    return null;
+  }
+  function vzList(v, max) { return Array.isArray(v) ? v.slice(0, max) : []; }
+  function vzRound(x) { return Math.round(x * 10) / 10; }
+  /** 1,284 · 12.9K · 4.2M — compact past 100,000, plain below. */
+  function vzFmt(v, unit) {
+    var a = Math.abs(v), s;
+    if (a >= 1e9) s = vzRound(v / 1e9).toLocaleString('en-GB') + 'B';
+    else if (a >= 1e6) s = vzRound(v / 1e6).toLocaleString('en-GB') + 'M';
+    else if (a >= 1e5) s = vzRound(v / 1e3).toLocaleString('en-GB') + 'K';
+    else s = Number(v).toLocaleString('en-GB', { maximumFractionDigits: a >= 100 ? 1 : a >= 1 ? 2 : 3 });
+    return s + (unit ? (/^[%°‰]/.test(unit) ? '' : ' ') + unit : '');
+  }
+  var VZ_TONES = { good: 'good', ok: 'good', positive: 'good', pass: 'good', compliant: 'good', warn: 'warn', warning: 'warn', watch: 'warn', caution: 'warn', medium: 'warn', bad: 'bad', risk: 'bad', critical: 'bad', negative: 'bad', danger: 'bad', fail: 'bad', neutral: 'neutral', info: 'neutral' };
+  var VZ_TONE_WORD = { good: 'On track', warn: 'Watch', bad: 'At risk', neutral: 'Info' };
+  function vzTone(v) { return VZ_TONES[String(v || '').toLowerCase()] || null; }
+  function vzBadge(tone, word) {
+    var b = el('span', 'vz-tone t-' + tone);
+    var ic = el('span', 'ic');
+    ic.innerHTML = tone === 'good' ? ICON.check : tone === 'bad' ? ICON.close : ICON.alert;
+    b.appendChild(ic);
+    b.appendChild(document.createTextNode(word || VZ_TONE_WORD[tone]));
+    return b;
+  }
+
+  /** A visual from a parsed spec, or null. `o.bare`: no card chrome (inside a data card). */
+  function renderVisual(spec, o) {
+    o = o || {};
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return null;
+    var type = String(spec.type || '').toLowerCase();
+    var fn = VZ_RENDER[type];
+    if (!fn || (o.nested && type === 'dashboard')) return null;
+    var body;
+    try { body = fn(spec, o); } catch (_) { body = null; }
+    if (!body) return null;
+    var title = vzStr(spec.title, 90);
+    var sub = vzStr(spec.subtitle, 60) || (/^(?:bar|line|breakdown)$/.test(type) ? vzStr(spec.unit, 20) : '');
+    if (o.bare) {
+      var frag = document.createDocumentFragment();
+      if (title) frag.appendChild(el('p', 'chart-title', title));
+      frag.appendChild(body);
+      return frag;
+    }
+    var fig = el('figure', 'vz vz-' + type);
+    if (title || sub) {
+      var cap = el('figcaption', 'vz-h');
+      if (title) cap.appendChild(el('span', 'vz-t', title));
+      if (sub) cap.appendChild(el('span', 'vz-u', sub));
+      fig.appendChild(cap);
+    }
+    fig.appendChild(body);
+    return fig;
+  }
+
+  var VZ_RENDER = {
+    stats: function (s) {
+      var items = vzList(s.items, 6).map(function (it) {
+        if (!it || typeof it !== 'object') return null;
+        var label = vzStr(it.label, 48);
+        var num = vzNum(it.value);
+        var value = num != null ? vzFmt(num) : vzStr(it.value, 24);
+        if (!label || !value) return null;
+        return { label: label, value: value, unit: vzStr(it.unit != null ? it.unit : num != null ? s.unit : '', 20), note: vzStr(it.note, 90), delta: vzStr(it.delta, 24), tone: vzTone(it.tone), status: vzStr(it.status, 24) };
+      }).filter(Boolean);
+      if (!items.length) return null;
+      var g = el('div', 'vz-stats-g');
+      items.forEach(function (it, i) {
+        var tile = el('div', 'vz-stat');
+        tile.style.setProperty('--i', i);
+        tile.appendChild(el('div', 'vz-sl', it.label));
+        var v = el('div', 'vz-sv', it.value);
+        if (it.unit) v.appendChild(el('span', 'vz-su', it.unit));
+        tile.appendChild(v);
+        if (it.tone || it.note || it.delta) {
+          var foot = el('div', 'vz-sn');
+          if (it.tone) foot.appendChild(vzBadge(it.tone, it.status));
+          if (it.delta) foot.appendChild(el('span', 'vz-d', it.delta));
+          if (it.note) foot.appendChild(el('span', null, it.note));
+          tile.appendChild(foot);
+        }
+        g.appendChild(tile);
+      });
+      return g;
+    },
+
+    bar: function (s, o) {
+      var labels = vzList(s.labels, 16), values = vzList(s.values, 16), rows = [];
+      for (var i = 0; i < Math.min(labels.length, values.length); i++) {
+        var v = vzNum(values[i]), l = vzStr(labels[i], 40);
+        if (v == null || !l) return null;
+        rows.push({ l: l, v: v });
+      }
+      if (rows.length < 2 || labels.length !== values.length) return null;
+      var unit = vzStr(s.unit, 16), hl = vzStr(s.highlight, 40).toLowerCase();
+      var vals = rows.map(function (r) { return r.v; });
+      var max = Math.max.apply(null, vals.concat(0)), min = Math.min.apply(null, vals.concat(0));
+      var span = max - min || 1, zero = (-min / span) * 100;
+      var wrap = el('div', 'vz-bars' + (min < 0 ? '' : ' pos'));
+      wrap.setAttribute('role', 'list');
+      rows.forEach(function (r, i) {
+        var row = el('div', 'vz-row' + (hl ? (r.l.toLowerCase() === hl ? ' hi' : ' lo') : ''));
+        row.setAttribute('role', 'listitem');
+        row.title = r.l + ': ' + vzFmt(r.v, unit);
+        row.style.setProperty('--i', i);
+        row.appendChild(el('span', 'vz-bl', r.l));
+        var track = el('span', 'vz-track');
+        var w = Math.abs(r.v) / span * 100;
+        var bar = el('i', r.v < 0 ? 'neg' : null);
+        bar.style.left = (r.v < 0 ? zero - w : zero) + '%';
+        bar.style.width = Math.max(w, 0.8) + '%';
+        track.appendChild(bar);
+        if (min < 0) { var z = el('b', 'vz-zero'); z.style.left = zero + '%'; track.appendChild(z); }
+        row.appendChild(track);
+        row.appendChild(el('span', 'vz-bv', vzFmt(r.v, o && o.bare ? unit : '')));
+        wrap.appendChild(row);
+      });
+      return wrap;
+    },
+
+    line: function (s) {
+      var labels = vzList(s.labels, 400).map(function (l) { return vzStr(l, 24); });
+      var raw = Array.isArray(s.series) ? s.series : Array.isArray(s.values) ? [{ name: s.name || '', values: s.values }] : [];
+      var unit = vzStr(s.unit, 16);
+      var series = raw.slice(0, 3).map(function (se) {
+        if (!se || !Array.isArray(se.values) || se.values.length !== labels.length) return null;
+        var vs = se.values.map(vzNum);
+        return vs.every(function (v) { return v != null; }) ? { name: vzStr(se.name, 40), values: vs } : null;
+      });
+      if (labels.length < 2 || !series.length || series.some(function (x) { return !x; })) return null;
+      var all = [].concat.apply([], series.map(function (x) { return x.values; }));
+      var sc = niceScale(Math.min.apply(null, all), Math.max.apply(null, all), 4);
+      var n = labels.length;
+      var X = function (i) { return (i / (n - 1)) * 100; };
+      var Y = function (v) { return (1 - (v - sc.lo) / (sc.hi - sc.lo)) * 100; };
+      var ns = 'http://www.w3.org/2000/svg';
+
+      var box = el('div', 'vz-linec');
+      var plot = el('div', 'vz-plot');
+      plot.tabIndex = 0;
+      plot.setAttribute('role', 'img');
+      plot.setAttribute('aria-label', (vzStr(s.title, 90) || 'Trend') + ': ' + series.map(function (se) {
+        return (se.name ? se.name + ' ' : '') + 'from ' + vzFmt(se.values[0], unit) + ' (' + labels[0] + ') to ' + vzFmt(se.values[n - 1], unit) + ' (' + labels[n - 1] + ')';
+      }).join('; '));
+      sc.ticks.forEach(function (t) {
+        var gl = el('div', 'vz-gl');
+        gl.style.top = Y(t) + '%';
+        gl.appendChild(el('span', null, vzFmt(t)));
+        plot.appendChild(gl);
+      });
+      var area = el('div', 'vz-area');
+      var svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('viewBox', '0 0 100 100');
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.setAttribute('aria-hidden', 'true');
+      series.forEach(function (se, k) {
+        var d = se.values.map(function (v, i) { return (i ? 'L' : 'M') + X(i).toFixed(2) + ' ' + Y(v).toFixed(2); }).join(' ');
+        if (series.length === 1) {
+          var ar = document.createElementNS(ns, 'path');
+          ar.setAttribute('class', 'ar s' + k);
+          ar.setAttribute('d', d + ' L100 100 L0 100 Z');
+          svg.appendChild(ar);
+        }
+        var ln = document.createElementNS(ns, 'path');
+        ln.setAttribute('class', 'ln s' + k);
+        ln.setAttribute('d', d);
+        svg.appendChild(ln);
+      });
+      area.appendChild(svg);
+      series.forEach(function (se, k) {
+        var dot = el('span', 'vz-dot s' + k);
+        dot.style.left = '100%';
+        dot.style.top = Y(se.values[n - 1]) + '%';
+        area.appendChild(dot);
+      });
+      if (series.length === 1) {
+        var endv = el('span', 'vz-endv', vzFmt(series[0].values[n - 1], unit));
+        endv.style.top = Y(series[0].values[n - 1]) + '%';
+        area.appendChild(endv);
+      }
+      // Hover / focus: a crosshair that snaps to the nearest point, and one
+      // readout for every series at that point.
+      var xh = el('div', 'vz-x'), tip = el('div', 'vz-tip'), hd = series.map(function (se, k) { var d = el('span', 'vz-dot vz-hd s' + k); area.appendChild(d); return d; });
+      area.appendChild(xh);
+      area.appendChild(tip);
+      plot.appendChild(area);
+      var at = n - 1;
+      var show = function (i) {
+        at = Math.max(0, Math.min(n - 1, i));
+        plot.classList.add('hover');
+        xh.style.left = X(at) + '%';
+        tip.innerHTML = '';
+        tip.appendChild(el('div', 'k', labels[at]));
+        series.forEach(function (se, k) {
+          hd[k].style.left = X(at) + '%';
+          hd[k].style.top = Y(se.values[at]) + '%';
+          var row = el('div', 'r');
+          if (series.length > 1) row.appendChild(el('i', 's' + k));
+          row.appendChild(el('b', null, vzFmt(se.values[at], unit)));
+          if (se.name && series.length > 1) row.appendChild(el('span', null, se.name));
+          tip.appendChild(row);
+        });
+        tip.classList.toggle('left', X(at) > 55);
+        tip.style.left = X(at) + '%';
+      };
+      var hide = function () { plot.classList.remove('hover'); };
+      plot.addEventListener('pointermove', function (e) {
+        var r = area.getBoundingClientRect();
+        if (r.width) show(Math.round(((e.clientX - r.left) / r.width) * (n - 1)));
+      });
+      plot.addEventListener('pointerleave', hide);
+      plot.addEventListener('focus', function () { show(at); });
+      plot.addEventListener('blur', hide);
+      plot.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); show(at + (e.key === 'ArrowLeft' ? -1 : 1)); }
+        else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); show(e.key === 'Home' ? 0 : n - 1); }
+      });
+      box.appendChild(plot);
+      var xa = el('div', 'vz-xa');
+      var ticks = n >= 5 ? [0, Math.floor((n - 1) / 2), n - 1] : [0, n - 1];
+      ticks.forEach(function (i, k) {
+        var lab = el('span', k === 0 ? 'first' : i === n - 1 ? 'last' : null, labels[i]);
+        lab.style.left = X(i) + '%';
+        xa.appendChild(lab);
+      });
+      box.appendChild(xa);
+      // The y-label gutter fits the widest tick label.
+      var widest = sc.ticks.reduce(function (m, t) { return Math.max(m, vzFmt(t).length); }, 1);
+      box.style.setProperty('--gut', Math.max(20, Math.min(56, widest * 6.4 + 6)) + 'px');
+      if (series.length > 1) {
+        var lg = el('div', 'vz-lg');
+        series.forEach(function (se, k) { var it = el('span'); it.appendChild(el('i', 's' + k)); it.appendChild(document.createTextNode(se.name || 'Series ' + (k + 1))); lg.appendChild(it); });
+        box.appendChild(lg);
+      }
+      return box;
+    },
+
+    breakdown: function (s, o) {
+      var items = vzList(s.items, 12).map(function (it) {
+        var v = it && vzNum(it.value), l = it && vzStr(it.label, 40);
+        return v != null && v >= 0 && l ? { l: l, v: v } : null;
+      });
+      if (items.length < 2 || items.some(function (x) { return !x; })) return null;
+      if (items.length > 6) {
+        var rest = items.slice(5).reduce(function (a, x) { return a + x.v; }, 0);
+        items = items.slice(0, 5).concat([{ l: 'Other', v: rest, other: true }]);
+      }
+      var total = items.reduce(function (a, x) { return a + x.v; }, 0);
+      if (!(total > 0)) return null;
+      var unit = vzStr(s.unit, 16);
+      var box = el('div', 'vz-brk');
+      var stack = el('div', 'vz-stack');
+      stack.setAttribute('aria-hidden', 'true');
+      var pctOnly = unit === '%';
+      var ul = el('ul', 'vz-legend' + (pctOnly ? ' pct' : ''));
+      items.forEach(function (it, k) {
+        var pct = it.v / total * 100;
+        var cls = it.other ? 'so' : 's' + k;
+        var seg = el('span', cls);
+        seg.style.flex = String(Math.max(it.v, total * 0.004));
+        seg.style.setProperty('--i', k);
+        seg.title = it.l + ': ' + vzFmt(it.v, unit) + ' (' + vzRound(pct) + '%)';
+        stack.appendChild(seg);
+        var li = el('li');
+        li.appendChild(el('i', cls));
+        li.appendChild(el('span', 'l', it.l));
+        if (!pctOnly) li.appendChild(el('span', 'v', vzFmt(it.v, o && o.bare ? unit : '')));
+        li.appendChild(el('span', 'p', (pct < 1 && pct > 0 ? '<1' : vzRound(pct)) + '%'));
+        ul.appendChild(li);
+      });
+      box.appendChild(stack);
+      box.appendChild(ul);
+      return box;
+    },
+
+    meter: function (s) {
+      var value = vzNum(s.value);
+      if (value == null) return null;
+      var unit = vzStr(s.unit, 20);
+      var bands = vzList(s.bands, 6).map(function (b) {
+        var to = b && vzNum(b.to);
+        return to != null ? { to: to, label: vzStr(b.label, 16), tone: vzTone(b.tone) } : null;
+      }).filter(Boolean);
+      for (var i = 1; i < bands.length; i++) if (bands[i].to <= bands[i - 1].to) return null;
+      var target = vzNum(s.target);
+      var min = vzNum(s.min);
+      if (min == null) min = Math.min(0, value);
+      var max = vzNum(s.max);
+      if (max == null) max = bands.length ? bands[bands.length - 1].to : Math.max(value, target || 0) * 1.25;
+      if (!(max > min)) return null;
+      var lowerBetter = String(s.better || '').toLowerCase() === 'lower';
+      var pos = function (v) { return Math.max(0, Math.min(100, (v - min) / (max - min) * 100)); };
+      // Default band tones run best → worst in the direction that is better.
+      if (bands.length) {
+        var nb = bands.length;
+        var order = nb === 5 ? ['good', 'good', 'neutral', 'warn', 'bad'] : nb === 4 ? ['good', 'neutral', 'warn', 'bad'] : nb === 3 ? ['good', 'warn', 'bad'] : nb === 2 ? ['good', 'bad'] : ['neutral'];
+        if (!lowerBetter && String(s.better || '').toLowerCase() === 'higher') order = order.slice().reverse();
+        else if (!lowerBetter) order = bands.map(function () { return 'neutral'; });
+        bands.forEach(function (b, k) { if (!b.tone) b.tone = order[k]; });
+      }
+      var box = el('div', 'vz-gauge');
+      var head = el('div', 'vz-mh');
+      head.appendChild(el('span', 'vz-mv', vzFmt(value)));
+      if (unit) head.appendChild(el('span', 'vz-mu', unit));
+      var inBand = null;
+      for (var j = 0; j < bands.length; j++) { if (value <= bands[j].to) { inBand = bands[j]; break; } }
+      if (!inBand && bands.length) inBand = bands[bands.length - 1];
+      var tone = inBand ? inBand.tone : target != null && (lowerBetter || String(s.better || '').toLowerCase() === 'higher')
+        ? ((lowerBetter ? value <= target : value >= target) ? 'good' : 'bad') : null;
+      // A one- or two-letter band ("C", "B+") reads as a rating.
+      if (inBand && inBand.label) head.appendChild(vzBadge(inBand.tone || 'neutral', (inBand.label.length <= 2 ? 'Rating ' : '') + inBand.label));
+      else if (tone && tone !== 'neutral') head.appendChild(vzBadge(tone, vzStr(s.status, 24) || (tone === 'good' ? 'Within limit' : 'Over limit')));
+      box.appendChild(head);
+      var track = el('div', 'vz-mtrack' + (bands.length ? ' banded' : ''));
+      if (bands.length) {
+        var from = min;
+        bands.forEach(function (b, k) {
+          var last = k === bands.length - 1;
+          var seg = el('span', 'vz-mseg t-' + (b.tone || 'neutral') + (b === inBand ? ' on' : '') + (k === 0 ? ' first' : '') + (last ? ' last' : ''));
+          seg.style.left = pos(from) + '%';
+          // a 2px surface gap between neighbouring bands
+          seg.style.width = 'calc(' + (pos(b.to) - pos(from)) + '% - ' + (last ? 0 : 2) + 'px)';
+          seg.style.setProperty('--i', k);
+          track.appendChild(seg);
+          from = b.to;
+        });
+      } else {
+        var fill = el('span', 'vz-mfill' + (tone && tone !== 'neutral' ? ' t-' + tone : ''));
+        fill.style.width = pos(value) + '%';
+        track.appendChild(fill);
+      }
+      if (target != null) {
+        var tg = el('span', 'vz-tg');
+        tg.style.left = pos(target) + '%';
+        tg.appendChild(el('span', null, (vzStr(s.targetLabel, 20) || 'Target') + ' ' + vzFmt(target)));
+        track.appendChild(tg);
+      }
+      var mk = el('span', 'vz-mk');
+      mk.style.left = pos(value) + '%';
+      mk.title = vzFmt(value, unit);
+      track.appendChild(mk);
+      box.appendChild(track);
+      var scale = el('div', 'vz-ms');
+      if (bands.length) {
+        var f = min;
+        bands.forEach(function (b) {
+          if (b.label) { var t = el('span', null, b.label); t.style.left = ((pos(f) + pos(b.to)) / 2) + '%'; scale.appendChild(t); }
+          f = b.to;
+        });
+      } else {
+        var a = el('span', 'lo', vzFmt(min)), z = el('span', 'hi', vzFmt(max));
+        scale.appendChild(a); scale.appendChild(z);
+      }
+      box.appendChild(scale);
+      return box;
+    },
+
+    compare: function (s) {
+      var hl = vzStr(s.highlight, 60).toLowerCase();
+      var items = vzList(s.items, 4).map(function (it) {
+        if (!it || typeof it !== 'object') return null;
+        var name = vzStr(it.name || it.title, 60);
+        if (!name) return null;
+        var num = vzNum(it.value);
+        return {
+          name: name, tag: vzStr(it.tag, 24), value: num != null ? vzFmt(num) : vzStr(it.value, 24), unit: vzStr(it.unit, 16),
+          points: vzList(it.points, 6).map(function (p) { return vzStr(p, 140); }).filter(Boolean), verdict: vzStr(it.verdict, 120),
+          hi: !!hl && name.toLowerCase() === hl
+        };
+      }).filter(Boolean);
+      if (items.length < 2) return null;
+      var g = el('div', 'vz-cmp');
+      items.forEach(function (it, i) {
+        var c = el('div', 'vz-card' + (it.hi ? ' hi' : ''));
+        c.style.setProperty('--i', i);
+        if (it.hi) c.appendChild(el('span', 'vz-best', vzStr(s.highlightLabel, 20) || 'Best fit'));
+        if (it.tag) c.appendChild(el('div', 'vz-ctag', it.tag));
+        c.appendChild(el('div', 'vz-cn', it.name));
+        if (it.value) { var v = el('div', 'vz-cv', it.value); if (it.unit) v.appendChild(el('span', 'vz-su', it.unit)); c.appendChild(v); }
+        if (it.points.length) { var ul = el('ul'); it.points.forEach(function (p) { ul.appendChild(el('li', null, p)); }); c.appendChild(ul); }
+        if (it.verdict) c.appendChild(el('div', 'vz-cver', it.verdict));
+        g.appendChild(c);
+      });
+      return g;
+    },
+
+    steps: function (s) {
+      var steps = vzList(s.steps || s.items, 10).map(function (st) {
+        if (typeof st === 'string') return { t: vzStr(st, 120), d: '' };
+        return st && typeof st === 'object' ? { t: vzStr(st.title || st.label, 120), d: vzStr(st.detail, 260) } : null;
+      }).filter(function (x) { return x && x.t; });
+      if (steps.length < 2) return null;
+      var ol = el('ol', 'vz-flow');
+      steps.forEach(function (st, i) {
+        var li = el('li');
+        li.style.setProperty('--i', i);
+        li.appendChild(el('span', 'vz-n', String(i + 1)));
+        var tx = el('div');
+        tx.appendChild(el('b', null, st.t));
+        if (st.d) tx.appendChild(el('p', null, st.d));
+        li.appendChild(tx);
+        ol.appendChild(li);
+      });
+      return ol;
+    },
+
+    timeline: function (s) {
+      var evs = vzList(s.events || s.items, 12).map(function (ev) {
+        return ev && typeof ev === 'object' ? { w: vzStr(ev.when || ev.date, 24), t: vzStr(ev.title || ev.label, 120), d: vzStr(ev.detail, 260) } : null;
+      }).filter(function (x) { return x && x.w && x.t; });
+      if (evs.length < 2) return null;
+      var ol = el('ol', 'vz-tl');
+      evs.forEach(function (ev, i) {
+        var li = el('li');
+        li.style.setProperty('--i', i);
+        li.appendChild(el('span', 'vz-when', ev.w));
+        li.appendChild(el('b', null, ev.t));
+        if (ev.d) li.appendChild(el('p', null, ev.d));
+        ol.appendChild(li);
+      });
+      return ol;
+    },
+
+    dashboard: function (s) {
+      var g = el('div', 'vz-dash');
+      vzList(s.blocks, 6).forEach(function (b) { var v = renderVisual(b, { nested: true }); if (v) g.appendChild(v); });
+      return g.childNodes.length ? g : null;
+    }
+  };
+
+  /** Round axis bounds and 3–5 clean ticks around [lo, hi]. */
+  function niceScale(lo, hi, count) {
+    if (lo === hi) { var pad = Math.abs(lo) * 0.1 || 1; lo -= pad; hi += pad; }
+    var raw = (hi - lo) / count;
+    var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    var step = [1, 2, 2.5, 5, 10].map(function (m) { return m * mag; }).filter(function (x) { return x >= raw; })[0] || 10 * mag;
+    var a = Math.floor(lo / step) * step, b = Math.ceil(hi / step) * step, ticks = [];
+    for (var v = a; v <= b + step / 2; v += step) ticks.push(Math.round(v / step) * step);
+    return { lo: a, hi: b, ticks: ticks };
+  }
+
+  /** The text of a visual block, for copying and for screen readers. */
+  var VISUAL_BLOCK_RE = /(^|\n)[ \t]*```[ \t]*visual[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*(?=\n|$)/gi;
+  function visualPlain(text) {
+    return String(text || '').replace(VISUAL_BLOCK_RE, function (all, pre, json) {
+      var s;
+      try { s = JSON.parse(json); } catch (_) { return pre; }
+      var lines = [];
+      (function walk(o, unit) {
+        if (!o || typeof o !== 'object') return;
+        if (Array.isArray(o)) { o.forEach(function (x) { walk(x, unit); }); return; }
+        var u = typeof o.unit === 'string' ? o.unit : unit;
+        var name = vzStr(o.title || o.name || o.label || o.when, 90);
+        if (o.value != null) lines.push((name ? name + ': ' : '') + o.value + (u ? ' ' + u : ''));
+        else if (name && !Array.isArray(o.values)) lines.push(name + (o.detail ? ' — ' + vzStr(o.detail, 260) : ''));
+        if (Array.isArray(o.values) && Array.isArray(o.labels)) o.labels.forEach(function (l, i) { lines.push(l + ': ' + o.values[i] + (u ? ' ' + u : '')); });
+        if (Array.isArray(o.points)) o.points.forEach(function (p) { lines.push('- ' + vzStr(p, 140)); });
+        ['items', 'series', 'steps', 'events', 'blocks'].forEach(function (k) { walk(o[k], u); });
+      })(s, '');
+      return pre + lines.join('\n');
     });
-    var frag = document.createDocumentFragment();
-    if (chart.title) frag.appendChild(el('p', 'chart-title', chart.title));
-    frag.appendChild(svg);
-    return frag;
+  }
+
+  /** While the reveal is inside a finished visual block, jump past it: a chart appears whole. */
+  var VISUAL_OPEN_G = /(^|\n)[ \t]*```[ \t]*visual[ \t]*\n/gi;
+  function skipVisual(text, shown) {
+    VISUAL_OPEN_G.lastIndex = 0;
+    var m, out = shown;
+    while ((m = VISUAL_OPEN_G.exec(text)) && m.index < out) {
+      var close = text.indexOf('\n```', m.index + m[0].length - 1);
+      if (close < 0) break;
+      var end = close + 4;
+      while (end < text.length && text.charAt(end) !== '\n') end++;
+      if (end < text.length) end++;
+      if (end > out) out = end;
+      VISUAL_OPEN_G.lastIndex = end;
+    }
+    return out;
+  }
+
+  /** The placeholder while a visual is being prepared. */
+  function vzSkeleton() {
+    var sk = el('div', 'vz-skel');
+    sk.setAttribute('aria-hidden', 'true');
+    sk.appendChild(el('div', 'lbl', 'Preparing a visual…'));
+    sk.appendChild(el('i', 'a')); sk.appendChild(el('i', 'b')); sk.appendChild(el('i', 'c'));
+    return sk;
+  }
+
+  // The widget's own charts (number comparisons, data answers) wear the same design.
+  function renderBars(chart) {
+    return renderVisual({ type: 'bar', title: chart.title, unit: chart.unit, labels: chart.labels, values: chart.values }, { bare: true })
+      || document.createDocumentFragment();
   }
 
   function renderSeries(data) {
     var pts = data.series;
-    var ns = 'http://www.w3.org/2000/svg';
-    var w = 640, h = 96, padT = 6, padB = 6;
-    var svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('class', 'spark');
-    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
-    svg.setAttribute('preserveAspectRatio', 'none');
-    svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', pts.length + ' points from ' + pts[0].bucket + ' to ' + pts[pts.length - 1].bucket);
-    var vals = pts.map(function (p) { return p.value; });
-    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-    var span = hi === lo ? 1 : hi - lo;
-    var x = function (i) { return (i / Math.max(1, pts.length - 1)) * w; };
-    var y = function (v) { return padT + (1 - (v - lo) / span) * (h - padT - padB); };
-    var d = pts.map(function (p, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.value).toFixed(1); }).join(' ');
-    var area = d + ' L' + x(pts.length - 1).toFixed(1) + ' ' + h + ' L0 ' + h + ' Z';
-    var fill = document.createElementNS(ns, 'path'); fill.setAttribute('class', 'fill'); fill.setAttribute('d', area); svg.appendChild(fill);
-    var line = document.createElementNS(ns, 'path'); line.setAttribute('class', 'line'); line.setAttribute('d', d); svg.appendChild(line);
-    var axis = document.createElementNS(ns, 'line'); axis.setAttribute('class', 'axis');
-    axis.setAttribute('x1', 0); axis.setAttribute('x2', w); axis.setAttribute('y1', h); axis.setAttribute('y2', h); svg.appendChild(axis);
     var frag = document.createDocumentFragment();
-    if (data.title) frag.appendChild(el('p', 'chart-title', data.title));
-    frag.appendChild(svg);
-    var range = el('div', 'range');
-    range.appendChild(el('span', null, String(pts[0].bucket)));
-    range.appendChild(el('span', null, String(pts[pts.length - 1].bucket)));
-    frag.appendChild(range);
+    var v = renderVisual({ type: 'line', title: data.title, unit: data.unit, labels: pts.map(function (p) { return String(p.bucket); }), series: [{ name: '', values: pts.map(function (p) { return p.value; }) }] }, { bare: true });
+    if (v) frag.appendChild(v);
+    var vals = pts.map(function (p) { return p.value; });
     var lohi = el('p', 'lohi');
-    lohi.appendChild(document.createTextNode('Low ')); lohi.appendChild(el('b', null, fmtNumber(lo, data.unit)));
-    lohi.appendChild(document.createTextNode(' High ')); lohi.appendChild(el('b', null, fmtNumber(hi, data.unit)));
-    lohi.appendChild(document.createTextNode(' ' + pts.length + ' points'));
+    lohi.appendChild(document.createTextNode('Low ')); lohi.appendChild(el('b', null, fmtNumber(Math.min.apply(null, vals), data.unit)));
+    lohi.appendChild(document.createTextNode(' · High ')); lohi.appendChild(el('b', null, fmtNumber(Math.max.apply(null, vals), data.unit)));
+    lohi.appendChild(document.createTextNode(' · ' + pts.length + ' points'));
     frag.appendChild(lohi);
     return frag;
   }
@@ -6355,6 +7066,9 @@
     _localReply: localReply,
     _detectFacts: detectFacts,
     _parseMemoryCommand: parseMemoryCommand,
+    _aboutTopic: aboutTopic,
+    _renderVisual: renderVisual,
+    _visualPlain: visualPlain,
     _isSensitive: isSensitive,
     scriptOrigin: SCRIPT_ORIGIN
   };

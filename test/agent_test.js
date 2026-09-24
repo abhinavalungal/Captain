@@ -47,6 +47,15 @@ function fakeModel(script) {
   return impl;
 }
 
+/** A model that streams `text` as SSE, a few characters at a time. */
+function fakeStreamModel(text) {
+  return async function () {
+    const sse = [];
+    for (let i = 0; i < text.length; i += 7) sse.push('data: ' + JSON.stringify({ choices: [{ delta: { content: text.slice(i, i + 7) } }] }) + '\n\n');
+    sse.push('data: [DONE]\n\n');
+    return { ok: true, status: 200, headers: { get: () => 'text/event-stream' }, body: (async function* () { for (const c of sse) yield c; })() };
+  };
+}
 const say = (content) => ({ role: 'assistant', content: content });
 const callTool = (name, args, id) => ({
   role: 'assistant',
@@ -96,9 +105,10 @@ const run = (text, script, extra, opts) => agent.run(
   });
 
   // --- request shape ----------------------------------------------------------
-  t('tool definitions cover data, catalogue, briefing, help and charts', () => {
+  t('tool definitions cover data, catalogue, briefing, help and remembering the user (visuals are drawn inline)', () => {
     const names = agent.toolDefs().map((d) => d.function.name).sort();
-    assert.deepStrictEqual(names, ['get_fleet_briefing', 'get_vessel_data', 'list_available_data', 'search_app_help', 'show_chart']);
+    assert.deepStrictEqual(names, ['get_fleet_briefing', 'get_vessel_data', 'list_available_data', 'remember_user_details', 'search_app_help']);
+    assert.ok(/```visual|"visual"/.test(agent.systemPrompt({ appName: 'X' })) && /"type":"meter"/.test(agent.systemPrompt({ appName: 'X' })), 'the visual guide is missing');
   });
 
   await ta('every request carries the tools, the key and OpenRouter attribution', async () => {
@@ -153,28 +163,49 @@ const run = (text, script, extra, opts) => agent.run(
     assert.strictEqual(second[second.length - 2].role, 'assistant');
   });
 
-  await ta('show_chart renders a chart and never invents points', async () => {
-    const fetchImpl = fakeModel([
-      callTool('show_chart', { type: 'bar', title: 'Two numbers', labels: ['2', '19'], values: [2, 19] }),
-      say('Here it is — 19 is the bigger of the two.'),
-    ]);
+  const VIS = (spec) => '```visual\n' + JSON.stringify(spec) + '\n```';
+
+  await ta('an inline visual comes back in the answer text, in one model turn', async () => {
+    const reply = '19 is the bigger of the two.\n\n' + VIS({ type: 'bar', title: 'Two numbers', labels: ['2', '19'], values: [2, 19] });
+    const fetchImpl = fakeModel([say(reply)]);
     const out = await agent.run({ text: 'chart 2 vs 19', session, now: NOW, history: [], context: {} }, NO_DB,
       { orgId: 'o', env: ENV, fetchImpl });
-    assert.ok(out.chart, 'chart missing');
-    assert.deepStrictEqual(out.chart.values, [2, 19]);
-    assert.strictEqual(out.chart.type, 'bar');
+    assert.strictEqual(fetchImpl.seen.length, 1, 'a visual must not cost a second model turn');
+    assert.strictEqual(out.text, reply);
+    assert.ok(!out.blocked);
   });
 
-  await ta('a malformed chart call is rejected, not rendered', async () => {
+  await ta('a figure for their own vessel hidden inside a visual is blocked like one in prose', async () => {
+    const fetchImpl = fakeModel([say('Here you go.\n\n' + VIS({ type: 'stats', title: 'Your fleet this month', items: [{ label: 'Fuel', value: 412.5, unit: 'MT' }] }))]);
+    const out = await agent.run({ text: 'show my fuel', session, now: NOW, history: [], context: {} }, NO_DB,
+      { orgId: 'o', env: ENV, fetchImpl, fleetNames: async () => [] });
+    assert.ok(out.blocked, 'an invented fleet figure got through inside a visual: ' + out.text);
+    assert.ok(!/412/.test(out.text));
+  });
+
+  await ta('streaming: a visual is held until complete, announced, and released whole', async () => {
+    const reply = 'Phase-in:\n\n' + VIS({ type: 'timeline', events: [{ when: '2024', title: '40% of emissions' }, { when: '2026', title: '100%' }] }) + '\n\nThat is the schedule.';
+    const evts = [];
+    const out = await agent.run({ text: 'show the EU ETS phase-in', session, now: NOW, history: [], context: {} }, NO_DB,
+      { orgId: 'o', env: ENV, fetchImpl: fakeStreamModel(reply), onDelta: (e) => evts.push(e), fleetNames: async () => [] });
+    assert.ok(evts.some((e) => e.t === 'status' && e.phase === 'visual'), 'no "Preparing a visual" status');
+    const block = evts.filter((e) => e.t === 'delta').map((e) => e.text).find((t) => /^```visual/.test(t));
+    assert.ok(block && /\n```\n?$/.test(block), 'the visual was not released as one piece: ' + JSON.stringify(block));
+    assert.ok(!out.blocked && /That is the schedule/.test(out.text), out.text);
+  });
+
+  await ta('remember_user_details offers what the user said, and nothing they did not', async () => {
     const fetchImpl = fakeModel([
-      callTool('show_chart', { type: 'bar', labels: ['a', 'b', 'c'], values: [1, 2] }),
-      say('I could not draw that.'),
+      callTool('remember_user_details', { name: 'Abhinav', role: 'data engineer', company: 'Maersk', location: 'Kochi' }),
+      say('Good to meet you, Abhinav.'),
     ]);
-    const out = await agent.run({ text: 'chart it', session, now: NOW, history: [], context: {} }, NO_DB,
+    const out = await agent.run({ text: 'Abhinav here, data engineer at GeoServe, based in Kochi', session, now: NOW, history: [], context: {} }, NO_DB,
       { orgId: 'o', env: ENV, fetchImpl });
-    assert.strictEqual(out.chart, undefined);
+    const facts = (out.remember && out.remember.facts) || [];
+    assert.deepStrictEqual(facts.map((f) => f.key).sort(), ['location', 'name', 'role']);
+    assert.ok(!facts.some((f) => /Maersk/.test(f.value)), 'an invented company was offered');
     const toolMsg = JSON.parse(fetchImpl.seen[1].body.messages.slice(-1)[0].content);
-    assert.ok(/same length/.test(toolMsg.error), toolMsg.error);
+    assert.ok(/asked whether to remember/.test(toolMsg.note), JSON.stringify(toolMsg));
   });
 
   await ta('a database failure becomes a fact for the model, not a crash', async () => {
@@ -289,6 +320,8 @@ const run = (text, script, extra, opts) => agent.run(
   // --- router integration -------------------------------------------------------
   await ta('KRIS_MODE=agent: a greeting is answered by the fast lane with ZERO model calls', async () => {
     const fetchImpl = fakeModel([say('Morning, Nav.')]);
+    // Warm the path once: the first call in a process pays for compiling it.
+    await router.route({ text: 'hello', session, now: NOW, history: [], context: {} }, NO_DB, { orgId: 'o', env: ENV, fetchImpl });
     const t0 = Date.now();
     const out = await router.route(
       { text: 'hi', session, now: NOW, history: [], context: { userName: 'Nav' } },

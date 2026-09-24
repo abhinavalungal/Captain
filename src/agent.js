@@ -39,14 +39,14 @@ const engine = require('./engine');
 const rbac = require('./rbac');
 const { searchGuide, GUIDE } = require('./guide');
 const { buildBriefing } = require('./alerts');
-const { containsStatedFigure, providerRouting, SAFE_REDIRECT, llmConfigured, effortFor, DEFAULTS: LLM, HISTORY_TURNS, HISTORY_CHARS, MESSAGE_CHARS } = require('./companion_src');
-const { readSSE, accumulateOpenAI, SentenceGate, anySignal, hasReasoning, thinkingBeat } = require('./stream');
+const { containsStatedFigure, providerRouting, SAFE_REDIRECT, VISUAL_GUIDE, llmConfigured, effortFor, DEFAULTS: LLM, HISTORY_TURNS, HISTORY_CHARS, MESSAGE_CHARS } = require('./companion_src');
+const { readSSE, accumulateOpenAI, SentenceGate, anySignal, hasReasoning, thinkingBeat, guardable } = require('./stream');
 const { formatNow } = require('./instant_src');
-const { profilePrompt } = require('./profile');
+const { profilePrompt, userFactsFrom } = require('./profile');
 const { METRICS } = require('./config');
 const { MODEL_LABEL } = require('./identity');
 
-const AGENT_BUILD = '2026-09-24.kris-6';
+const AGENT_BUILD = '2026-09-24.kris-7';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -127,21 +127,25 @@ function toolDefs() {
     {
       type: 'function',
       function: {
-        name: 'show_chart',
+        name: 'remember_user_details',
         description:
-          'Draw a chart in the chat. Use it whenever a visual would help and you already have the numbers — '
-          + 'either numbers the user gave you, or numbers a previous get_vessel_data call returned. '
-          + 'Never invent values to fill a chart.',
+          'Offer to remember basic details the user has just told you about THEMSELVES in their latest message: '
+          + 'their name, what to call them, role, company, department or team, where they are based, time zone, '
+          + 'professional interests. Copy each value from their own words; never infer, guess or add anything '
+          + 'they did not say, and never pass passwords, IDs, contact details, health, religion, politics, family '
+          + 'or money. The user is asked to confirm before anything is saved, so never say it is saved.',
         parameters: {
           type: 'object',
           properties: {
-            type: { type: 'string', enum: ['bar', 'line'] },
-            title: { type: 'string' },
-            labels: { type: 'array', items: { type: 'string' }, description: '2 to 24 labels.' },
-            values: { type: 'array', items: { type: 'number' }, description: 'Same length as labels.' },
-            unit: { type: 'string', description: 'Optional unit, e.g. "MT".' },
+            name: { type: 'string' },
+            preferredName: { type: 'string', description: 'What they asked to be called.' },
+            role: { type: 'string' },
+            company: { type: 'string' },
+            department: { type: 'string' },
+            location: { type: 'string' },
+            timezone: { type: 'string', description: 'IANA time zone, e.g. Asia/Kolkata.' },
+            interests: { type: 'array', items: { type: 'string' } },
           },
-          required: ['type', 'labels', 'values'],
         },
       },
     },
@@ -167,8 +171,7 @@ function systemPrompt(opts) {
     + 'explanations, arithmetic, unit conversions, comparing numbers the user gives you, drafting, or just '
     + 'conversation. Do not steer unrelated questions back to ships. If someone asks which of two numbers is '
     + 'bigger, just answer it; that has nothing to do with vessel data. People type fast: read past typos to what '
-    + 'they mean and never comment on spelling. When the user asks to see or visualise something, or you compare '
-    + 'three or more numbers, show a chart.'
+    + 'they mean and never comment on spelling.'
   );
   lines.push(
     'You run on ' + MODEL_LABEL + '. If asked what model, LLM or AI you are, say you are K.R.1.S running on '
@@ -176,10 +179,11 @@ function systemPrompt(opts) {
   );
   lines.push(
     'You have tools for the things you cannot know: the user\'s own vessel records, their fleet briefing, and '
-    + 'the app\'s help centre, plus a chart. Decide for yourself when one is needed. Use them whenever they make '
-    + 'the answer more accurate or more useful: look up the records for anything about their ships, search the '
-    + 'help centre for anything about using the app, draw a chart when numbers compare or change over time. '
-    + 'Skip them when they add nothing; general knowledge and conversation need no tool.'
+    + 'the app\'s help centre. Decide for yourself when one is needed. Use them whenever they make the answer '
+    + 'more accurate or more useful: look up the records for anything about their ships, search the help centre '
+    + 'for anything about using the app. Skip them when they add nothing; general knowledge and conversation '
+    + 'need no tool. When the user tells you about themselves (their name, role, company, team, location, time '
+    + 'zone or interests), call remember_user_details with exactly what they said, then reply naturally.'
   );
   lines.push(
     'THE ONE HARD RULE: never state, estimate or imply a figure about this user\'s vessels unless a tool '
@@ -217,8 +221,9 @@ function systemPrompt(opts) {
     lines.push('The user is currently viewing the vessel "' + opts.vesselName
       + '" in the app, so an unqualified "the vessel" probably means that one.');
   }
-  const about = profilePrompt(opts.profile);
+  const about = profilePrompt(opts.profile, opts.userName);
   if (about) lines.push(about);
+  lines.push(VISUAL_GUIDE);
   return lines.join('\n\n');
 }
 
@@ -311,21 +316,11 @@ function makeTools(input, getDb, opts) {
       return { matches: hits.map(function (g) { return { title: g.title, answer: g.answer }; }) };
     },
 
-    async show_chart(args) {
-      const labels = Array.isArray(args && args.labels) ? args.labels.map(String) : [];
-      const values = Array.isArray(args && args.values) ? args.values.map(Number) : [];
-      if (labels.length < 2 || labels.length !== values.length || labels.length > 24) {
-        return { error: 'labels and values must be the same length, between 2 and 24 points' };
-      }
-      if (values.some(function (v) { return !isFinite(v); })) return { error: 'values must all be numbers' };
-      visuals.chart = {
-        type: args.type === 'line' ? 'line' : 'bar',
-        title: args.title ? String(args.title).slice(0, 80) : undefined,
-        labels: labels.slice(0, 24),
-        values: values.slice(0, 24),
-        unit: args.unit ? String(args.unit).slice(0, 16) : undefined,
-      };
-      return { ok: true, note: 'chart is now displayed to the user; do not repeat every value in your reply' };
+    async remember_user_details(args) {
+      const heard = userFactsFrom(args, input.text);
+      if (!heard.length) return { error: 'nothing offered: every value must be something the user said about themselves in their latest message' };
+      visuals.remember = heard;
+      return { offered: heard.map(function (f) { return f.key; }), note: 'The user will be asked whether to remember these. Do not say they are saved.' };
     },
   };
 
@@ -538,6 +533,7 @@ async function run(input, getDb, opts) {
         shown += sep + piece;
         opts.onDelta({ t: 'delta', text: sep + piece });
       },
+      onHold: function () { opts.onDelta({ t: 'status', text: 'Preparing a visual', phase: 'visual' }); },
     });
     gate._first = true;
   };
@@ -671,6 +667,7 @@ function statusFor(calls) {
   if (names.indexOf('get_vessel_data') >= 0) return 'Reading the records';
   if (names.indexOf('get_fleet_briefing') >= 0) return 'Checking your fleet';
   if (names.indexOf('search_app_help') >= 0) return 'Looking that up';
+  if (names.indexOf('remember_user_details') >= 0) return 'Noting that';
   return 'Working on it';
 }
 
@@ -706,7 +703,7 @@ function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alread
     out = 'I did not manage to put an answer together for that one. Try asking it a different way?';
     if (streaming && opts && opts.onDelta) opts.onDelta({ t: 'replace', text: out });
   } else if (!visuals.dataUsed && !blocked) {
-    if (containsStatedFigure(out, fleet || [])) {
+    if (containsStatedFigure(guardable(out), fleet || [])) {
       blocked = true;
       out = "I don't want to guess at one of your figures. Ask me directly \u2014 for example "
         + '"fuel consumption for <vessel> last month" \u2014 and I\'ll pull it from the records.';
@@ -725,6 +722,8 @@ function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alread
   if (visuals.provenance) answer.provenance = visuals.provenance;
   if (visuals.unit) answer.unit = visuals.unit;
   if (visuals.pending) answer.pending = visuals.pending;
+  // Details the model heard the user state about themselves: the widget asks before keeping any.
+  if (visuals.remember && visuals.remember.length) answer.remember = { facts: visuals.remember };
   if (blocked) answer.blocked = true;
   if (streaming) answer.streamed = true;
   if (trace.length) answer.toolsUsed = trace.map(function (t) { return t.tool; });

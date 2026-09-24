@@ -90,10 +90,18 @@ const STOPWORDS = new Set(['how', 'do', 'does', 'did', 'i', 'a', 'an', 'the', 'i
   'my', 'me', 'can', 'you', 'please', 'for', 'in', 'on', 'and', 'or', 'it', 'this', 'that', 'so',
   // Question words carry no topic. Without this, 'what' alone could pull a
   // random help article for a sentence that has nothing to do with the app.
-  'what', 'whats', 'which', 'when', 'where', 'why', 'who', 'was', 'now']);
+  'what', 'whats', 'which', 'when', 'where', 'why', 'who', 'was', 'now',
+  // Nor do these. "about" alone once let "what you know about me?" match the
+  // "about kris" alias and answer a personal question with the feature list.
+  'about', 'know', 'tell', 'show', 'give', 'get', 'got', 'want', 'need', 'have', 'has', 'had', 'any', 'anything',
+  'something', 'everything', 'some', 'your', 'yours', 'we', 'us', 'our', 'be', 'am', 'will', 'would', 'could',
+  'should', 'myself', 'mine', 'u', 'ur', 'abt', 'remember', 'think', 'work']);
+
+// "Kris, what …" addresses K.R.1.S; it does not ask about K.R.1.S.
+const VOCATIVE_RE = /^\s*(?:(?:hey|hi|hello|ok|okay)\s+)?(?:kris|k\.?\s?r\.?\s?1\.?\s?s\.?)\s*[,:!-]\s*/i;
 
 function tokenize(text) {
-  return foldTokens(normalizeTerm(text)).split(' ').filter((w) => w && !STOPWORDS.has(w));
+  return foldTokens(normalizeTerm(String(text || '').replace(VOCATIVE_RE, ''))).split(' ').filter((w) => w && !STOPWORDS.has(w));
 }
 
 function guideTokenSet(g) {
@@ -135,8 +143,11 @@ function matchGuide(text) {
   // A short question can match on one solid word ("export report"). A long
   // one needs more than one overlapping word, or a single generic word like
   // "last" would claim sentences that have nothing to do with the app.
+  // Length counts every word typed, so a long sentence that happens to be
+  // mostly filler ("tell me a joke about ships") still needs two.
   const contentWords = tokenize(text).length;
-  const need = contentWords >= 4 ? 2 : 1;
+  const allWords = String(text || '').trim().split(/\s+/).length;
+  const need = contentWords >= 4 || allWords >= 6 ? 2 : 1;
   const [top, second] = ranked;
   if (top.score < need) return null;
   if (second && second.score >= top.score - 0.4) return null;

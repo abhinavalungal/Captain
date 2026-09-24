@@ -209,12 +209,94 @@ function boot(opts, storage) {
     const msg = () => w.q('.turn.assistant .msg');
     const p0 = msg().querySelector('p');
     assert(p0 && p0.textContent === 'Intro paragraph.', 'first block not shown');
-    await wait(520);
+    // Wait for the reveal to show every delta (the final payload is held back until 1.1 s).
+    for (let t = Date.now(); Date.now() - t < 800 && !/two$/.test(msg().textContent); ) await wait(15);
     assert(msg().querySelector('p') === p0, 'a finished block was rebuilt');
     assert(msg().querySelectorAll('.codeblock').length === 1 && /const b = 2/.test(msg().querySelector('.codeblock pre').textContent), 'a blank line split the code block');
     const streamed = msg().innerHTML.replace(/<span class="caret"><\/span>/g, '');
     await w.idle();
     assert(msg().innerHTML === streamed, 'streamed DOM differs from the final render:\nS ' + streamed + '\nF ' + msg().innerHTML);
+  });
+
+  const VIS = (spec) => '```visual\n' + (typeof spec === 'string' ? spec : JSON.stringify(spec)) + '\n```';
+
+  await ta('visuals: every type renders as a component, never as code; a malformed one renders nothing', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    const text = [
+      'Here is the overview.',
+      VIS({ type: 'stats', title: 'Key figures', items: [{ label: 'Limit 2025', value: 89.34, unit: 'gCO2e/MJ', tone: 'good' }, { label: 'Penalty', value: 2400, unit: 'EUR/t' }] }),
+      VIS({ type: 'bar', title: 'By fuel', unit: 'MJ', labels: ['HFO', 'MGO', 'LNG'], values: [120, 80, -20], highlight: 'LNG' }),
+      VIS({ type: 'line', title: 'Trend', labels: ['2024', '2025', '2026'], series: [{ name: 'A', values: [1, 2, 3] }, { name: 'B', values: [3, 2, 1] }] }),
+      VIS({ type: 'breakdown', title: 'Mix', unit: '%', items: [{ label: 'HFO', value: 60 }, { label: 'MGO', value: 30 }, { label: 'LNG', value: 10 }] }),
+      VIS({ type: 'meter', title: 'CII', value: 3.6, min: 0, max: 10, better: 'lower', bands: [{ label: 'A', to: 2 }, { label: 'B', to: 4 }, { label: 'C', to: 6 }, { label: 'D', to: 8 }, { label: 'E', to: 10 }] }),
+      VIS({ type: 'compare', items: [{ name: 'EU ETS', points: ['Prices CO2'] }, { name: 'FuelEU', points: ['Limits intensity'] }], highlight: 'FuelEU' }),
+      VIS({ type: 'steps', steps: [{ title: 'Collect', detail: 'Noon reports' }, { title: 'Verify' }, 'Submit'] }),
+      VIS({ type: 'timeline', events: [{ when: '2024', title: '40%' }, { when: '2026', title: '100%' }] }),
+      VIS({ type: 'dashboard', title: 'Fleet', blocks: [{ type: 'stats', items: [{ label: 'Ships', value: 12 }] }, { type: 'dashboard', blocks: [] }, { type: 'bar', labels: ['a', 'b'], values: [1, 2] }] }),
+      VIS('{"type":"bar","labels":["only one"],"values":[1'),
+      'And that is the picture.',
+    ].join('\n\n');
+    w.respond(async () => jsonResponse({ status: 'answer', source: 'agent', text: text }));
+    await w.type('show me everything about fueleu');
+    await w.idle();
+    const m = w.q('.turn.assistant.last .msg');
+    const n = (s) => m.querySelectorAll(s).length;
+    assert(n(':scope > .vz-stats .vz-stat') === 2 && m.querySelector(':scope > .vz-stats .vz-tone.t-good'), 'stats');
+    assert(n(':scope > .vz-bar .vz-row') === 3 && m.querySelector(':scope > .vz-bar .vz-row.hi') && m.querySelector(':scope > .vz-bar .vz-track i.neg'), 'bars (highlight, negative)');
+    assert(m.querySelector('.vz-line .vz-plot') && n('.vz-line path.ln') === 2 && m.querySelector('.vz-line .vz-lg'), 'line with a legend');
+    assert(n('.vz-breakdown .vz-stack span') === 3 && /60%/.test(m.querySelector('.vz-legend').textContent), 'breakdown');
+    assert(n('.vz-meter .vz-mseg') === 5 && m.querySelector('.vz-mseg.on').classList.contains('t-good') && /B/.test(m.querySelector('.vz-mh .vz-tone').textContent), 'meter: rating B, a good band');
+    assert(n('.vz-compare .vz-card') === 2 && m.querySelector('.vz-card.hi .vz-best'), 'compare');
+    assert(n('.vz-flow li') === 3 && n('.vz-tl li') === 2, 'steps and timeline');
+    assert(n('.vz-dashboard .vz-dash > .vz') === 2, 'dashboard: two valid blocks, no nested dashboard');
+    assert(!m.querySelector('.codeblock') && !/"type"/.test(m.textContent), 'JSON leaked as code or text');
+    // A figure's own class must not be reused inside it (it once stripped the steps card of its padding).
+    for (const fig of m.querySelectorAll('figure.vz')) {
+      const own = [...fig.classList].find((c) => /^vz-/.test(c));
+      assert(!fig.querySelector('.' + own), own + ' is also used inside its own figure');
+    }
+    assert(/And that is the picture\./.test(m.textContent), 'prose after a malformed visual was lost');
+  });
+
+  await ta('visuals: spec text is text — markup in a label never becomes an element', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({ status: 'answer', source: 'agent', text: VIS({ type: 'bar', title: '<img src=x onerror=alert(1)>', labels: ['<b>a</b>', 'b'], values: [1, 2] }) }));
+    await w.type('chart it');
+    await w.idle();
+    const m = w.q('.turn.assistant.last .msg');
+    assert(m.querySelector('.vz-bar') && !m.querySelector('img') && !m.querySelector('.vz-bl b'), m.innerHTML.slice(0, 300));
+    assert(/<img/.test(m.querySelector('.vz-t').textContent), 'the title should read as literal text');
+  });
+
+  await ta('visuals: copying an answer gives words, not JSON', async () => {
+    const w = boot();
+    await wait(20);
+    const plain = w.window.KRIS._visualPlain('Figures:\n\n' + VIS({ type: 'stats', title: 'Key figures', items: [{ label: 'Limit', value: 89.34, unit: 'gCO2e/MJ' }] }) + '\n\nDone.');
+    assert(/Limit: 89\.34 gCO2e\/MJ/.test(plain) && !/"type"/.test(plain) && /Done\./.test(plain), plain);
+  });
+
+  await ta('visuals: while the server holds one, a placeholder shows where it will land; then the component replaces it', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    const vis = VIS({ type: 'timeline', events: [{ when: '2024', title: '40%' }, { when: '2026', title: '100%' }] });
+    const events = [
+      { t: 'delta', text: 'The phase-in:\n\n' },
+      { t: 'status', text: 'Preparing a visual', phase: 'visual' },
+      { t: 'delta', text: vis + '\n' },
+      { t: 'final', status: 200, data: { status: 'answer', source: 'agent', text: 'The phase-in:\n\n' + vis, streamed: true } },
+    ];
+    w.respond(async () => ndjsonResponse(events, (i) => (i === 2 ? 400 : 60)));
+    await w.type('show the phase-in');
+    await wait(330);
+    assert(w.q('.turn.assistant .vz-skel'), 'no placeholder while the visual is held');
+    await w.idle();
+    const m = w.q('.turn.assistant.last .msg');
+    assert(!m.querySelector('.vz-skel') && m.querySelector('.vz-timeline'), 'the component did not replace the placeholder');
   });
 
   await ta('streaming: a slow but steady answer is never cut off by the client timeout', async () => {

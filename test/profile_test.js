@@ -81,8 +81,12 @@ const ALEX = {
     }
     assert.ok(/never supply, confirm or change a figure/.test(block), 'guard sentence missing');
     assert.ok(/never override THE ONE RULE/.test(block), 'instructions must be subordinate to the data rule');
-    assert.strictEqual(profilePrompt(null), '');
-    assert.strictEqual(profilePrompt({}), '');
+    // Nothing known is said out loud, so the model has no gap to fill with a guess.
+    for (const empty of [null, {}]) {
+      assert.ok(/ABOUT THE USER — nothing yet/.test(profilePrompt(empty)) && /Never guess or invent/.test(profilePrompt(empty)), 'empty profile block');
+    }
+    assert.ok(/anything not listed here, you do not know/.test(block), 'the known-facts block must close the gap too');
+    assert.ok(/Address them as: Nav/.test(profilePrompt(null, 'Nav')), 'the chat\'s name counts as known');
   });
 
   await ta('companion prompt: carries the profile; a "detailed" preference lifts the one-line rule', async () => {
@@ -93,7 +97,7 @@ const ALEX = {
     const detailed = companion.systemPrompt(Object.assign({}, base, { profile: { style: { length: 'detailed' } } }));
     assert.ok(!/one or two sentences/.test(detailed), 'detailed preference should not be forced into one line');
     assert.ok(/thorough answers/.test(detailed));
-    assert.ok(!/ABOUT THE USER/.test(companion.systemPrompt(base)), 'no profile, no block');
+    assert.ok(/ABOUT THE USER — nothing yet/.test(companion.systemPrompt(base)), 'no profile: the prompt says nothing is known');
   });
 
   await ta('companion over the mock model: the profile reaches the system message', async () => {
@@ -170,7 +174,7 @@ const ALEX = {
       assert.ok(/Marine emissions analyst/.test(out.text) && !/calm guide/.test(out.text), q + ' -> ' + out.text);
     }
     out = await ask('tell about me', null);
-    assert.ok(/don't know anything about you yet/.test(out.text) && out.pending && out.pending.kind === 'name', out.text);
+    assert.ok(/don.t have enough information about you yet/.test(out.text) && out.pending && out.pending.kind === 'name', out.text);
     out = await ask('what ?', null);
     assert.ok(/didn’t get that right/.test(out.text) && out.instant, 'a bare "what?" went to the model');
     out = await ask('who am i talking to', null);

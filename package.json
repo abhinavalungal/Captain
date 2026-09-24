@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/run.js && node test/instant_test.js && node test/persona_test.js && node test/agent_test.js && node test/companion_test.js && node test/reasoning_test.js && node test/stream_test.js && node test/widget.js && node test/widget_memory.js && node test/profile_test.js && node test/server.js && node test/cors_test.js && node test/auth_test.js",
+    "test": "node test/run.js && node test/instant_test.js && node test/persona_test.js && node test/agent_test.js && node test/companion_test.js && node test/reasoning_test.js && node test/stream_test.js && node test/widget.js && node test/widget_memory.js && node test/profile_test.js && node test/about_me_test.js && node test/server.js && node test/cors_test.js && node test/auth_test.js",
     "test:offline": "KRIS_TEST_URL= npm test",
     "bench": "node test/latency_bench.js",
     "discover": "node scripts/discover.js",

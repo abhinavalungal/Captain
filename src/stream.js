@@ -10,7 +10,10 @@
  *   SentenceGate                 release model text to the user a sentence at
  *                                a time, each sentence checked by the same
  *                                fabrication guard that used to run on the
- *                                whole reply
+ *                                whole reply; a ```visual block is held until
+ *                                complete and checked as one unit
+ *   visualText(block)            a visual block's numbers as guard-readable
+ *                                sentences
  *
  * Why sentence-gated: the output guard (companion_src.containsStatedFigure)
  * already judges a reply sentence by sentence, splitting on exactly the same
@@ -126,6 +129,59 @@ function accumulateOpenAI() {
 // Same boundaries the guard splits on: whitespace after . ! ? — or a newline.
 const BOUNDARY_RE = /[.!?]\s+|\n+/g;
 const CHART_START_RE = /(^|\n)[ \t]*CHART\b/;
+const VISUAL_OPEN_RE = /(^|\n)([ \t]*```[ \t]*visual[ \t]*)(?=\n|$)/i;
+const FENCE_CLOSE_END_G = /\n[ \t]*```[ \t]*(?=\n|$)/g;
+const FENCE_CLOSE_LINE_G = /\n[ \t]*```[ \t]*(?=\n)/g;
+
+/** The first ```visual block in `buf`: { start, end } (end -1 while it is still open), or null. */
+function findVisual(buf, final) {
+  const m = VISUAL_OPEN_RE.exec(buf);
+  if (!m) return null;
+  const start = m.index + m[1].length;
+  // Mid-stream a fence only counts as closed once its line has ended.
+  const close = final ? FENCE_CLOSE_END_G : FENCE_CLOSE_LINE_G;
+  close.lastIndex = start + m[2].length;
+  const c = close.exec(buf);
+  if (!c) return { start, end: -1 };
+  let end = c.index + c[0].length;
+  if (buf.charAt(end) === '\n') end += 1;
+  return { start, end };
+}
+
+/** A whole reply as the guard should read it: each visual block turned into visualText. */
+function guardable(text) {
+  return String(text || '').replace(/(^|\n)([ \t]*```[ \t]*visual[ \t]*\n[\s\S]*?(?:\n[ \t]*```[ \t]*(?=\n|$)|$))/gi,
+    function (all, pre, block) { return pre + visualText(block); });
+}
+
+/**
+ * A visual block's content as plain sentences for the fabrication guard:
+ * every number beside its unit and the names around it ("Aurora Trader ·
+ * Fuel · Jan 41.2 MT."), one per line. A figure hidden in JSON is judged
+ * exactly like one written in prose. Unparseable JSON is judged as it is.
+ */
+function visualText(block) {
+  const json = String(block || '').replace(/^\s*```[ \t]*visual[ \t]*\n?/i, '').replace(/\n?[ \t]*```[ \t]*\n?$/, '');
+  let spec;
+  try { spec = JSON.parse(json); } catch (_) { return json; }
+  const lines = [];
+  const str = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+  const visit = (o, ctx, unit, labels) => {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { o.forEach((x) => visit(x, ctx, unit, labels)); return; }
+    const u = typeof o.unit === 'string' ? o.unit : unit;
+    const here = [ctx, str(o.title), str(o.name), str(o.label), str(o.when)].filter(Boolean).join(' ');
+    const labs = Array.isArray(o.labels) ? o.labels : labels;
+    if (o.value != null) lines.push(here + ' ' + str(o.value) + ' ' + (u || ''));
+    if (o.target != null) lines.push(here + ' ' + str(o.target) + ' ' + (u || ''));
+    if (Array.isArray(o.values)) o.values.forEach((v, i) => lines.push(here + ' ' + str(labs && labs[i]) + ' ' + str(v) + ' ' + (u || '')));
+    ['detail', 'note', 'verdict', 'delta', 'subtitle'].forEach((k) => { if (typeof o[k] === 'string') lines.push(here + ' ' + o[k]); });
+    if (Array.isArray(o.points)) o.points.forEach((p) => lines.push(here + ' ' + str(p)));
+    ['items', 'series', 'steps', 'events', 'blocks', 'bands'].forEach((k) => visit(o[k], here, u, labs));
+  };
+  visit(spec, '', '', null);
+  return lines.map((l) => l.replace(/\s+/g, ' ').trim() + '.').join('\n');
+}
 
 /**
  * Releases text a sentence at a time.
@@ -139,16 +195,23 @@ const CHART_START_RE = /(^|\n)[ \t]*CHART\b/;
  *
  * A trailing `CHART {...}` line (the companion's chart convention) is never
  * released; it stays in the buffer for the final payload to parse.
+ *
+ * A ```visual block is held until its closing fence, judged as one unit (its
+ * numbers read beside their labels and units, see visualText), and released
+ * whole. onHold() fires once when one starts, so the user can be told a
+ * visual is on its way while it is held.
  */
 class SentenceGate {
-  constructor({ check, emit, guard = true }) {
+  constructor({ check, emit, guard = true, onHold }) {
     this.check = check || (() => false);
     this.emitFn = emit || (() => {});
+    this.onHold = onHold || (() => {});
     this.guard = guard;
     this.buf = '';
     this.released = '';
     this.blocked = false;
     this.held = false; // a CHART line has started; nothing after it is released
+    this.holding = false; // a visual block is open
   }
 
   push(text) {
@@ -164,11 +227,33 @@ class SentenceGate {
   }
 
   _drain(final) {
-    if (this.held && !final) return;
+    for (;;) {
+      if (this.blocked || (this.held && !final)) return;
+      const v = findVisual(this.buf, final);
+      if (v && v.start === 0) {
+        if (v.end < 0 && !final) {
+          if (!this.holding) { this.holding = true; this.onHold(); }
+          return;
+        }
+        const block = this.buf.slice(0, v.end < 0 ? this.buf.length : v.end);
+        if (this.guard && this.check(visualText(block))) { this.blocked = true; return; }
+        this.holding = false;
+        this.buf = this.buf.slice(block.length);
+        this.released += block;
+        this.emitFn(block);
+        continue;
+      }
+      const before = this.buf.length;
+      this._drainText(final, v ? v.start : this.buf.length);
+      if (!v || this.blocked || this.buf.length === before) return;
+    }
+  }
+
+  _drainText(final, visualAt) {
     let cut;
     const chartAt = this.buf.search(CHART_START_RE);
-    const limit = chartAt >= 0 ? chartAt : this.buf.length;
-    if (final) {
+    const limit = Math.min(chartAt >= 0 ? chartAt : this.buf.length, visualAt);
+    if (final || visualAt < this.buf.length) {
       cut = limit;
     } else {
       cut = 0;
@@ -226,4 +311,4 @@ function anySignal(signals) {
   return ctrl.signal;
 }
 
-module.exports = { readSSE, readNDJSON, accumulateOpenAI, SentenceGate, anySignal, hasReasoning, thinkingBeat };
+module.exports = { readSSE, readNDJSON, accumulateOpenAI, SentenceGate, anySignal, hasReasoning, thinkingBeat, visualText, guardable };

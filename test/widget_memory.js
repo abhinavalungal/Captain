@@ -952,6 +952,80 @@ const ALEX = "I'm Alex and I work as a marine emissions analyst.";
     assert(w.qa('.memo').length === 1, 'two cards');
   });
 
+  // =========================================================================
+  //  "What do you know about me?" — the reported failure, end to end
+  // =========================================================================
+  await ta('the reported flow: asked with nothing known → asks for basics; a bare name answers it; saved details come back in a new chat, exactly', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    const before = w.posts().length;
+    await w.type('what you know about me?');
+    await w.idle();
+    let t = w.q('.turn.assistant.last .msg').textContent;
+    assert(/don’t have enough information about you yet/.test(t) && /your name/.test(t), t);
+    assert(!/Vessel data|Fleet briefing/.test(t), 'answered with the feature list again');
+    assert(w.posts().length === before, 'a question about the user went to the server');
+
+    // A bare name is the answer to that question.
+    w.respond(async (b) => jsonResponse(b.pending && b.pending.kind === 'name'
+      ? { status: 'answer', source: 'identity', text: 'Lovely to meet you, Abhinav.', remember: { userName: 'Abhinav' } }
+      : { status: 'answer', source: 'agent', text: 'Noted.' }));
+    await w.type('Abhinav');
+    await w.idle();
+    assert(w.lastBody().pending && w.lastBody().pending.kind === 'name', 'the name was not sent as the answer to the question');
+    assert(w.q('.turn.assistant.last .memo'), 'no offer to remember the name');
+    w.q('.turn.assistant.last .memo .btn.primary').click();
+    assert(w.window.KRIS.memory.get().fields.name.value === 'Abhinav', 'name not saved');
+
+    await w.type("I'm a data engineer at GeoServe");
+    await w.idle();
+    w.q('.turn.assistant.last .memo .btn.primary').click();
+    const f = w.window.KRIS.memory.get().fields;
+    assert(f.role.value === 'Data engineer' && f.company.value === 'GeoServe', JSON.stringify(f));
+
+    // Later, in a new conversation: exactly what was saved, nothing invented.
+    w.window.KRIS.newChat();
+    await wait(20);
+    const sent = w.posts().length;
+    for (const q of ['What do you know about me?', 'who am i', 'what information do you have about me']) {
+      await w.type(q);
+      await w.idle();
+      t = w.q('.turn.assistant.last .msg').textContent;
+      assert(/Name:\s*Abhinav/.test(t) && /Role:\s*Data engineer/.test(t) && /Company:\s*GeoServe/.test(t), q + ' -> ' + t);
+      assert(!/Location|Department/.test(t), 'listed something never given: ' + t);
+    }
+    await w.type('what is my name');
+    await w.idle();
+    assert(/You’re Abhinav/.test(w.q('.turn.assistant.last .msg').textContent), w.q('.turn.assistant.last .msg').textContent);
+    assert(w.posts().length === sent, 'recall reached the server');
+  });
+
+  await ta('with some details known, recall names what it does not know yet', async () => {
+    const w = boot({ user: { id: 'u1', name: 'Priya Nair' } });
+    await wait(20);
+    w.window.KRIS.open();
+    await w.type('what do you know about me');
+    await w.idle();
+    const t = w.q('.turn.assistant.last .msg').textContent;
+    assert(/Priya Nair/.test(t) && /don’t know your role or where you work yet/.test(t), t);
+  });
+
+  await ta('details only the model picked out (remember.facts) are offered with the same consent card', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({ status: 'answer', source: 'agent', text: 'Good to meet you, Abhinav.',
+      remember: { facts: [{ key: 'name', value: 'Abhinav' }, { key: 'role', value: 'data engineer' }, { key: 'location', value: 'Kochi' }] } }));
+    await w.type('Abhinav, data engineer, GeoServe, Kochi');
+    await w.idle();
+    const memo = w.q('.turn.assistant.last .memo');
+    assert(memo && memo.querySelectorAll('li').length === 3, 'offer: ' + (memo && memo.textContent));
+    assert(!w.window.KRIS.memory.get().fields.name, 'saved before the user said yes');
+    memo.querySelector('.btn.primary').click();
+    assert(w.window.KRIS.memory.get().fields.location.value === 'Kochi');
+  });
+
   console.log(`\nWidget memory: ${pass} passed, ${fails.length} failed`);
   fails.forEach((f) => console.log('  FAIL ' + f));
   process.exit(fails.length ? 1 : 0);

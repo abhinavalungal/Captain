@@ -122,6 +122,50 @@ exposes `memory`, `settings`, `view`, `conversation`, `open`, `close` and
 `answer` events. Voice, files, tools, other models or workspace knowledge
 can be added on these seams without rebuilding the widget.
 
+### Upgrading to kris-7 (knowing the user, visual answers)
+
+- Deploy together: `src/identity.js`, `src/guide.js`, `src/profile.js`,
+  `src/stream.js`, `src/companion_src.js`, `src/agent.js`, `src/router.js`,
+  `src/httpHandler.js` and `public/kris-widget.js`. Build stamps are
+  `2026-09-24.kris-7`. No migration, no new environment variables.
+- **"What do you know about me?" is answered from what K.R.1.S knows, never
+  from the feature list.** It used to fail because the help-centre matcher
+  took the single word "about" as a topic and answered with "What K.R.1.S can
+  do". Now:
+  - One classifier recognises questions about the user by their shape — a
+    recall verb aimed at "me" ("what have you got on me", "anything you
+    remember of me"), "who am I", or "my name / role / company…" asked as a
+    question — with typos folded ("wat u kno abt me"). The widget and the
+    server carry the same code, and `test/about_me_test.js` runs one corpus
+    through both, plus near-misses that must not match ("what do you know
+    about my vessel", "what is my fuel consumption").
+  - The help centre ignores filler words and a leading "Kris," and needs two
+    real matches in any sentence of six words or more.
+  - With nothing known, the answer says so and asks for a name and a few
+    basics, and a bare "Abhinav" is taken as the reply. With some details
+    known, it lists exactly those and names what it doesn't know yet.
+  - The model is always told what is known about the user — or, in so many
+    words, that nothing is — and never to guess.
+  - Details the user states are offered for memory by the widget's local
+    detection and, in agent mode, by the model (`remember_user_details`).
+    The server keeps a model-proposed detail only if it appears in the
+    user's own message, and nothing is saved until the user says yes.
+- **Visual answers.** The model can put a ```` ```visual ```` block holding
+  one JSON spec anywhere in its answer: `stats` (key figures, with good /
+  watch / risk status), `bar`, `line` (up to three series, crosshair
+  tooltip), `breakdown` (part of a whole), `meter` (a value against a limit
+  or a rating scale such as CII A–E), `compare` (options side by side),
+  `steps`, `timeline`, and a `dashboard` of several. The prompt says when a
+  visual earns its place and when it doesn't. The widget draws them in one
+  design language — a validated categorical palette per theme, thin marks,
+  status only with an icon and a word, arrival animation once (and not at
+  all with reduced motion) — from strict, capped, text-only specs;
+  anything malformed renders nothing. The server holds each block until it
+  is complete, shows "Preparing a visual" meanwhile, and checks its numbers
+  with the same invented-figure guard as prose. The agent's `show_chart`
+  tool is gone: a visual no longer costs an extra model turn. Copying an
+  answer gives the visual as words, not JSON.
+
 ### Upgrading to kris-6 (GLM-5.3-Flash, tools by default, chat polish)
 
 - Deploy together: `src/companion_src.js`, `src/agent.js`, `src/router.js`,

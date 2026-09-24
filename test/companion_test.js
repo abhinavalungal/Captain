@@ -280,13 +280,21 @@ t('reasoning: OpenRouter gets an effort that follows the question; other servers
   const cfgV = readEnv(Object.assign({}, LLM_ENV, { KRIS_LLM_PROVIDER: 'openai_compat', KRIS_LLM_URL: 'http://vllm.test:8000' }));
   assert.strictEqual(buildRequest(cfgV, 'SYS', [], 'high').body.reasoning, undefined);
 });
-t('system prompt: answers general questions, allows real structure, and keeps the chart line', () => {
+t('system prompt: answers general questions, allows real structure, and teaches the visual blocks', () => {
   const p = systemPrompt({ appName: 'Shuddha now', guideSnippets: [] });
   assert.ok(!/no_think/.test(p));
   assert.ok(/Do not steer unrelated questions back to vessels/.test(p));
   assert.ok(/a table to compare/.test(p) && !/No headings, no tables/.test(p));
-  assert.ok(/CHART \{/.test(p));
+  assert.ok(/language is "visual"/.test(p) && /"type":"stats"/.test(p) && /"type":"timeline"/.test(p), 'the visual guide is missing');
 });
+TOP.push(ta('guard: a figure for their fleet inside a visual block is blocked, non-streamed too', async () => {
+  const vis = '```visual\n' + JSON.stringify({ type: 'bar', title: 'Your vessels, fuel last month', unit: 'MT', labels: ['Jan', 'Feb'], values: [412, 398] }) + '\n```';
+  const out = await converse('show me', { env: LLM_ENV, fetchImpl: ollamaStub('Here it is.\n\n' + vis) });
+  assert.ok(out.blocked, 'blocked: ' + out.blocked);
+  assert.ok(!/412/.test(out.text));
+  const ok = await converse('show me', { env: LLM_ENV, fetchImpl: ollamaStub('The phase-in:\n\n```visual\n{"type":"timeline","events":[{"when":"2024","title":"40%"},{"when":"2026","title":"100%"}]}\n```') });
+  assert.ok(!ok.blocked && /```visual/.test(ok.text), 'a public-fact visual must pass: ' + ok.text);
+}));
 t('general question: a calculation answer with numbers passes the guard end to end', async () => {
   const out = await converse('divide 22 by 7', { env: LLM_ENV, fetchImpl: ollamaStub('22 / 7 = 3.142857 (recurring). It is a common approximation of pi.') });
   assert.strictEqual(out.blocked, false);

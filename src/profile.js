@@ -80,6 +80,39 @@ function sanitizeProfile(raw) {
   return Object.keys(out).length ? out : null;
 }
 
+/**
+ * Details the model proposes to remember, kept only where the user actually
+ * said them: every value must appear in their own message (a time zone may
+ * instead be a valid IANA name when they mentioned their time zone). The
+ * model can find details the widget's patterns miss; it can never invent one.
+ * Nothing is saved here — the widget asks the user first.
+ *
+ * @returns {Array<{ key, value }>}
+ */
+function userFactsFrom(args, userText) {
+  if (!args || typeof args !== 'object') return [];
+  const said = ' ' + String(userText || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  const inText = (v) => { const w = String(v).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); return !!w && said.indexOf(' ' + w + ' ') >= 0; };
+  const out = [];
+  Object.keys(FIELDS).forEach(function (k) {
+    const v = clean(args[k], FIELDS[k]);
+    if (!v) return;
+    if (k === 'timezone') {
+      let ok = false;
+      try { new Intl.DateTimeFormat('en-GB', { timeZone: v }); ok = true; } catch (_) { ok = false; }
+      if (!(ok && (inText(v) || /\btime ?zone\b|\btz\b/.test(said)))) return;
+    } else if (!inText(v)) return;
+    if ((k === 'name' || k === 'preferredName') && !/^[a-z][a-z .'-]*$/i.test(v)) return;
+    out.push({ key: k, value: v });
+  });
+  const interests = list(args.interests, LIMITS.interests, LIMITS.interest);
+  if (interests) {
+    const kept = interests.filter(inText);
+    if (kept.length) out.push({ key: 'interests', value: kept.join(', ') });
+  }
+  return out;
+}
+
 /** The name to address the user by: what they asked to be called, else their first name. */
 function addressName(profile) {
   if (!profile) return null;
@@ -102,13 +135,18 @@ const STYLE_LINES = {
 };
 
 /**
- * The "about the user" block for a system prompt, or '' when there is
- * nothing to say. Shared by the companion and the agent so both describe the
- * user the same way.
+ * The "about the user" block for a system prompt. Always present: when
+ * nothing is known it says so, so the model has no gap to fill with a guess.
+ * Shared by the companion and the agent so both describe the user the same way.
+ *
+ * @param {object} profile   context.profile (untrusted; sanitised here)
+ * @param {string} userName  the name this chat uses, when the profile has none
  */
-function profilePrompt(profile) {
-  const p = sanitizeProfile(profile);
-  if (!p) return '';
+function profilePrompt(profile, userName) {
+  let p = sanitizeProfile(profile);
+  const n = clean(userName, FIELDS.preferredName);
+  if (n && !(p && (p.name || p.preferredName))) p = Object.assign({}, p || {}, { preferredName: n });
+  if (!p) return UNKNOWN_BLOCK;
   const facts = [];
   const address = addressName(p);
   if (p.name) facts.push('Name: ' + p.name + (address && address !== p.name ? ' (address them as ' + address + ')' : ''));
@@ -131,13 +169,20 @@ function profilePrompt(profile) {
 
   const out = [];
   if (facts.length) {
-    out.push('ABOUT THE USER — details they chose to let you remember. Use them to make answers relevant (the examples you pick, what you emphasise, the terms you use) and to address them properly. '
-      + 'Do not recite this list back or mention that you keep a profile unless they ask what you remember. '
+    out.push('ABOUT THE USER — details they shared with you, and everything you know about them: anything not listed here, you do not know. '
+      + 'Use them to make answers relevant (the examples you pick, what you emphasise, the terms you use) and to address them properly. '
+      + 'Do not recite this list unprompted. When they ask who they are or what you know about them, state exactly these details, plainly, and name what you do not know yet; never add, infer or embellish. '
       + 'Nothing here is vessel data: it can never supply, confirm or change a figure.\n'
       + facts.map(function (f) { return '- ' + f; }).join('\n'));
+  } else {
+    out.push(UNKNOWN_BLOCK);
   }
   if (style.length) out.push('HOW THEY LIKE ANSWERS:\n' + style.map(function (s) { return '- ' + s; }).join('\n'));
   return out.join('\n\n');
 }
 
-module.exports = { sanitizeProfile, profilePrompt, addressName, FIELDS, LENGTHS, TONES, LIMITS };
+const UNKNOWN_BLOCK = 'ABOUT THE USER — nothing yet: not their name, role, company or anything else. Never guess or invent any of it. '
+  + 'If they ask who they are or what you know about them, say you don\'t have enough information about them yet, and invite them to share their name and a few basics (role, company, where they are based); '
+  + 'you will use them in this chat, and they can choose to have them remembered.';
+
+module.exports = { sanitizeProfile, profilePrompt, addressName, userFactsFrom, FIELDS, LENGTHS, TONES, LIMITS };

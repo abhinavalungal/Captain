@@ -32,7 +32,7 @@ const { MODEL_LABEL } = require('./identity');
  *      unit-tested directly.
  */
 
-const { readSSE, readNDJSON, SentenceGate, anySignal, hasReasoning, thinkingBeat } = require('./stream');
+const { readSSE, readNDJSON, SentenceGate, anySignal, hasReasoning, thinkingBeat, guardable } = require('./stream');
 
 const DEFAULTS = {
   provider: 'openai_compat',
@@ -154,6 +154,24 @@ function extractChart(text) {
   return { text: text.replace(CHART_LINE_RE, '').trim(), chart: chart };
 }
 
+/**
+ * How the model asks for a visual: a ```visual block holding one JSON spec,
+ * placed where it belongs in the answer. The widget draws it; the server holds
+ * each block until it is complete and guards its numbers like prose. Shared
+ * by the companion and the agent.
+ */
+const VISUAL_GUIDE = 'VISUALS: when a picture makes the answer clearer, include one (at most two per answer) as a fenced code block whose language is "visual", holding one JSON object, placed where it belongs in the answer. Use one when the user asks to see, show, chart, graph, compare or visualise something, or when the answer compares options, sets out several key numbers or a trend, or walks through a process or a timeline. Never for small talk, a single fact, a yes/no answer or a short definition. Still state the key point in words; do not describe or mention the block itself. Pick the form by what the reader must do:\n'
+  + '- a few key figures: {"type":"stats","title":"…","items":[{"label":"…","value":89.34,"unit":"gCO2e/MJ","note":"…","tone":"good|warn|bad"}]}\n'
+  + '- amounts across categories: {"type":"bar","title":"…","unit":"…","labels":["A","B"],"values":[1,2],"highlight":"B"}\n'
+  + '- change over time: {"type":"line","title":"…","unit":"…","labels":["2024","2025","2026"],"series":[{"name":"…","values":[1,2,3]}]} (up to 3 series)\n'
+  + '- parts of a whole: {"type":"breakdown","title":"…","unit":"…","items":[{"label":"…","value":60},{"label":"…","value":40}]}\n'
+  + '- one value against a limit or a rating scale: {"type":"meter","title":"…","value":5.1,"unit":"…","min":0,"max":10,"target":6,"targetLabel":"Limit","better":"lower","bands":[{"label":"A","to":3},{"label":"B","to":5},{"label":"C","to":10}]}\n'
+  + '- options side by side: {"type":"compare","title":"…","items":[{"name":"…","tag":"…","points":["…","…"],"verdict":"…"}],"highlight":"…"}\n'
+  + '- a process or procedure: {"type":"steps","title":"…","steps":[{"title":"…","detail":"…"}]}\n'
+  + '- dated milestones or a phase-in: {"type":"timeline","title":"…","events":[{"when":"2025","title":"…","detail":"…"}]}\n'
+  + '- several views of one subject: {"type":"dashboard","title":"…","blocks":[ any of the above ]}\n'
+  + 'Strict JSON: double quotes, plain numbers (no units, thousands separators or % signs inside numbers), short labels, 2 to 12 points per chart. Every number must come from the user, from a tool result in this conversation, or be a well-established public figure (a regulation\'s threshold or phase-in, a conversion factor); never an estimate presented as the user\'s own data.';
+
 const SAFE_REDIRECT =
   "I don't want to guess at a number in conversation \u2014 ask me directly (for example \"fuel consumption for <vessel> last month\") and I'll pull it from the records.";
 
@@ -175,16 +193,14 @@ function systemPrompt(opts) {
   const userLine = opts.userName
     ? '\n\nThe user\'s name is ' + opts.userName + '. Address them by name occasionally and naturally \u2014 not in every reply.'
     : '';
-  const about = profilePrompt(opts.profile);
+  const about = profilePrompt(opts.profile, opts.userName);
   const profileBlock = about ? '\n\n' + about : '';
 
   return 'You are K.R.1.S (say it "Kris"), the assistant built into ' + opts.appName + ', a maritime compliance and fleet-analytics application. Your name is K.R.1.S; if asked, say so. K.R.1.S is a codename inspired by Lord Krishna, the calm charioteer who guides without taking the wheel. You are a capable general assistant in that spirit: serene, warm, clear-sighted and gently playful, never preachy. Do not quote scripture or make religious claims unless the user raises the subject, and treat it with respect when they do. You run on ' + MODEL_LABEL + ': if asked what model, LLM or AI you are, say you are K.R.1.S running on ' + MODEL_LABEL + ', and never name any other model, vendor or company.\n\n'
     + 'Answer whatever the user actually asks. General knowledge, explanations of concepts (maritime or otherwise), regulation (EU ETS, FuelEU Maritime, CII, EEXI, IMO), arithmetic and unit conversions, comparing numbers the user gives you, writing and code help, and questions about how to use the app are all yours to answer fully and well. Do not steer unrelated questions back to vessels or emissions. People type fast: read past typos and missing punctuation to what they mean ("whoch" is "which", "bisually" is "visually") and never comment on spelling. Work out what they actually need before answering; if a question is genuinely ambiguous, answer the most likely reading and say which one you took.\n\n'
     + 'Lead with the answer in your first sentence. Match the depth to the question: one sentence for a quick fact or a comparison of two numbers; for anything substantial, a complete, well-organised answer that covers what matters and stops there. Think multi-step problems through before you answer, check arithmetic and logic, and state results plainly; show working only where it helps the user follow. Be accurate rather than confident: if you are unsure, or something may have changed since your training, say so briefly.\n\n'
     + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data.\n\n'
-    + 'Charts: when the user asks to see, show, visualise, chart, graph or plot something, or you compare three or more numbers or describe a trend, and every number came from the user or from your own arithmetic on their numbers, end your reply with exactly one line in this form and nothing after it:\n'
-    + 'CHART {"type":"bar","title":"...","labels":["A","B"],"values":[1,2],"unit":""}\n'
-    + '(type is "bar" or "line"; 2 to 24 points). Still give the answer in words; the chart supports it. No chart for anything else.\n\n'
+    + VISUAL_GUIDE + '\n\n'
     + (opts.light && !(opts.profile && opts.profile.style && opts.profile.style.length === 'detailed') ? 'This is a short question: answer it directly in one or two sentences. Do not pad, do not add caveats, do not restate the question.\n\n' : '')
     + 'Formatting (Markdown): plain prose for short answers. For longer ones, use structure where it helps reading: **bold** for key terms, bullet or numbered lists for steps and options, a table to compare several items across the same attributes, ### headings only to separate the sections of a long answer, and fenced code blocks with a language for code. Link only to well-known official sources you are sure exist. No filler, and no closing summary of what you just said.' + nowLine + userLine + profileBlock + guideBlock + ctx;
 }
@@ -409,7 +425,7 @@ async function converse(text, opts) {
     try { data = await res.json(); } catch (_) { return { text: UNAVAILABLE, blocked: false, error: 'non-JSON response', provider: cfg.provider, model: cfg.model }; }
     const raw = (req.extract(data) || '').trim();
     if (!raw) return { text: UNAVAILABLE, blocked: false, error: 'empty reply', provider: cfg.provider, model: cfg.model };
-    if (containsStatedFigure(raw, names)) return { text: SAFE_REDIRECT, blocked: true, rawBlocked: raw, provider: cfg.provider, model: cfg.model };
+    if (containsStatedFigure(guardable(raw), names)) return { text: SAFE_REDIRECT, blocked: true, rawBlocked: raw, provider: cfg.provider, model: cfg.model };
     const parsed = extractChart(raw);
     return { text: parsed.text, chart: parsed.chart, blocked: false, provider: cfg.provider, model: cfg.model };
   }
@@ -418,6 +434,7 @@ async function converse(text, opts) {
   const gate = new SentenceGate({
     check: function (piece) { return containsStatedFigure(piece, names); },
     emit: function (piece) { opts.onDelta({ t: 'delta', text: piece }); },
+    onHold: function () { opts.onDelta({ t: 'status', text: 'Preparing a visual', phase: 'visual' }); },
   });
   const beat = thinkingBeat(opts.onDelta, 5000);
   const isJsonBody = /application\/json/i.test(String((res.headers && res.headers.get && res.headers.get('content-type')) || ''));
@@ -470,4 +487,4 @@ async function converse(text, opts) {
   return { text: parsed.text, chart: parsed.chart, blocked: false, streamed: true, provider: cfg.provider, model: cfg.model };
 }
 
-module.exports = { converse: converse, warmLLM: warmLLM, llmStatus: llmStatus, llmConfigured: llmConfigured, providerRouting: providerRouting, reasoningDirective: reasoningDirective, effortFor: effortFor, isLightMessage: isLightMessage, HISTORY_TURNS: HISTORY_TURNS, HISTORY_CHARS: HISTORY_CHARS, MESSAGE_CHARS: MESSAGE_CHARS, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
+module.exports = { VISUAL_GUIDE: VISUAL_GUIDE, converse: converse, warmLLM: warmLLM, llmStatus: llmStatus, llmConfigured: llmConfigured, providerRouting: providerRouting, reasoningDirective: reasoningDirective, effortFor: effortFor, isLightMessage: isLightMessage, HISTORY_TURNS: HISTORY_TURNS, HISTORY_CHARS: HISTORY_CHARS, MESSAGE_CHARS: MESSAGE_CHARS, containsStatedFigure: containsStatedFigure, extractChart: extractChart, systemPrompt: systemPrompt, buildRequest: buildRequest, readEnv: readEnv, SAFE_REDIRECT: SAFE_REDIRECT, DEFAULTS: DEFAULTS };
