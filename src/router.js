@@ -37,9 +37,10 @@ const { converse, isLightMessage, llmConfigured } = require('./companion_src');
 const { answerInstant, formatNow } = require('./instant_src');
 const identity = require('./identity');
 const agent = require('./agent');
+const turns = require('./turn');
 const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-24.kris-9';
+const ROUTER_BUILD = '2026-09-24.kris-10';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -61,6 +62,24 @@ const QUERY_FAILED = 'That lookup did not go through \u2014 nothing was changed.
  *             never hold the request's connection or block the reply
  */
 async function route(input, db, opts) {
+  // How this message relates to the conversation, decided once before
+  // anything answers: a new question, a follow-up, a correction, or the answer
+  // to a question K.R.1.S asked. A new question closes that question.
+  // (Without an open question this waits until the fast lane has passed:
+  // "Hi" needs no analysis.)
+  if (input.pending && input.pending.kind === 'clarify') {
+    input.turn = turns.analyseTurn(input);
+    if (input.turn.dropPending) input.pending = null;
+  }
+  const out = await routeTurn(input, db, opts);
+  // A follow-up says what it follows, so the user can see how it was read.
+  if (out && out.status === 'answer' && input.turn && input.turn.kind === 'follow_up' && input.turn.about && !out.context) {
+    out.context = { kind: 'follow_up', about: input.turn.about };
+  }
+  return out;
+}
+
+async function routeTurn(input, db, opts) {
   opts = opts || {};
   const env = opts.env || process.env;
   const getDb = typeof db === 'function' ? db : async function () { return db; };
@@ -74,18 +93,29 @@ async function route(input, db, opts) {
   // No database, no model, no network. "Hi" must never wait for either.
   const fast = fastLane(text, input, opts);
   if (fast) return fast;
+  if (!input.turn) input.turn = turns.analyseTurn(input);
 
   // A pending clarification or teach-confirmation is a data conversation in
   // flight — it belongs to the engine, which needs the records.
   if (input.pending) {
     const isTeach = input.pending.kind === 'teach';
-    return withDb(getDb, function (client) {
+    const r = await withDb(getDb, function (client) {
       return engine.ask(input, client, opts).then(function (r) {
         // Vocabulary may just have changed; make the new word count right away.
         if (isTeach && opts.orgId) { learnedCache.delete(opts.orgId); legacyLearned.delete(opts.orgId); }
         return tagSource(r, 'data');
       });
     });
+    // The same question coming straight back is a loop, not progress.
+    const loop = r.status === 'clarify' && turns.repeatsRecent(r.text, input.history);
+    if (r.status !== 'stale_pending' && !loop) return r;
+    // The message was not an answer to the open question: drop the question
+    // and route the message as the new request it is.
+    input.pending = null;
+    input.turn = turns.analyseTurn(input);
+    if (loop) input.turn.loop = r.text;
+    const fresh = fastLane(text, input, opts);
+    if (fresh) return fresh;
   }
 
   // "I'm Alex and I work as a marine emissions analyst." is an introduction,
@@ -132,7 +162,9 @@ async function route(input, db, opts) {
   const userName = input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null;
 
   // --- 1. classify without the database ---------------------------------------
-  const kind = intro ? 'other' : parser.classify(text, [], input.now);
+  // A question ABOUT a subject ("how is fuel consumption calculated?") is
+  // conversation even though it names a metric.
+  const kind = intro || input.turn.concept ? 'other' : parser.classify(text, [], input.now);
 
   if (kind === 'data' || kind === 'teach') {
     return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
@@ -178,7 +210,7 @@ async function route(input, db, opts) {
   // on without it. A conversational message must not pay for a database
   // round-trip it almost never needs.
   const learned = await learnedFor(getDb, opts);
-  if (learned.length && !intro && parser.classify(text, learned, input.now) === 'data') {
+  if (learned.length && !intro && !input.turn.concept && parser.classify(text, learned, input.now) === 'data') {
     return withDb(getDb, function (client) { return engine.ask(input, client, opts).then(function (r) { return tagSource(r, 'data'); }); });
   }
 
@@ -295,13 +327,19 @@ function fastLane(text, input, opts) {
  * cleanly (unparsed, unsupported) returns null and goes to the model.
  */
 async function directData(text, input, getDb, opts) {
-  const kind = parser.classify(text, [], input.now);
-  if (kind !== 'data') return null;
+  // Only a request to READ the records. A metric word inside a question about
+  // steps, meaning or method is the model's to answer, not the parser's to
+  // turn into "which measurement do you mean?".
+  const turn = input.turn || turns.analyseTurn(input);
+  if (!turn.lookup) return null;
   let client;
   try { client = await getDb(); } catch (_) { return null; } // the agent will explain the outage
   if (!client) return null;
   try {
     const r = await engine.ask(input, client, opts);
+    // Never ask the same clarifying question twice: hand it to the model,
+    // which answers the most reasonable reading instead.
+    if (r && r.status === 'clarify' && turns.repeatsRecent(r.text, input.history)) { turn.loop = r.text; return null; }
     if (r && (r.status === 'answer' || r.status === 'clarify' || r.status === 'confirm' || r.status === 'no_scope' || r.status === 'help')) {
       return tagSource(r, 'data');
     }
@@ -392,6 +430,7 @@ async function converseSafe(text, input, opts, env, guideSnippets, tz) {
     nowLabel: formatNow(input.now ? new Date(input.now) : new Date(), tz).label,
     guideSnippets: guideSnippets,
     history: input.history,
+    turn: input.turn,
     userName: input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null,
     // What the user has allowed K.R.1.S to remember. Shapes the reply's
     // tone and relevance; never a source of figures (see src/profile.js).
@@ -521,13 +560,16 @@ function followUpRewrite(text, history, now, dateOrder) {
   });
   if (leftoverWords.length > 0) return null;
 
-  // The most recent user message that was a data question.
+  // The previous user message, and only if it was a data question: "and last
+  // week?" follows what was just asked, never a data question from ten turns
+  // and two topics ago.
   let prior = null;
   for (let i = history.length - 1; i >= 0; i--) {
     const h = history[i];
     if (!h || h.role === 'assistant') continue;
     const t = String(h.text || '').trim();
-    if (t && parser.classify(t, [], now) === 'data') { prior = t; break; }
+    if (t && parser.classify(t, [], now) === 'data') prior = t;
+    break;
   }
   if (!prior) return null;
 

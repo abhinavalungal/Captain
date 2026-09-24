@@ -45,8 +45,9 @@ const { formatNow } = require('./instant_src');
 const { profilePrompt, userFactsFrom } = require('./profile');
 const { METRICS } = require('./config');
 const { MODEL_LABEL } = require('./identity');
+const turns = require('./turn');
 
-const AGENT_BUILD = '2026-09-24.kris-9';
+const AGENT_BUILD = '2026-09-24.kris-10';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -75,7 +76,9 @@ function toolDefs() {
           + 'Never answer such a question from your own knowledge. '
           + 'Ask in plain English naming the measurement, the vessel if known, and the period, '
           + 'e.g. "fuel consumption for Aurora Trader last month". '
-          + 'If the user was vague, ask them a clarifying question instead of guessing a vessel or period.',
+          + 'If the user was vague, ask them a clarifying question instead of guessing a vessel or period. '
+          + 'Not for questions about how something works, steps, processes, definitions or regulations: '
+          + 'those need no records, answer them yourself.',
         parameters: {
           type: 'object',
           properties: {
@@ -192,9 +195,17 @@ function systemPrompt(opts) {
     + 'plainly — never fill the gap with a plausible number.'
   );
   lines.push(
-    'When a request is genuinely ambiguous (which vessel? which period?), ask one short clarifying question '
-    + 'instead of guessing. When it is clear enough, act — do not interrogate the user over details you can '
-    + 'reasonably infer from the conversation.'
+    'Prefer a useful answer to a clarifying question. Before asking, work out what the user is trying to do and '
+    + 'whether you can already help. Ask only when the ambiguity would change the answer materially and no useful '
+    + 'answer covers the likely readings: which vessel or which period for a figure from their records is the '
+    + 'typical case. A broad question ("what are the steps to verify and report emissions?") gets the general '
+    + 'answer, then one line offering the specific version (EU MRV, EU ETS, FuelEU Maritime, IMO DCS). A word '
+    + 'with several meanings is not by itself a reason to ask.'
+  );
+  lines.push(
+    'Known, inferred, unknown: state what the conversation, a tool or the reference below gives you; mark an '
+    + 'inference as one; say plainly when something is not available. Never invent vessel data, IMO numbers, '
+    + 'emission values, regulation details, dates, report names, company facts or database values.'
   );
   lines.push(
     'Lead with the answer. Think multi-step problems through before answering and check arithmetic and logic. '
@@ -219,6 +230,8 @@ function systemPrompt(opts) {
   const about = profilePrompt(opts.profile, opts.userName);
   if (about) lines.push(about);
   lines.push(VISUAL_GUIDE);
+  lines.push(turns.LATEST_RULE);
+  if (opts.frame) lines.push(opts.frame);
   return lines.join('\n\n');
 }
 
@@ -272,7 +285,9 @@ function makeTools(input, getDb, opts) {
       }
       // A clarify/confirm from the engine is information for the model, not a
       // dead end: it decides whether to ask the user or retry differently.
-      if (out.pending) visuals.pending = out.pending;
+      // Only the LAST lookup's question can still be open.
+      visuals.pending = out.pending || null;
+      visuals.options = out.pending && Array.isArray(out.options) ? out.options.slice(0, 8) : null;
       return summariseData(out);
     },
 
@@ -469,7 +484,9 @@ async function run(input, getDb, opts) {
   cfg.effort = effortFor(input.text, env);
 
   const tz = input.context && input.context.tz ? String(input.context.tz) : null;
+  const turn = input.turn || turns.analyseTurn(input);
   const system = systemPrompt({
+    frame: turns.frameLine(turn),
     appName: cfg.appName,
     nowLabel: formatNow(input.now ? new Date(input.now) : new Date(), tz).label,
     userName: input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null,
@@ -478,12 +495,11 @@ async function run(input, getDb, opts) {
     depth: answerDepth(input.text, input.context && input.context.profile),
   });
 
-  const messages = [{ role: 'system', content: system }];
-  (input.history || []).slice(-HISTORY_TURNS).forEach(function (h) {
-    if (!h || !h.text) return;
-    messages.push({ role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.text).slice(0, HISTORY_CHARS) });
-  });
+  const messages = [{ role: 'system', content: system }]
+    .concat(turns.modelHistory(input.history, HISTORY_TURNS, HISTORY_CHARS));
   messages.push({ role: 'user', content: String(input.text || '').slice(0, MESSAGE_CHARS) });
+  // Figures already said in this conversation may be restated; only new ones are checked.
+  const known = turns.knownFigures(input.history, input.text);
 
   const tools = makeTools(input, getDb, opts);
 
@@ -522,7 +538,7 @@ async function run(input, getDb, opts) {
   const openGate = function () {
     gate = new SentenceGate({
       guard: !tools.visuals.dataUsed,
-      check: function (piece) { return containsStatedFigure(piece, fleet); },
+      check: function (piece) { return containsStatedFigure(piece, fleet, known); },
       emit: function (piece) {
         const sep = shown && !/\s$/.test(shown) && gate._first ? '\n\n' : '';
         gate._first = false;
@@ -569,6 +585,7 @@ async function run(input, getDb, opts) {
     return msg;
   };
 
+  let nudged = false;
   try {
     for (let step = 0; step < cfg.maxSteps; step++) {
       const msg = await call();
@@ -577,7 +594,18 @@ async function run(input, getDb, opts) {
 
       if (!calls.length) {
         const names = await namesReady().then(function () { return fleet; });
-        return finish(streaming ? shown.trim() || String(msg.content || '').trim() : String(msg.content || '').trim(), tools.visuals, cfg, trace, input, names, streaming, opts);
+        const final = streaming ? shown.trim() || String(msg.content || '').trim() : String(msg.content || '').trim();
+        // Validation: a reply that repeats one of the last two replies (the
+        // same clarifying question, the same answer) is a loop. One retry,
+        // told so; the second attempt stands whatever it is.
+        if (!nudged && step < cfg.maxSteps - 1 && turns.repeatsRecent(final, input.history)) {
+          nudged = true;
+          messages.push({ role: 'assistant', content: final });
+          messages.push({ role: 'user', content: 'You just repeated your previous reply. Do not repeat it or ask it again: answer my latest message directly, with the most reasonable reading.' });
+          if (streaming) { shown = ''; opts.onDelta({ t: 'replace', text: '' }); }
+          continue;
+        }
+        return finish(final, tools.visuals, cfg, trace, input, names, streaming, opts, false, known);
       }
 
       // Record the assistant's tool-call turn verbatim; the protocol requires
@@ -640,7 +668,7 @@ async function run(input, getDb, opts) {
       return finish(SAFE_REDIRECT, tools.visuals, cfg, trace, input, fleet, streaming, opts, true);
     }
     await namesReady();
-    return finish(streaming ? shown.trim() || String(last.content || '').trim() : String(last.content || '').trim(), tools.visuals, cfg, trace, input, fleet, streaming, opts);
+    return finish(streaming ? shown.trim() || String(last.content || '').trim() : String(last.content || '').trim(), tools.visuals, cfg, trace, input, fleet, streaming, opts, false, known);
   } catch (err) {
     const aborted = err && err.name === 'AbortError';
     const external = opts.signal && opts.signal.aborted;
@@ -694,7 +722,7 @@ async function fleetNames(input, getDb, visuals) {
  * tool returned data this turn, a figure that looks like one of the user's
  * vessel readings cannot have come from anywhere real, so it is replaced.
  */
-function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alreadyBlocked) {
+function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alreadyBlocked, known) {
   let blocked = !!alreadyBlocked;
   let out = text;
 
@@ -702,7 +730,7 @@ function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alread
     out = 'I did not manage to put an answer together for that one. Try asking it a different way?';
     if (streaming && opts && opts.onDelta) opts.onDelta({ t: 'replace', text: out });
   } else if (!visuals.dataUsed && !blocked) {
-    if (containsStatedFigure(guardable(out), fleet || [])) {
+    if (containsStatedFigure(guardable(out), fleet || [], known)) {
       blocked = true;
       out = "I don't want to guess at one of your figures. Ask me directly \u2014 for example "
         + '"fuel consumption for <vessel> last month" \u2014 and I\'ll pull it from the records.';
@@ -720,7 +748,12 @@ function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alread
   if (visuals.series) answer.series = visuals.series;
   if (visuals.provenance) answer.provenance = visuals.provenance;
   if (visuals.unit) answer.unit = visuals.unit;
-  if (visuals.pending) answer.pending = visuals.pending;
+  // An engine question stays open only if the reply actually asks one and no
+  // later lookup answered it; otherwise it would hijack the next message.
+  if (visuals.pending && !visuals.dataUsed && /\?/.test(out)) {
+    answer.pending = visuals.pending;
+    if (visuals.options && visuals.options.length) answer.options = visuals.options;
+  }
   // Details the model heard the user state about themselves: the widget asks before keeping any.
   if (visuals.remember && visuals.remember.length) answer.remember = { facts: visuals.remember };
   if (blocked) answer.blocked = true;

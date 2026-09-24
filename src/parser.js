@@ -228,6 +228,8 @@ function parse(text, ctx = {}) {
 
   // --- metric ---------------------------------------------------------------
   let metricKey = pending && pending.metricKey ? pending.metricKey : null;
+  // A picked option sends the metric key itself; "co2" must not re-open "co2?".
+  if (!metricKey && pending && pending.field === 'metricKey' && METRICS_BY_KEY[raw]) metricKey = raw;
   if (!metricKey) {
     const matches = findAliasMatches(effectiveText, index);
 

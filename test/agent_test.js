@@ -429,6 +429,40 @@ const run = (text, script, extra, opts) => agent.run(
     assert.strictEqual(out.source, 'agent');
   });
 
+  // --- an open clarifying question must not hijack the next, unrelated message ---
+  const CO2_PENDING = { kind: 'clarify', originalText: 'CO2 last week', field: 'metricKey' };
+  const routeWith = (text, pending, fetchImpl) => router.route(
+    { text, session, pending, now: NOW, history: [], context: {} },
+    async () => fakeDb([{ bucket: null, value: 12.5, n: 7 }]),
+    { orgId: 'o', env: ENV, fetchImpl: fetchImpl || fakeModel([say('unused')]), disableLog: true }
+  );
+
+  await ta('pending clarify: an unrelated question is answered, not re-asked', async () => {
+    const out = await routeWith('name = "Nav"\nage = 25\n\nprint(name)\nprint(age)', CO2_PENDING,
+      fakeModel([say('It prints Nav, then 25.')]));
+    assert.strictEqual(out.source, 'agent', out.text);
+    assert.ok(/prints Nav/.test(out.text), out.text);
+  });
+
+  await ta('pending clarify: a complete new data question is answered on its own', async () => {
+    const out = await routeWith('shaft power for Aurora Trader yesterday', CO2_PENDING);
+    assert.strictEqual(out.status, 'answer', out.text);
+    assert.strictEqual(out.metricKey || (out.plan && out.plan.metricKey) || 'shaft_power', 'shaft_power');
+    assert.ok(!/CO2/i.test(out.text), out.text);
+  });
+
+  await ta('pending clarify: picking an option still answers the original question', async () => {
+    const out = await routeWith('co2', CO2_PENDING);
+    assert.notStrictEqual(out.status, 'clarify', out.text);
+    assert.ok(/co2 emitted/i.test(out.text) && /last week/i.test(out.text), out.text);
+  });
+
+  await ta('pending teach: an unrelated message is not read as "no"', async () => {
+    const out = await routeWith('what is EU ETS?', { kind: 'teach', term: 'burn', metricKey: 'fuel_consumption' },
+      fakeModel([say('EU ETS is the EU emissions trading system.')]));
+    assert.strictEqual(out.source, 'agent', out.text);
+  });
+
   console.log(`\nAgent: ${passed} passed, ${fails.length} failed`);
   fails.forEach((f) => console.log('  FAIL ' + f));
   process.exit(fails.length ? 1 : 0);

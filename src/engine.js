@@ -397,6 +397,8 @@ async function ask(input, db, opts = {}) {
   // Confirming a term the previous turn proposed.
   if (input.pending && input.pending.kind === 'teach') {
     const yes = /^\s*(y|yes|yep|sure|ok|okay|save|confirm|yes,? save it)\b/i.test(input.text || '');
+    const no = /^\s*(n|no|nope|nah|don'?t|do not|cancel|skip|leave it)\b/i.test(input.text || '');
+    if (!yes && !no) return { status: 'stale_pending' }; // a new message, not an answer
     if (!yes) return { status: 'ack', text: 'Left as it was.' };
     if (!opts.writeDb) return { status: 'ack', text: 'I cannot save vocabulary right now — the mapping store is not writable.' };
     const saved = await terms.saveMapping(opts.writeDb, {
@@ -415,14 +417,29 @@ async function ask(input, db, opts = {}) {
     return { status: 'ack', text: `Saved. "${input.pending.term}" now means ${METRICS_BY_KEY[input.pending.metricKey].label}.` };
   }
 
-  const parsed = parser.parse(input.text, {
+  const pending = input.pending && input.pending.kind === 'clarify' ? input.pending : null;
+  if (pending && String(input.text).trim() === '__no__') {
+    return { status: 'ack', text: 'No problem. Tell me which measurement you meant, or ask "help" for the full list.' };
+  }
+  const ctx = {
     now: input.now,
     vessels: scope.vessels,
     learned,
-    pending: input.pending && input.pending.kind === 'clarify' ? input.pending : null,
     dateOrder: opts.dateOrder,
     defaultVesselId: input.context && input.context.vesselId ? String(input.context.vesselId) : null,
-  });
+  };
+  const parsed = parser.parse(input.text, Object.assign({ pending }, ctx));
+
+  // The user is free to ignore a clarifying question and ask something else.
+  // If this message leaves the same question open, or is a complete question
+  // on its own, it is not an answer: gluing the old question onto it is what
+  // made "print(name)" come back as "Which measurement do you mean by CO2?".
+  if (pending && (
+    (parsed.status === 'clarify' && parsed.pending && parsed.pending.field === pending.field)
+    || parser.parse(input.text, ctx).status === 'plan'
+  )) {
+    return { status: 'stale_pending' };
+  }
 
   if (parsed.status === 'teach') {
     return {

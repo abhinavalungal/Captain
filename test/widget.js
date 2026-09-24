@@ -388,6 +388,24 @@ function boot(opts, storage) {
     assert(w.qa('.turn.user .bubble')[1].textContent === 'ME', 'label not shown as the user turn');
   });
 
+  await ta('context: data replies and clarifying questions join the history; old choices go stale', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({ status: 'clarify', source: 'data', text: 'Which measurement do you mean by "co2"?', options: [{ label: 'CO2 emitted (MT)', value: 'co2' }, { label: 'Leg CO2 (MT)', value: 'leg_co2' }], pending: { kind: 'clarify', field: 'metricKey' } }));
+    await w.type('What is CO2 emitted?');
+    await w.idle();
+    const btns = w.qa('.turn.assistant .choices .chip');
+    w.respond(async () => jsonResponse({ status: 'answer', source: 'agent', text: 'Verification runs in seven steps.', context: { kind: 'follow_up', about: 'What is CO2 emitted?' } }));
+    await w.type('What are the steps to verify and report emissions?');
+    await w.idle();
+    const body = JSON.parse(w.posts()[1].init.body);
+    assert(body.history.some((h) => h.role === 'assistant' && /Which measurement/.test(h.text)), 'the clarifying question is missing from history: ' + JSON.stringify(body.history));
+    assert(btns[0].disabled && btns[1].disabled, 'choices for an abandoned question are still clickable');
+    const ctx = w.qa('.turn.assistant .ctxline');
+    assert(ctx.length === 1 && /Following up on “What is CO2 emitted\?”/.test(ctx[0].textContent), 'no follow-up line');
+  });
+
   await ta('network failure: error card with "Try again" that resubmits the same question', async () => {
     const w = boot();
     await wait(20);

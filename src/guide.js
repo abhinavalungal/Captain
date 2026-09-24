@@ -150,6 +150,10 @@ function matchGuide(text) {
   const need = contentWords >= 4 || allWords >= 6 ? 2 : 1;
   const [top, second] = ranked;
   if (top.score < need) return null;
+  // The entry must cover most of what was asked. "What is FuelEU pooling?"
+  // shares "FuelEU" with the compliance-balance article, but pooling is the
+  // question: half the words unmatched means a different subject.
+  if (top.score <= contentWords / 2) return null;
   if (second && second.score >= top.score - 0.4) return null;
   return top.g;
 }

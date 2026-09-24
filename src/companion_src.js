@@ -2,6 +2,7 @@
 
 const { profilePrompt } = require('./profile');
 const { MODEL_LABEL } = require('./identity');
+const { analyseTurn, modelHistory, frameLine, knownFigures, LATEST_RULE } = require('./turn');
 
 /**
  * The companion layer — conversation and app guidance.
@@ -149,10 +150,15 @@ const OWN_FLEET_RE = new RegExp(
 const SPECIAL_FIGURE_RE = /(?<![\w.])\d[\d,]*(?:\.\d+)?\s*(?:[a-z-]+\s+)?(?:%|hours?|hrs?|days?)\b/i;
 const SPECIAL_CONTEXT_RE = /\b(?:off.?hire|compliance balance|eu scope|ghg intensity|fueleu)\b/i;
 
-function containsStatedFigure(text, vesselNames) {
+function containsStatedFigure(text, vesselNames, known) {
   const names = (vesselNames || []).map(function (n) { return String(n).toLowerCase(); }).filter(function (n) { return n.length >= 3; });
   const sentences = String(text || '').split(/(?<=[.!?])\s+|\n+/);
-  for (const sRaw of sentences) {
+  for (const sOrig of sentences) {
+    // A figure already said in this conversation (read from the records
+    // earlier, or typed by the user) is not a new claim.
+    const sRaw = known && known.size
+      ? sOrig.replace(/(?<![\w.])\d[\d,]*(?:\.\d+)?/g, function (n) { return known.has(n.replace(/,/g, '')) ? '#' : n; })
+      : sOrig;
     const s = sRaw.toLowerCase();
     const namesHere = names.some(function (n) { return s.includes(n); });
     const ownFleet = OWN_FLEET_RE.test(sRaw) || namesHere;
@@ -238,9 +244,10 @@ function systemPrompt(opts) {
     + 'Lead with the answer in your first sentence. Think multi-step problems through before you answer, check arithmetic and logic, and state results plainly. Be accurate rather than confident: if you are unsure, or something may have changed since your training, say so briefly.\n\n'
     + ANSWER_SHAPE[depth] + '\n\n'
     + DOMAIN_FACTS + '\n\n'
-    + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data.\n\n'
+    + 'THE ONE RULE: you have no access to this user\'s vessel records. Never state, estimate or guess a figure as if it were one of their vessels\' actual values (their fuel, power, speed, distance, emissions, compliance balance, off-hire, counts). General maritime facts are fine ("a Panamax bulker might burn 30 tonnes a day"); a claim about THEIR ship is not. If they ask for one of their own figures, say you\'ll need to look it up and tell them to ask it directly as a data question, e.g. "fuel consumption for <vessel> last month". Never present a guess as their data. A figure K.R.1.S already read from their records earlier in this conversation may be restated exactly as it was given.\n\n'
     + VISUAL_GUIDE + '\n\n'
-    + FORMATTING + nowLine + userLine + profileBlock + guideBlock + ctx;
+    + FORMATTING + nowLine + userLine + profileBlock + guideBlock + ctx
+    + '\n\n' + LATEST_RULE + (opts.frame ? '\n\n' + opts.frame : '');
 }
 
 function readEnv(env) {
@@ -404,14 +411,13 @@ async function converse(text, opts) {
   }
 
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
-  const messages = (opts.history || [])
-    .slice(-HISTORY_TURNS)
-    .map(function (h) { return { role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.text || '').slice(0, HISTORY_CHARS) }; })
+  const messages = modelHistory(opts.history, HISTORY_TURNS, HISTORY_CHARS)
     .concat([{ role: 'user', content: String(text || '').slice(0, MESSAGE_CHARS) }]);
+  const known = knownFigures(opts.history, text);
 
   const light = opts.light != null ? !!opts.light : isLightMessage(text);
   const streaming = typeof opts.onDelta === 'function';
-  const system = systemPrompt({ appName: cfg.appName, guideSnippets: opts.guideSnippets || [], context: opts.context, light: light, depth: light ? 'short' : answerDepth(text, opts.profile), nowLabel: opts.nowLabel, userName: opts.userName || null, profile: opts.profile || null });
+  const system = systemPrompt({ appName: cfg.appName, frame: frameLine(opts.turn || analyseTurn({ text: text, history: opts.history })), guideSnippets: opts.guideSnippets || [], context: opts.context, light: light, depth: light ? 'short' : answerDepth(text, opts.profile), nowLabel: opts.nowLabel, userName: opts.userName || null, profile: opts.profile || null });
   const req = buildRequest(cfg, system, messages, effortFor(text, cfg.env), streaming);
   // No tools field in either request shape. That is the structural guarantee.
 
@@ -463,14 +469,14 @@ async function converse(text, opts) {
     try { data = await res.json(); } catch (_) { return { text: UNAVAILABLE, blocked: false, error: 'non-JSON response', provider: cfg.provider, model: cfg.model }; }
     const raw = (req.extract(data) || '').trim();
     if (!raw) return { text: UNAVAILABLE, blocked: false, error: 'empty reply', provider: cfg.provider, model: cfg.model };
-    if (containsStatedFigure(guardable(raw), names)) return { text: SAFE_REDIRECT, blocked: true, rawBlocked: raw, provider: cfg.provider, model: cfg.model };
+    if (containsStatedFigure(guardable(raw), names, known)) return { text: SAFE_REDIRECT, blocked: true, rawBlocked: raw, provider: cfg.provider, model: cfg.model };
     const parsed = extractChart(raw);
     return { text: parsed.text, chart: parsed.chart, blocked: false, provider: cfg.provider, model: cfg.model };
   }
 
   // --- streamed: released a sentence at a time, each one guard-checked ----------
   const gate = new SentenceGate({
-    check: function (piece) { return containsStatedFigure(piece, names); },
+    check: function (piece) { return containsStatedFigure(piece, names, known); },
     emit: function (piece) { opts.onDelta({ t: 'delta', text: piece }); },
     onHold: function () { opts.onDelta({ t: 'status', text: 'Preparing a visual', phase: 'visual' }); },
   });

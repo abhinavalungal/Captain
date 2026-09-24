@@ -60,7 +60,7 @@
 
   if (global.KRIS && global.KRIS.__loaded) return;
 
-  var VERSION = '2026-09-24.kris-9';
+  var VERSION = '2026-09-24.kris-10';
 
   // Where was this script loaded from? The API lives on the same origin.
   var SCRIPT_ORIGIN = '';
@@ -687,6 +687,7 @@
     '.figure{font:700 34px/1.1 var(--display);letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:var(--figure);margin:0 0 4px;word-break:break-word}',
     '.figure .unit{font:500 15px/1 var(--font);letter-spacing:0;color:var(--ink-3);margin-left:6px}',
     '.subject{color:var(--ink-2);font-size:13.5px;line-height:1.45;margin:0}',
+    '.ctxline{color:var(--ink-3);font-size:12px;line-height:1.4;margin:0 0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.card .subject + .subject{margin-top:4px}',
     '.sources{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--line-2);font:400 11.5px/1.5 var(--mono);color:var(--ink-3)}',
     '.sources span{overflow-wrap:anywhere}',
@@ -3521,6 +3522,9 @@
 
     if (this.view !== 'chat') this.showView('chat', !this.open);
     this.hideWelcome();
+    // Choices offered earlier belong to a question this message moves past.
+    var stale = this.log.querySelectorAll('.choices button');
+    for (var si = 0; si < stale.length; si++) stale[si].disabled = true;
     this.busy = true;
     this.updateComposer();
     var userEl = opts.retry ? this.lastUserEl() : this.addUserTurn(String(displayText));
@@ -3722,9 +3726,9 @@
     var heard = serverFacts(data);
     for (var i = 0; i < heard.length; i++) this.convFacts[heard[i].key] = heard[i].value;
 
-    // Every USER turn goes into history: that is what lets the server turn
-    // "and last week?" into the previous question over a new period.
-    // Assistant turns are kept only for conversational sources.
+    // Every turn goes into history, data answers and clarifying questions
+    // included: a transcript with holes makes an answered question look open,
+    // and the model then answers it again instead of the latest message.
     this.history.push({ role: 'user', text: body });
     if (isConversational(data) && data.text) this.history.push({ role: 'assistant', text: String(data.text).slice(0, HISTORY_CHARS) });
     this.history = this.history.slice(-HISTORY_TURNS);
@@ -3765,7 +3769,7 @@
   };
 
   function isConversational(data) {
-    return /^(companion|guide|identity|agent|router|local|instant)$/.test(String(data.source || ''));
+    return !!data && data.status !== 'error' && data.status !== 'stopped';
   }
 
   Widget.prototype.markLast = function (turnEl) {
@@ -4529,6 +4533,11 @@
       n.appendChild(tx);
       frag.appendChild(n);
       return frag;
+    }
+
+    // What a follow-up was read against, so the user can see it at a glance.
+    if (data.context && data.context.kind === 'follow_up' && data.context.about) {
+      frag.appendChild(el('p', 'ctxline', 'Following up on “' + String(data.context.about).slice(0, 80) + '”'));
     }
 
     var isData = !!(data.provenance || data.series || data.rows || data.overview || data.comparison || data.stats || data.metrics || data.value != null);
