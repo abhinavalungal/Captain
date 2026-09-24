@@ -249,8 +249,9 @@ t('parser: hour question against shaft power is refused too (no sub-daily source
   assert.ok(!/\d{3,}/.test(r.message), 'refusal must not contain a figure');
 });
 
-t('parser: Veson leg metrics resolve', () => {
-  assert.strictEqual(ask('ghg intensity for Aurora Trader last quarter').plan.metricKey, 'ghg_intensity');
+t('parser: voyage metrics resolve', () => {
+  assert.strictEqual(ask('vlsfo consumption for Aurora Trader in 2025').plan.metricKey, 'vlsfo_consumption');
+  assert.strictEqual(ask('net days for Aurora Trader last quarter').plan.metricKey, 'net_days');
   assert.strictEqual(ask('leg fuel for Aurora Trader in 2026').plan.metricKey, 'leg_fuel');
   assert.strictEqual(ask('off hire hours for Aurora Trader this year').plan.metricKey, 'offhire_hours');
 });

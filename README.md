@@ -122,6 +122,90 @@ exposes `memory`, `settings`, `view`, `conversation`, `open`, `close` and
 `answer` events. Voice, files, tools, other models or workspace knowledge
 can be added on these seams without rebuilding the widget.
 
+### Upgrading to kris-11 (new Supabase database, test environment)
+
+- **New database:** Supabase project `rpiuxplctquqwqvmgxqk`. Everything K.R.1.S
+  reads lives in one private schema, `kris`, defined in `db/001_schema.sql`
+  (which replaces `db/001`–`005`, `check_connection.js` and
+  `schema_report.sql`; they are in git history). Set it up with:
+
+  ```bash
+  node db/setup.js            # schema, roles, test data, checks
+  node db/setup.js --check    # checks only
+  ```
+
+  `db/setup.js` reads `DATABASE_URL` (the `postgres` connection, used by setup
+  only), gives `kris_reader` and `kris_writer` random passwords, writes
+  `KRIS_READ_URL` / `KRIS_WRITE_URL` into `.env` without printing them, loads
+  the test data and runs the checks, first as the owner, then as
+  `kris_reader` through K.R.1.S's own engine and records code.
+  `--print-seed > seed.sql` gives the test data as SQL for the SQL editor.
+- **Security.** The `kris` schema is not exposed to Supabase's Data API, and
+  `anon` / `authenticated` are revoked on it, so the publishable key reaches
+  nothing. Row-level security is on for every table: the two server roles
+  have policies, and any other role sees no rows. The server runs as
+  `kris_reader` (read-only sessions) instead of `postgres`, which the
+  previous `.env` used. `DATABASE_URL` belongs on the machine that runs setup,
+  never on the server.
+- **Facts in tables, figures in views.** Tables hold vessels, voyages, port
+  calls, reports, fuel by type and consumer, bunker deliveries, filings,
+  trades, allocations, invoices, emails and the regulatory parameters
+  (emission factors, CII reference lines and reduction factors, FuelEU
+  targets, ETS phase-in). Voyage days, CO2 and CO2e, energy, GHG intensity,
+  FuelEU balances and penalties, AER/CII and the rating, allowance
+  obligations, exposure and invoice status are views, so they cannot drift
+  from the facts. `kris.voyage_summary`, `cii_annual`, `fueleu_period`,
+  `ets_obligations`, `carbon_exposure` and `compliance_overview` are the ones
+  to start with.
+- **Records tool.** Until now K.R.1.S could only aggregate one measurement
+  over a period. The new `get_vessel_records` tool (`src/records.js`, driven by
+  `RECORDS` in `src/config.js`) reads rows: particulars, voyages and ports,
+  fuel by voyage, BDNs, DCS/MRV annual figures, CII, FuelEU, allowances,
+  exposure, filings, trades, invoices and emails. Same rules as the engine:
+  identifiers only from the registry, values bound, vessel scope mandatory.
+  Figures the tool returned may be stated; the output guard still blocks any
+  other figure about the user's vessels.
+- **Metrics.** Voyage metrics read `kris.voyage_summary` (fuel by type, CO2,
+  distance, voyage/net/sea/port days, voyage FuelEU balance). The metrics on
+  the old `fueleu_final` / `dnv` views are gone (those tables are not in the
+  new database, and their units were unconfirmed). So is the per-voyage GHG
+  average: the energy-weighted intensity is in the FuelEU records.
+- **Router.** The engine still answers a complete figure question without the
+  model. Its clarifying questions now go to the model, which can answer the
+  likely reading from the records ("How much VLSFO did TEST VESSEL 01
+  consume?" gets the figures by year, not "over what period?").
+- **Briefing.** The FuelEU rule reads this year's balance after pooling, and a
+  new rule flags allowances still to surrender within 30 days of the deadline.
+- **Test data** (`db/test_data.js`): TEST VESSEL 01 (IMO 1000019, Ultramax bulk
+  carrier, scrubber, HSFO/VLSFO/MGO) and TEST VESSEL 02 (IMO 1000021, LNG
+  dual-fuel Aframax tanker), January 2023 to the day it is loaded. Each voyage
+  timeline is simulated, and reports and fuel follow from engine power and
+  speed. Pooling, surrenders, allocations, invoice amounts and the figures
+  quoted in emails are inserted by SQL that reads the views, so every number
+  agrees. Scenarios built in: TEST VESSEL 01 rated CII D three years running
+  (corrective action plan due), a 2025 FuelEU deficit covered by pooling with
+  TEST VESSEL 02, 2025 EUAs still to source close to the deadline, a UK ETS
+  obligation from an August 2026 Immingham–Teesport voyage, an EU MRV
+  verification held on a disputed BDN, and paid, pending, overdue and draft
+  invoices. IMO numbers in the 1000000 range are not issued to ships; company
+  names start with TEST and emails use `.example`.
+- **Tests.** `test/db_test.js` loads the real schema and test data into an
+  in-memory Postgres (PGlite, a dev dependency) on every `npm test`. It checks
+  the structure, security, row-level security and consistency, and runs
+  questions through the engine, the records tool, the briefing and the router.
+
+### Upgrading to kris-10 (answers the latest message)
+
+- An open clarifying question no longer swallows the next message. A new
+  question, a correction ("that's not what I asked") or the same question
+  coming back closes it (`src/turn.js`).
+- A question *about* something ("What are the steps to verify and report
+  emissions?") reaches the model instead of the metric parser.
+- Data answers and clarifying questions are part of the history the widget
+  sends. Older turns are clipped as background, and a repeated reply is
+  regenerated once. `test/context_test.js` is the benchmark;
+  `KRIS_EVAL_LIVE=1` runs it against the real model.
+
 ### Upgrading to kris-9 (ready for many users)
 
 - Deploy `server.js`, `src/ratelimit.js` (new), `src/httpHandler.js`,
@@ -316,11 +400,9 @@ can be added on these seams without rebuilding the widget.
 This release renames every identifier, so an existing deployment needs four
 one-time steps, in this order:
 
-1. **Database** — run `db/005_rename_to_kris.sql` once against the live
-   database. It renames the read views, the vocabulary, query-log and sync-log
-   tables, their sequences and indexes, and the two database roles, in one
-   transaction. It is idempotent and a no-op on a fresh install. Delete the
-   file afterwards if you like; nothing reads it.
+1. **Database** — an old database needed `db/005_rename_to_kris.sql` (in git
+   history, removed in kris-11). The kris-11 database is new and is set up
+   with `node db/setup.js`; see "Upgrading to kris-11".
 2. **Environment** — every variable now starts with `KRIS_` (for example
    `KRIS_READ_URL`, `KRIS_LLM_API_KEY`, `KRIS_ALLOW_ORIGIN`). Rename them in
    your host's dashboard (Render → Environment) before deploying; `.env.example`
@@ -512,8 +594,10 @@ upstream APIs exist.
 
 | Variable | Purpose |
 |---|---|
-| `KRIS_READ_URL` | connection string for `kris_reader` |
-| `KRIS_WRITE_URL` | connection string for `kris_writer` (sync + vocabulary) |
+| `DATABASE_URL` | Supabase `postgres` connection, for `node db/setup.js` only; never on the server |
+| `KRIS_READ_URL` | connection string for `kris_reader` (written by `db/setup.js`) |
+| `KRIS_WRITE_URL` | connection string for `kris_writer`: sync, vocabulary, query log (written by `db/setup.js`) |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | the project URL and publishable key; not used by the server |
 | `VESON_API_TOKEN` | Veson IMOS token |
 | `VESON_LEGWISE_API` | FuelEU leg-wise report URL (token may be included or not; it is added once) |
 | `VESON_OFFHIRE_API` | FuelEU off-hire report URL |
@@ -537,12 +621,11 @@ upstream APIs exist.
 A token that has been pasted into a chat or ticket should be rotated. The one
 you gave me is in `.env` now; `.gitignore` excludes it.
 
-### 3. Run the migrations, then discover the field names
+### 3. Create the database, then discover the field names
 
 ```bash
-psql "$DATABASE_URL" -f db/001_kris.sql     # roles, vocabulary, query log
-psql "$DATABASE_URL" -f db/002_veson_geoform.sql  # synced tables + grants
-npm run discover                                # one call to each API
+node db/setup.js            # schema, roles, test data, checks (needs DATABASE_URL)
+npm run discover            # one call to each API
 ```
 
 `discover` calls each upstream API once and prints the real field names, the
@@ -940,18 +1023,21 @@ sanitising `context.profile`, the prompt block in both conversation layers,
 that a profile cannot reach a data answer, introductions routed as
 conversation, and router-mode streaming.
 
-To set up a local test database:
+`test/db_test.js` needs no database server: it loads `db/001_schema.sql` and
+the test data into PGlite (Postgres in WebAssembly) and runs the setup checks
+and K.R.1.S's queries against it.
+
+The older end-to-end suite in `test/run.js` still wants a real Postgres:
 
 ```bash
 createdb kris_test
-psql kris_test -f db/001_kris.sql
-psql kris_test -f db/002_veson_geoform.sql
+psql kris_test -f db/001_schema.sql
 psql kris_test -f test/fixtures/example_schema.sql
+KRIS_TEST_URL=postgres://localhost/kris_test node test/run.js
 ```
 
 `test/fixtures/example_schema.sql` is a fixture, not a migration. Every number
-in it is generated by a formula and is meaningless as vessel data. Delete it
-once K.R.1.S is pointed at your own tables.
+in it is generated by a formula and is meaningless as vessel data.
 
 ---
 

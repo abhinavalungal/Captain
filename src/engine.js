@@ -491,7 +491,7 @@ async function logQuery(opts, input, outcome, detail) {
   if (!opts.writeDb || opts.disableLog) return;
   try {
     await opts.writeDb.query(
-      `INSERT INTO kris_query_log (org_id, user_id, question, outcome, detail)
+      `INSERT INTO kris.kris_query_log (org_id, user_id, question, outcome, detail)
        VALUES ($1, $2, $3, $4, $5)`,
       [opts.orgId || null, (input.session && input.session.userId) || null, String(input.text || '').slice(0, 500), outcome, String(detail || '').slice(0, 200)]
     );

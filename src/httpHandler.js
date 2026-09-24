@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const KRIS_BUILD = '2026-09-24.kris-10';
+const KRIS_BUILD = '2026-09-25.kris-11';
 
 // Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch

@@ -105,9 +105,9 @@ const run = (text, script, extra, opts) => agent.run(
   });
 
   // --- request shape ----------------------------------------------------------
-  t('tool definitions cover data, catalogue, briefing, help and remembering the user (visuals are drawn inline)', () => {
+  t('tool definitions cover data, records, catalogue, briefing, help and remembering the user (visuals are drawn inline)', () => {
     const names = agent.toolDefs().map((d) => d.function.name).sort();
-    assert.deepStrictEqual(names, ['get_fleet_briefing', 'get_vessel_data', 'list_available_data', 'remember_user_details', 'search_app_help']);
+    assert.deepStrictEqual(names, ['get_fleet_briefing', 'get_vessel_data', 'get_vessel_records', 'list_available_data', 'remember_user_details', 'search_app_help']);
     assert.ok(/```visual|"visual"/.test(agent.systemPrompt({ appName: 'X' })) && /"type":"meter"/.test(agent.systemPrompt({ appName: 'X' })), 'the visual guide is missing');
   });
 
@@ -132,7 +132,7 @@ const run = (text, script, extra, opts) => agent.run(
     assert.ok(/\/v1\/chat\/completions$/.test(req.url), req.url);
     assert.strictEqual(req.headers.Authorization, 'Bearer sk-test');
     assert.strictEqual(req.headers['HTTP-Referer'], 'https://perform.geoserves.com');
-    assert.strictEqual(req.body.tools.length, 5);
+    assert.strictEqual(req.body.tools.length, 6);
     assert.strictEqual(req.body.tool_choice, 'auto');
     assert.strictEqual(req.body.stream, false);
   });

@@ -111,9 +111,9 @@ async function sync({ db, env = process.env, fetchImpl, log = () => {}, now = ne
   // --- vessels ---------------------------------------------------------------
   for (const [imo, name] of imos) {
     await db.query(
-      `INSERT INTO vessels (id, imo, name, department)
+      `INSERT INTO kris.vessels (id, imo, name, department)
        VALUES ($1, $1, COALESCE($2, $1), 'Unassigned')
-       ON CONFLICT (id) DO UPDATE SET name = COALESCE(EXCLUDED.name, vessels.name)`,
+       ON CONFLICT (id) DO UPDATE SET name = COALESCE(EXCLUDED.name, kris.vessels.name)`,
       [imo, name]
     );
     stats.vessels++;
@@ -121,7 +121,7 @@ async function sync({ db, env = process.env, fetchImpl, log = () => {}, now = ne
 
   stats.finished = new Date().toISOString();
   await db.query(
-    `INSERT INTO kris_sync_log (started_at, finished_at, legs, offhire, geoform, vessels, warnings)
+    `INSERT INTO kris.kris_sync_log (started_at, finished_at, legs, offhire, geoform, vessels, warnings)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [stats.started, stats.finished, stats.legs, stats.offhire, stats.geoform, stats.vessels, JSON.stringify(stats.warnings)]
   ).catch((e) => stats.warnings.push('sync log: ' + e.message));
@@ -144,7 +144,7 @@ function warnMissing(stats, schema, res, required) {
 
 async function upsertLeg(db, r) {
   await db.query(
-    `INSERT INTO veson_legs (imo, vessel_name, voyage_no, leg_no, dep_port, arr_port, dep_time, arr_time, leg_date,
+    `INSERT INTO kris.veson_legs (imo, vessel_name, voyage_no, leg_no, dep_port, arr_port, dep_time, arr_time, leg_date,
                              distance_nm, fuel_mt, fuel_derived, co2_mt, ghg_intensity, eu_scope_pct, compliance_balance, raw, synced_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,($8::timestamptz)::date,$9,$10,$11,$12,$13,$14,$15,$16, now())
      ON CONFLICT (imo, dep_time, arr_time, leg_no) DO UPDATE SET
@@ -159,7 +159,7 @@ async function upsertLeg(db, r) {
 
 async function upsertOffhire(db, r) {
   await db.query(
-    `INSERT INTO veson_offhire (imo, vessel_name, voyage_no, start_time, end_time, start_date, offhire_hours, offhire_days, reason, raw, synced_at)
+    `INSERT INTO kris.veson_offhire (imo, vessel_name, voyage_no, start_time, end_time, start_date, offhire_hours, offhire_days, reason, raw, synced_at)
      VALUES ($1,$2,$3,$4,$5,($4::timestamptz)::date,$6,$7,$8,$9, now())
      ON CONFLICT (imo, start_time) DO UPDATE SET
        vessel_name=EXCLUDED.vessel_name, voyage_no=EXCLUDED.voyage_no, end_time=EXCLUDED.end_time, start_date=EXCLUDED.start_date,
@@ -170,7 +170,7 @@ async function upsertOffhire(db, r) {
 
 async function upsertGeoform(db, r) {
   await db.query(
-    `INSERT INTO geoform_reports (imo, vessel_name, form_type, report_time, report_date, shaft_power_kw, fuel_consumed_mt, me_fuel_mt, ae_fuel_mt,
+    `INSERT INTO kris.geoform_reports (imo, vessel_name, form_type, report_time, report_date, shaft_power_kw, fuel_consumed_mt, me_fuel_mt, ae_fuel_mt,
                                   distance_nm, speed_kn, me_rpm, co2_mt, raw, synced_at)
      VALUES ($1,$2,$3,$4,($4::timestamptz)::date,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
      ON CONFLICT (imo, report_time, form_type) DO UPDATE SET

@@ -40,7 +40,7 @@ const agent = require('./agent');
 const turns = require('./turn');
 const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-24.kris-10';
+const ROUTER_BUILD = '2026-09-25.kris-11';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 
@@ -321,10 +321,12 @@ function fastLane(text, input, opts) {
 
 /**
  * Agent mode: when the deterministic engine can already answer a data-shaped
- * question in full (a figure, a table, a series) or ask a precise clarifying
- * question, return that — the agent would otherwise spend one or two model
- * turns deciding to call the same engine. Anything the engine cannot handle
- * cleanly (unparsed, unsupported) returns null and goes to the model.
+ * question in full (a figure, a table, a series), return that — the agent
+ * would otherwise spend one or two model turns calling the same engine.
+ * Anything short of a full answer goes to the model, including the engine's
+ * clarifying questions: with the records and the engine as tools, the model
+ * can usually answer the likely reading instead of asking ("How much CO2 did
+ * TEST VESSEL 01 emit?" gets the annual figures, not "over what period?").
  */
 async function directData(text, input, getDb, opts) {
   // Only a request to READ the records. A metric word inside a question about
@@ -337,10 +339,9 @@ async function directData(text, input, getDb, opts) {
   if (!client) return null;
   try {
     const r = await engine.ask(input, client, opts);
-    // Never ask the same clarifying question twice: hand it to the model,
-    // which answers the most reasonable reading instead.
-    if (r && r.status === 'clarify' && turns.repeatsRecent(r.text, input.history)) { turn.loop = r.text; return null; }
-    if (r && (r.status === 'answer' || r.status === 'clarify' || r.status === 'confirm' || r.status === 'no_scope' || r.status === 'help')) {
+    // The same clarifying question again is a loop: the model is told not to repeat it.
+    if (r && r.status === 'clarify' && turns.repeatsRecent(r.text, input.history)) turn.loop = r.text;
+    if (r && (r.status === 'answer' || r.status === 'no_scope' || r.status === 'help')) {
       return tagSource(r, 'data');
     }
   } catch (err) {

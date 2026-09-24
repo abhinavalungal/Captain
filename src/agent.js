@@ -46,8 +46,10 @@ const { profilePrompt, userFactsFrom } = require('./profile');
 const { METRICS } = require('./config');
 const { MODEL_LABEL } = require('./identity');
 const turns = require('./turn');
+const records = require('./records');
+const { scopeCache, scopeKey } = require('./cache');
 
-const AGENT_BUILD = '2026-09-24.kris-10';
+const AGENT_BUILD = '2026-09-25.kris-11';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
@@ -88,6 +90,35 @@ function toolDefs() {
             },
           },
           required: ['question'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_vessel_records',
+        description:
+          "Read records about THIS user's vessels: anything that is a fact, a list or a status rather than one "
+          + 'measurement over a period. Use it for vessel particulars, voyages and their ports, days and fuel, '
+          + 'bunker deliveries, annual DCS/MRV figures, AER and CII ratings, FuelEU balances after banking and '
+          + 'pooling and penalties, EU ETS and UK ETS allowances, carbon exposure, compliance filings, carbon '
+          + 'trades and allocations, invoices and emails. Rows come newest first. Answer ONLY from what it '
+          + 'returns; if it returns nothing, say the records do not hold it. To compare vessels, omit vessel. '
+          + 'Topics:\n' + records.topicGuide(),
+        parameters: {
+          type: 'object',
+          properties: {
+            topic: { type: 'string', enum: records.TOPICS },
+            vessel: { type: 'string', description: 'Vessel name, IMO or code. Omit for every vessel the user can see.' },
+            voyage: { type: 'string', description: 'Voyage number or reference, e.g. V2612.' },
+            year: { type: 'integer', description: 'Calendar or reporting year.' },
+            from: { type: 'string', description: 'Earliest date, YYYY-MM-DD.' },
+            to: { type: 'string', description: 'Latest date, YYYY-MM-DD.' },
+            filter: { type: 'object', description: 'Equality filters on the columns a topic allows, e.g. {"category":"bdn_request"}, {"regime":"EU_MRV"}, {"status":"overdue"}, {"period":"YEAR"}.', additionalProperties: { type: 'string' } },
+            latest: { type: 'boolean', description: 'Only the newest row per vessel, e.g. the latest voyage.' },
+            limit: { type: 'integer', description: 'Rows to return (default 8, max 50).' },
+          },
+          required: ['topic'],
         },
       },
     },
@@ -183,7 +214,9 @@ function systemPrompt(opts) {
   lines.push(
     'You have tools for the things you cannot know: the user\'s own vessel records, their fleet briefing, and '
     + 'the app\'s help centre. Decide for yourself when one is needed. Use them whenever they make the answer '
-    + 'more accurate or more useful: look up the records for anything about their ships, search the help centre '
+    + 'more accurate or more useful: get_vessel_data for a measurement over a period (fuel last month, CO2 this '
+    + 'year), get_vessel_records for everything else about their ships (particulars, voyages, ports, CII, '
+    + 'FuelEU, allowances, exposure, filings, trades, invoices, emails), search the help centre '
     + 'for anything about using the app. Skip them when they add nothing; general knowledge and conversation '
     + 'need no tool. When the user tells you about themselves (their name, role, company, team, location, time '
     + 'zone or interests), call remember_user_details with exactly what they said, then reply naturally.'
@@ -291,6 +324,21 @@ function makeTools(input, getDb, opts) {
       return summariseData(out);
     },
 
+    async get_vessel_records(args) {
+      const client = await getDb();
+      const scope = opts.scopeCache
+        ? await scopeCache.load(scopeKey(input.session), function () { return rbac.resolveScope(input.session, client); })
+        : await rbac.resolveScope(input.session, client);
+      if (!scope.authenticated) return { error: 'not signed in' };
+      const out = await records.lookup(client, scope, args || {});
+      if (out.rows && out.rows.length) {
+        visuals.dataUsed = true;
+        visuals.sources = visuals.sources || [];
+        if (visuals.sources.indexOf(out.label) < 0) visuals.sources.push(out.label);
+      }
+      return out;
+    },
+
     async list_available_data() {
       const client = await getDb().catch(function () { return null; });
       let vessels = [];
@@ -301,6 +349,7 @@ function makeTools(input, getDb, opts) {
       return {
         measurements: METRICS.filter(function (m) { return !m.finerVersionOf; })
           .map(function (m) { return { name: m.label, unit: m.unit, about: m.description }; }),
+        records: records.TOPICS,
         vessels: vessels,
         help_topics: GUIDE.map(function (g) { return g.title; }),
       };
@@ -644,7 +693,7 @@ async function run(input, getDb, opts) {
           role: 'tool',
           tool_call_id: c.id,
           name: name,
-          content: JSON.stringify(result).slice(0, 6000),
+          content: JSON.stringify(result).slice(0, 16000),
         });
       }
       // The records have been read: give the connection back before the
@@ -691,7 +740,7 @@ async function run(input, getDb, opts) {
 /** A short line for the widget while a tool runs ("Reading the records"). */
 function statusFor(calls) {
   const names = calls.map(function (c) { return c.function && c.function.name; });
-  if (names.indexOf('get_vessel_data') >= 0) return 'Reading the records';
+  if (names.indexOf('get_vessel_data') >= 0 || names.indexOf('get_vessel_records') >= 0) return 'Reading the records';
   if (names.indexOf('get_fleet_briefing') >= 0) return 'Checking your fleet';
   if (names.indexOf('search_app_help') >= 0) return 'Looking that up';
   if (names.indexOf('remember_user_details') >= 0) return 'Noting that';
@@ -747,6 +796,8 @@ function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alread
   if (visuals.chart) answer.chart = visuals.chart;
   if (visuals.series) answer.series = visuals.series;
   if (visuals.provenance) answer.provenance = visuals.provenance;
+  // Where a record answer came from, in one line under it.
+  if (visuals.sources && visuals.sources.length && !visuals.provenance) answer.footnote = 'From the records: ' + visuals.sources.join(', ');
   if (visuals.unit) answer.unit = visuals.unit;
   // An engine question stays open only if the reply actually asks one and no
   // later lookup answered it; otherwise it would hijack the next message.

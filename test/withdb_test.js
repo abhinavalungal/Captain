@@ -9,10 +9,10 @@ const { handleKris } = require('../src/httpHandler');
   // A live-looking client that CONNECTS fine but whose QUERY throws - this is
   // exactly "database reachable, but the schema doesn't match" (e.g. a view
   // that hasn't been created yet, a renamed column).
-  const flakyClient = { query: async () => { throw new Error('relation "kris_fueleu_final" does not exist'); } };
+  const flakyClient = { query: async () => { throw new Error('relation "kris.voyage_summary" does not exist'); } };
 
   const out = await router.route(
-    { text: 'gross cb for aurora trader this month', session, now: new Date(), history: [], context: {} },
+    { text: 'voyage fuel for aurora trader this month', session, now: new Date(), history: [], context: {} },
     async () => flakyClient,
     { orgId: 'o', env: { KRIS_ENABLE_LLM: '0' } }
   );

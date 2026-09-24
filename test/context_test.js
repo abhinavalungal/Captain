@@ -236,12 +236,22 @@ for (const [text, history, pending, kind, intent] of LABELLED) {
     assert.strictEqual(r.out.source, 'agent', r.out.text);
   });
 
-  await ta('clarify when it matters: a figure with two vessels and no name still asks which vessel', async () => {
-    const r = await ask('shaft power yesterday');
-    score('clarify', r.out.status === 'clarify');
-    assert.strictEqual(r.out.status, 'clarify');
-    assert.strictEqual(r.out.text, 'Which vessel?');
-    assert.strictEqual(r.seen.length, 0);
+  await ta('clarify only through the model: an incomplete figure question is not bounced back as "Which vessel?"', async () => {
+    // Two vessels, no name: the engine alone would ask. The model has the same
+    // engine as a tool, plus the records, and can answer both vessels or ask.
+    const r = await ask('shaft power yesterday', {}, [
+      tool('get_vessel_data', { question: 'shaft power yesterday' }),
+      say('Which vessel do you mean: Aurora Trader or Blue Star?'),
+    ]);
+    score('clarify', r.out.source === 'agent');
+    assert.strictEqual(r.out.source, 'agent');
+    assert.ok(r.out.pending && r.out.pending.kind === 'clarify', 'the question the model relays stays open');
+    assert.deepStrictEqual((r.out.options || []).map((o) => o.label).slice(0, 2), ['Aurora Trader', 'Blue Star']);
+  });
+  await ta('a complete figure question is still answered by the engine without the model', async () => {
+    const r = await ask('shaft power for Aurora Trader yesterday');
+    assert.strictEqual(r.out.status, 'answer', r.out.text);
+    assert.strictEqual(r.seen.length, 0, 'no model call for a question the engine answers in full');
   });
 
   // --- answer validation: a repeated reply is regenerated once ----------------------

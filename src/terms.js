@@ -12,7 +12,7 @@ const { normalizeTerm, foldTokens } = require('./normalize');
  * has INSERT/UPDATE granted on that table and nothing else.
  */
 
-const TABLE = 'kris_term_mappings';
+const TABLE = 'kris.kris_term_mappings';
 
 async function loadMappings(db, orgId) {
   const { rows } = await db.query(
