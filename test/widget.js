@@ -275,6 +275,35 @@ function boot(opts, storage) {
     assert(/And that is the picture\./.test(m.textContent), 'prose after a malformed visual was lost');
   });
 
+  await ta('visuals: a map pins positions from its numbers; tiles come only from the widget option', async () => {
+    const w = boot({ mapTiles: 'https://tiles.test/{z}/{x}/{y}.png' });
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async () => jsonResponse({
+      status: 'answer', source: 'agent', text: 'Suddha Star is at sea; Suddha Sky is at anchor.',
+      visuals: [{ type: 'map', title: 'Where your vessels are', points: [
+        { name: 'Suddha Star', lat: -21.68, lon: -40.25, note: 'at sea, to Rotterdam' },
+        { name: 'Suddha Sky', lat: 53.62, lon: 8.11, note: 'at anchor off Wilhelmshaven' },
+        { name: 'Nowhere', lat: 123, lon: 0 }, { name: '<img src=x onerror=alert(1)>', lat: 'x', lon: 1 }] }],
+    }));
+    await w.type('Where are my vessels?');
+    await w.idle();
+    const map = w.q('.turn.assistant .vz-map svg');
+    assert(map, 'no map rendered');
+    assert(map.querySelectorAll('circle.pin').length === 2, 'invalid points must be dropped');
+    const tiles = Array.from(map.querySelectorAll('image')).map((i) => i.getAttribute('href'));
+    assert(tiles.length > 0 && tiles.every((h) => /^https:\/\/tiles\.test\/\d+\/\d+\/\d+\.png$/.test(h)), tiles.join(' '));
+    assert(/Suddha Star 21°41′S 40°15′W/.test(w.q('.turn.assistant .vz-map-l').textContent), 'no readable position list');
+    assert(!w.q('.turn.assistant img'), 'a label became markup');
+    const off = boot({ mapTiles: false });
+    await wait(20);
+    off.window.KRIS.open();
+    off.respond(async () => jsonResponse({ status: 'answer', source: 'agent', text: 'Here.', visuals: [{ type: 'map', points: [{ name: 'A', lat: 1, lon: 1 }] }] }));
+    await off.type('where?');
+    await off.idle();
+    assert(off.q('.turn.assistant .vz-map circle.pin') && !off.q('.turn.assistant .vz-map image'), 'mapTiles:false still loads tiles');
+  });
+
   await ta('visuals: spec text is text — markup in a label never becomes an element', async () => {
     const w = boot();
     await wait(20);

@@ -1,19 +1,21 @@
 'use strict';
 
 /**
- * K.R.1.S test data: two fictional vessels, TEST VESSEL 01 and TEST VESSEL 02,
- * from 1 January 2023 up to the moment it is generated.
+ * K.R.1.S test data: two fictional vessels, Suddha Star and Suddha Sky, from
+ * 1 January 2023 up to the moment it is generated.
  *
- * NOTHING HERE IS REAL. Vessel and company names start with TEST, emails use
- * the reserved .example domain, IMO numbers are in the 1000000 range (valid
- * check digit, a range never issued to a ship), every vessel row has
- * is_test = true, and carbon prices are illustrative, not market data.
+ * NOTHING HERE IS REAL. Company names start with TEST, emails use the
+ * reserved .example domain, IMO numbers are in the 1000000 range (valid check
+ * digit, a range never issued to a ship), every vessel row has is_test = true,
+ * and carbon prices are illustrative, not market data.
  *
  * How the numbers are made to agree:
  *   1. A voyage timeline is simulated per vessel with a seeded PRNG: passages
  *      at a speed over a route distance, port stays with waiting and cargo time.
  *   2. Departure, noon and arrival reports are cut from that timeline; distance
- *      is speed x hours, main-engine power follows the cube of speed, and fuel
+ *      is speed x hours, the position is that distance along the route's sea
+ *      lane (waypoints, never over land), main-engine power follows the cube
+ *      of speed, and fuel
  *      per consumer and fuel type follows from power, SFOC and where the ship
  *      is (ECA, EU/UK berth, gas or liquid mode).
  *   3. Everything that depends on the result (FuelEU pooling, allowance
@@ -71,6 +73,37 @@ const PORTS = [
   ['CASJB', 'Saint John', 'CA', 'Canada', 'OTHER', true, 45.26, -66.06],
 ];
 
+// Sea-lane waypoints [lat, lon] between the ports of each route: positions
+// are interpolated along them, so a vessel on the map is never over land.
+const WP = {
+  SANTOS_ROTTERDAM: [[-24.3, -45.6], [-23.3, -41.5], [-18.5, -37.8], [-13.0, -37.5], [-7.5, -34.3], [-3.0, -32.0], [3.0, -28.5],
+    [12.0, -24.5], [20.0, -21.5], [28.5, -19.0], [36.0, -11.2], [42.8, -9.9], [48.0, -6.0], [49.6, -3.0], [50.4, -0.5], [51.05, 1.6], [51.7, 2.9]],
+  ROTTERDAM_GDANSK: [[52.1, 3.9], [53.3, 4.3], [54.2, 6.0], [55.5, 7.2], [56.8, 7.6], [57.6, 9.4], [57.85, 10.8], [57.3, 11.4], [56.3, 12.1],
+    [55.6, 12.75], [55.25, 13.2], [54.85, 14.4], [54.9, 16.3], [54.7, 19.0]],
+  GDANSK_CASABLANCA: [[54.7, 19.0], [54.9, 16.3], [54.85, 14.4], [55.25, 13.2], [55.6, 12.75], [56.3, 12.1], [57.3, 11.4], [57.85, 10.8],
+    [57.6, 9.4], [56.8, 7.6], [55.5, 7.2], [54.2, 6.0], [53.3, 4.3], [52.3, 3.0], [51.05, 1.6], [50.4, -0.5], [49.6, -3.0], [48.0, -6.0],
+    [42.8, -9.9], [37.5, -10.2], [35.0, -8.6], [33.8, -7.8]],
+  CASABLANCA_RICHARDS: [[33.8, -7.9], [31.0, -11.0], [27.0, -14.5], [24.0, -17.0], [18.0, -18.5], [12.0, -18.5], [5.0, -15.0], [-2.0, -8.0],
+    [-10.0, -2.0], [-20.0, 5.0], [-28.0, 11.5], [-33.5, 16.5], [-35.3, 19.5], [-35.0, 22.5], [-34.4, 26.5], [-33.2, 28.4], [-31.2, 30.6], [-29.4, 31.9]],
+  RICHARDS_IMMINGHAM: [[-29.4, 31.9], [-31.2, 30.6], [-33.2, 28.4], [-34.4, 26.5], [-35.0, 22.5], [-35.3, 19.5], [-33.5, 16.5], [-28.0, 11.5],
+    [-20.0, 5.0], [-10.0, -2.0], [-2.0, -8.0], [5.0, -15.0], [12.0, -18.5], [18.0, -18.5], [24.0, -17.0], [27.0, -14.5], [31.0, -11.0],
+    [36.0, -11.2], [42.8, -9.9], [48.0, -6.0], [49.6, -3.0], [50.4, -0.5], [51.05, 1.6], [52.0, 2.3], [53.1, 1.9], [53.55, 0.4]],
+  IMMINGHAM_TEESPORT: [[53.58, 0.4], [53.9, 0.4], [54.3, -0.2], [54.62, -1.0]],
+  TEESPORT_SANTOS: [[54.62, -0.9], [54.0, 0.6], [53.1, 1.9], [52.0, 2.3], [51.05, 1.6], [50.4, -0.5], [49.6, -3.0], [48.0, -6.0], [42.8, -9.9],
+    [36.0, -11.2], [28.5, -19.0], [20.0, -21.5], [12.0, -24.5], [3.0, -28.5], [-3.0, -32.0], [-7.5, -34.3], [-13.0, -37.5], [-18.5, -37.8],
+    [-23.3, -41.5], [-24.3, -45.6]],
+  CORPUS_ROTTERDAM: [[27.6, -96.9], [26.8, -94.0], [25.6, -89.0], [24.2, -84.5], [24.3, -82.0], [25.0, -80.1], [27.0, -79.8], [30.5, -79.3],
+    [34.5, -74.5], [38.5, -62.0], [42.5, -48.0], [46.5, -30.0], [48.8, -12.0], [49.4, -5.5], [50.2, -1.0], [51.05, 1.6], [51.7, 2.9]],
+  ROTTERDAM_MONGSTAD: [[52.1, 3.9], [53.5, 3.8], [56.0, 4.0], [58.5, 4.3], [60.3, 4.4], [60.75, 4.6]],
+  MONGSTAD_WILHELMSHAVEN: [[60.75, 4.6], [59.0, 4.6], [57.0, 5.8], [55.2, 6.8], [54.1, 7.6], [53.95, 7.95]],
+  WILHELMSHAVEN_CORPUS: [[53.95, 7.95], [53.9, 6.5], [53.4, 4.3], [52.3, 3.0], [51.05, 1.6], [50.2, -1.0], [49.4, -5.5], [48.8, -12.0],
+    [46.5, -30.0], [42.5, -48.0], [38.5, -62.0], [34.5, -74.5], [30.5, -79.3], [27.0, -79.8], [25.0, -80.1], [24.3, -82.0], [24.2, -84.5],
+    [25.6, -89.0], [26.8, -94.0], [27.6, -96.9]],
+  CORPUS_SAINTJOHN: [[27.6, -96.9], [26.8, -94.0], [25.6, -89.0], [24.2, -84.5], [24.3, -82.0], [25.0, -80.1], [27.0, -79.8], [30.5, -79.3],
+    [34.5, -74.5], [38.5, -71.5], [41.5, -67.8], [43.8, -66.6], [44.9, -66.2]],
+};
+WP.SAINTJOHN_CORPUS = WP.CORPUS_SAINTJOHN.slice().reverse();
+
 // ---------------------------------------------------------------------------
 // The two vessels and the trades they run
 // ---------------------------------------------------------------------------
@@ -78,7 +111,7 @@ const PORTS = [
 // ecaFrom / ecaTo: miles of the passage inside an emission control area,
 // counted from the departure port / towards the arrival port.
 const TV01 = {
-  id: '1000019', name: 'TEST VESSEL 01', code: 'TV01', department: 'Emission',
+  id: '1000019', name: 'Suddha Star', code: 'SSTAR', kind: 'bulk', department: 'Emission',
   ship_type: 'bulk_carrier', vessel_type: 'Ultramax bulk carrier (geared, 4 x 30 t cranes)', flag: 'Marshall Islands',
   owner: 'TEST-NWO', manager: 'TEST-HLM', charterer: 'TEST-MCH', customer: 'TEST-HLM',
   gt: 36420, nt: 21390, dwt: 63520, capacity: 79600, capUnit: 'm3',
@@ -93,13 +126,13 @@ const TV01 = {
   boilerSea: 0.25, boilerWait: 0.9, boilerPort: 1.3,
   wait: { laden: [1.0, 4.5], ballast: [1.5, 5.0] }, cargoRate: 11500, loadDays: [2.5, 4.0],
   route: [
-    { from: 'BRSSZ', to: 'NLRTM', nm: 5300, ecaTo: 330, cargo: 'Soybeans', qty: 60500 },
-    { from: 'NLRTM', to: 'PLGDN', nm: 690, ecaFrom: 690 },
-    { from: 'PLGDN', to: 'MACAS', nm: 2050, ecaFrom: 880, cargo: 'Wheat', qty: 55200 },
-    { from: 'MACAS', to: 'ZARCB', nm: 5100 },
-    { from: 'ZARCB', to: 'GBIMM', nm: 6900, ecaTo: 420, cargo: 'Steam coal', qty: 61000, partDischarge: 37000 },
-    { from: 'GBIMM', to: 'GBTEE', nm: 125, ecaFrom: 125, cargo: 'Steam coal (remaining part cargo)', qty: 24000 },
-    { from: 'GBTEE', to: 'BRSSZ', nm: 5250, ecaFrom: 380 },
+    { from: 'BRSSZ', to: 'NLRTM', nm: 5300, wp: WP.SANTOS_ROTTERDAM, ecaTo: 330, cargo: 'Soybeans', qty: 60500 },
+    { from: 'NLRTM', to: 'PLGDN', nm: 690, wp: WP.ROTTERDAM_GDANSK, ecaFrom: 690 },
+    { from: 'PLGDN', to: 'MACAS', nm: 2050, wp: WP.GDANSK_CASABLANCA, ecaFrom: 880, cargo: 'Wheat', qty: 55200 },
+    { from: 'MACAS', to: 'ZARCB', nm: 5100, wp: WP.CASABLANCA_RICHARDS },
+    { from: 'ZARCB', to: 'GBIMM', nm: 6900, wp: WP.RICHARDS_IMMINGHAM, ecaTo: 420, cargo: 'Steam coal', qty: 61000, partDischarge: 37000 },
+    { from: 'GBIMM', to: 'GBTEE', nm: 125, wp: WP.IMMINGHAM_TEESPORT, ecaFrom: 125, cargo: 'Steam coal (remaining part cargo)', qty: 24000 },
+    { from: 'GBTEE', to: 'BRSSZ', nm: 5250, wp: WP.TEESPORT_SANTOS, ecaFrom: 380 },
   ],
   bunkerPorts: { NLRTM: ['HSFO', 'MGO'], BRSSZ: ['VLSFO'] },
   offhire: [{ year: 2024, nth: 4, days: 0.6, reason: 'Crew medical deviation' },
@@ -107,7 +140,7 @@ const TV01 = {
 };
 
 const TV02 = {
-  id: '1000021', name: 'TEST VESSEL 02', code: 'TV02', department: 'Emission',
+  id: '1000021', name: 'Suddha Sky', code: 'SSKY', kind: 'tanker', department: 'Emission',
   ship_type: 'tanker', vessel_type: 'Aframax crude oil tanker, LNG dual-fuel', flag: 'Malta',
   owner: 'TEST-AOT', manager: 'TEST-HLM', charterer: 'TEST-ATE', customer: 'TEST-HLM',
   gt: 63910, nt: 34480, dwt: 114650, capacity: 125400, capUnit: 'm3',
@@ -122,12 +155,12 @@ const TV02 = {
   wait: { laden: [0.4, 1.6], ballast: [0.3, 1.4] }, dischargeDays: [1.3, 1.8], loadDays: [1.1, 1.5],
   liquidModeEvery: 7,   // one voyage in N runs on VLSFO (no LNG at the last bunker call)
   route: [
-    { from: 'USCRP', to: 'NLRTM', nm: 5050, ecaFrom: 200, ecaTo: 330, cargo: 'WTI crude oil', qty: 98500 },
-    { from: 'NLRTM', to: 'NOMON', nm: 540, ecaFrom: 540 },
-    { from: 'NOMON', to: 'DEWVN', nm: 470, ecaFrom: 470, cargo: 'North Sea crude oil', qty: 97200 },
-    { from: 'DEWVN', to: 'USCRP', nm: 5200, ecaFrom: 360, ecaTo: 200 },
-    { from: 'USCRP', to: 'CASJB', nm: 2350, ecaFrom: 200, ecaTo: 200, cargo: 'WTI crude oil', qty: 99100 },
-    { from: 'CASJB', to: 'USCRP', nm: 2350, ecaFrom: 200, ecaTo: 200 },
+    { from: 'USCRP', to: 'NLRTM', nm: 5050, wp: WP.CORPUS_ROTTERDAM, ecaFrom: 200, ecaTo: 330, cargo: 'WTI crude oil', qty: 98500 },
+    { from: 'NLRTM', to: 'NOMON', nm: 540, wp: WP.ROTTERDAM_MONGSTAD, ecaFrom: 540 },
+    { from: 'NOMON', to: 'DEWVN', nm: 470, wp: WP.MONGSTAD_WILHELMSHAVEN, ecaFrom: 470, cargo: 'North Sea crude oil', qty: 97200 },
+    { from: 'DEWVN', to: 'USCRP', nm: 5200, wp: WP.WILHELMSHAVEN_CORPUS, ecaFrom: 360, ecaTo: 200 },
+    { from: 'USCRP', to: 'CASJB', nm: 2350, wp: WP.CORPUS_SAINTJOHN, ecaFrom: 200, ecaTo: 200, cargo: 'WTI crude oil', qty: 99100 },
+    { from: 'CASJB', to: 'USCRP', nm: 2350, wp: WP.SAINTJOHN_CORPUS, ecaFrom: 200, ecaTo: 200 },
   ],
   bunkerPorts: { NLRTM: ['LNG', 'VLSFO', 'MGO'], USCRP: ['VLSFO', 'MGO'] },
   offhire: [{ year: 2026, nth: 3, days: 0.9, reason: 'Underwater hull inspection and cleaning' }],
@@ -154,6 +187,45 @@ const r3 = (x) => Math.round(x * 1000) / 1000;
 const r1 = (x) => Math.round(x * 10) / 10;
 const iso = (ms) => new Date(ms).toISOString();
 const ymd = (ms) => iso(ms).slice(0, 10);
+
+// --- positions ---------------------------------------------------------------
+
+const PORT_POS = Object.fromEntries(PORTS.map((p) => [p[0], [p[6], p[7]]]));
+const rad = (d) => d * Math.PI / 180;
+
+function gcNm(a, b) {
+  const [p1, p2] = [rad(a[0]), rad(b[0])];
+  const h = Math.sin((p2 - p1) / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(rad(b[1] - a[1]) / 2) ** 2;
+  return 2 * 3440.065 * Math.asin(Math.sqrt(h));
+}
+
+function bearing(a, b) {
+  const [p1, p2, dl] = [rad(a[0]), rad(b[0]), rad(b[1] - a[1])];
+  const y = Math.sin(dl) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.round(Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+}
+
+/** The route as a polyline with cumulative miles, port to port. */
+function lane(leg) {
+  const pts = [PORT_POS[leg.from], ...(leg.wp || []), PORT_POS[leg.to]];
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + gcNm(pts[i - 1], pts[i]));
+  return { pts, cum, length: cum[cum.length - 1] };
+}
+
+/** The point `frac` of the way along a lane, and the course there. */
+function along(l, frac) {
+  const at = Math.max(0, Math.min(1, frac)) * l.length;
+  let i = 1;
+  while (i < l.cum.length - 1 && l.cum[i] < at) i++;
+  const seg = l.cum[i] - l.cum[i - 1] || 1;
+  const f = (at - l.cum[i - 1]) / seg;
+  const a = l.pts[i - 1]; const b = l.pts[i];
+  return { lat: a[0] + (b[0] - a[0]) * f, lon: a[1] + (b[1] - a[1]) * f, course: bearing(a, b) };
+}
+
+const r5 = (x) => Math.round(x * 1e5) / 1e5;
 
 /** Voyages and port stays from START until `until`. */
 function timeline(spec, until) {
@@ -194,7 +266,7 @@ function burn(spec, v, mode, hours, ctx) {
   const f = {};
   const add = (code, key, t) => { if (t <= 0) return; f[code] = f[code] || { me: 0, ae: 0, boiler: 0 }; f[code][key] += t; };
   const portRegion = PORT_BY[v.leg.to].region;
-  if (spec.code === 'TV01') {
+  if (spec.kind === 'bulk') {
     if (mode === 'sea') {
       const fuel = ctx.eca ? 'MGO' : 'HSFO';
       add(fuel, 'me', ctx.powerKw * hours * spec.sfoc / 1e6);
@@ -207,7 +279,7 @@ function burn(spec, v, mode, hours, ctx) {
     }
     return f;
   }
-  // TV02: LNG dual-fuel. Gas mode burns LNG with 1% of the energy as MGO pilot.
+  // Suddha Sky: LNG dual-fuel. Gas mode burns LNG with 1% of the energy as MGO pilot.
   const gas = !v.liquid;
   const liquid = ctx.eca || portRegion !== 'OTHER' ? 'MGO' : 'VLSFO';
   const gasEnergy = (kwh, bsec) => kwh * bsec / 1000;   // MJ
@@ -253,8 +325,15 @@ function reports(spec, voyages, until) {
       .filter((x) => x.me + x.ae + x.boiler > 0);
     const sum = (k) => r3(rows.reduce((n, x) => n + x[k], 0));
     const total = r3(sum('me') + sum('ae') + sum('boiler'));
+    // Where the report was made: along the lane at sea, at the berth or the
+    // anchorage (a few miles out on the approach) in port.
+    const l = lane(v.leg);
+    const pos = mode === 'sea' ? along(l, ctx.milesFromStart / v.leg.nm)
+      : at < v.berthed ? along(l, 1 - Math.min(0.5, 6 / l.length)) : { lat: PORT_POS[v.leg.to][0], lon: PORT_POS[v.leg.to][1], course: null };
     out.push({
       imo: spec.id, name: spec.name, form, at, voyage: v.ref, mode, hours: r1(hours),
+      lat: r5(pos.lat), lon: r5(pos.lon), course: mode === 'sea' ? pos.course : null,
+      wind: mode === 'sea' ? Math.max(1, Math.min(8, Math.round(3 + (sea.weather - 1) * 40))) : null,
       hoursUnderway: mode === 'sea' ? r1(hours) : 0,
       distance: r1(distance), speed: mode === 'sea' ? Math.round(speed * 100) / 100 : 0,
       power: powerKw == null ? null : Math.round(powerKw), rpm: rpm == null ? null : r1(rpm),
@@ -293,7 +372,7 @@ function reports(spec, voyages, until) {
       const mid = fromStart + miles / 2;
       const eca = (v.leg.ecaFrom && mid <= v.leg.ecaFrom) || (v.leg.ecaTo && v.leg.nm - mid <= v.leg.ecaTo);
       push(v, final && k === cuts.length - 1 ? 'arrival' : 'noon', c, 'sea', periods[k],
-        { distance: miles, eca: !!eca, weather: 1 + (rnd() - 0.4) * 0.12 });
+        { distance: miles, eca: !!eca, weather: 1 + (rnd() - 0.4) * 0.12, milesFromStart: fromStart + miles });
       fromStart += miles;
     });
     if (!final) break;
@@ -383,8 +462,9 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
     s.owner, s.manager, s.charterer, s.customer, s.gt, s.nt, s.dwt, s.capacity, s.capUnit,
     s.me, s.cyl, s.mcr, s.rpm, s.aux, s.scrubber, s.dual, s.built, s.builder, s.klass, s.design, s.ref, true]),
   'VALUES %VALUES%'));
-  sql.push(valuesInsert('INSERT INTO kris.vessel_fuel_types (vessel_id, fuel_code, usage)',
-    ships.flatMap((s) => s.fuels.map(([f, u]) => [s.id, f, u])), 'VALUES %VALUES%'));
+  sql.push(valuesInsert('INSERT INTO kris.route_distances (from_port, to_port, nm)',
+    ships.flatMap((s) => s.route.map((l) => [l.from, l.to, l.nm])),
+    'VALUES %VALUES%\nON CONFLICT (from_port, to_port) DO UPDATE SET nm = EXCLUDED.nm'));
 
   // --- voyages and port calls ---------------------------------------------------
   const voyRows = []; const callRows = []; const offRows = [];
@@ -423,14 +503,16 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
   for (const { reports: rs } of sim) {
     for (const r of rs) {
       repRows.push([r.imo, r.name, r.form, iso(r.at), ymd(r.at), r.power, r.total, r.me, r.ae, r.boiler,
-        r.distance, r.speed, r.rpm, r.co2, r.mode, r.hoursUnderway, r.voyage]);
+        r.distance, r.speed, r.rpm, r.co2, r.mode, r.hoursUnderway, r.lat, r.lon, r.course, r.wind, r.voyage]);
       for (const f of r.fuels) fuelRows.push([r.imo, iso(r.at), r.form, f.code, f.me, f.ae, f.boiler]);
     }
   }
   sql.push(valuesInsert(`INSERT INTO kris.geoform_reports (imo, vessel_name, form_type, report_time, report_date, shaft_power_kw, fuel_consumed_mt,
-  me_fuel_mt, ae_fuel_mt, boiler_fuel_mt, distance_nm, speed_kn, me_rpm, co2_mt, mode, hours_underway, voyage_id)`, repRows,
-  `SELECT d.imo, d.name, d.form, d.at::timestamptz, d.day::date, d.power, d.total, d.me, d.ae, d.boiler, d.distance, d.speed, d.rpm, d.co2, d.mode, d.hours, v.id
-  FROM (VALUES %VALUES%) AS d(imo, name, form, at, day, power, total, me, ae, boiler, distance, speed, rpm, co2, mode, hours, voyage_ref)
+  me_fuel_mt, ae_fuel_mt, boiler_fuel_mt, distance_nm, speed_kn, me_rpm, co2_mt, mode, hours_underway,
+  latitude, longitude, course_deg, wind_force_bft, voyage_id)`, repRows,
+  `SELECT d.imo, d.name, d.form, d.at::timestamptz, d.day::date, d.power, d.total, d.me, d.ae, d.boiler, d.distance, d.speed, d.rpm, d.co2, d.mode, d.hours,
+          d.lat, d.lon, d.course::smallint, d.wind::smallint, v.id
+  FROM (VALUES %VALUES%) AS d(imo, name, form, at, day, power, total, me, ae, boiler, distance, speed, rpm, co2, mode, hours, lat, lon, course, wind, voyage_ref)
   JOIN kris.voyages v ON v.voyage_ref = d.voyage_ref`));
   sql.push(valuesInsert('INSERT INTO kris.fuel_consumption (report_id, fuel_code, me_t, ae_t, boiler_t)', fuelRows,
     `SELECT r.id, d.fuel, d.me, d.ae, d.boiler
@@ -480,6 +562,23 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
   FROM (VALUES %VALUES%) AS d(no, vessel, voyage_ref, port, at, code, qty, s, dens, supplier, status, rec, ver)
   JOIN kris.voyages v ON v.voyage_ref = d.voyage_ref`));
 
+  // --- fuel types, with the opening quantity on board that keeps every
+  //     vessel's remaining fuel above a reserve through the whole period -------
+  const onBoard = [];
+  for (const { spec, reports: rs } of sim) {
+    for (const [code, usage] of spec.fuels) {
+      const events = rs.map((r) => ({ at: r.at, d: -r.fuels.filter((f) => f.code === code).reduce((n, f) => n + f.me + f.ae + f.boiler, 0) }))
+        .concat(bdnRows.filter((b) => b.vessel === spec.id && b.code === code).map((b) => ({ at: b.at, d: b.qty })))
+        .sort((a, b) => a.at - b.at);
+      let bal = 0; let low = 0;
+      for (const e of events) { bal += e.d; low = Math.min(low, bal); }
+      const reserve = code === 'MGO' ? 60 : 150;
+      onBoard.push([spec.id, code, usage, Math.ceil((reserve - low) / 5) * 5, iso(START)]);
+    }
+  }
+  sql.push(valuesInsert('INSERT INTO kris.vessel_fuel_types (vessel_id, fuel_code, usage, opening_rob_t, opening_at)', onBoard,
+    'SELECT d.v, d.f, d.u, d.rob, d.at::timestamptz FROM (VALUES %VALUES%) AS d(v, f, u, rob, at)'));
+
   // --- illustrative carbon prices, first business day of each month ---------------
   const prices = [];
   const pr = prng(77);
@@ -507,7 +606,7 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
 function derived(until) {
   const U = `DATE '${until}'`;
   return `
--- CII correction entry: TEST VESSEL 02's cargo-heating boiler fuel at sea.
+-- CII correction entry: ${TV02.name}'s cargo-heating boiler fuel at sea.
 INSERT INTO kris.cii_adjustments (vessel_id, year, co2_deduction_t, reason, reference)
 SELECT vessel_id, EXTRACT(YEAR FROM report_time)::int, round(SUM(boiler_t * cf_co2), 3),
        'Cargo heating boiler fuel (test example of a correction entry)', 'MEPC.355(78)'
@@ -515,8 +614,8 @@ SELECT vessel_id, EXTRACT(YEAR FROM report_time)::int, round(SUM(boiler_t * cf_c
  WHERE vessel_id = '1000021' AND mode = 'sea' AND boiler_t > 0 AND report_time < DATE '2026-01-01'
  GROUP BY 1, 2;
 
--- FuelEU 2025: TEST VESSEL 01's deficit is covered by pooling with TEST VESSEL 02's
--- surplus; TEST VESSEL 02 banks half of what is left.
+-- FuelEU 2025: ${TV01.name}'s deficit is covered by pooling with ${TV02.name}'s
+-- surplus; ${TV02.name} banks half of what is left.
 INSERT INTO kris.fueleu_pools (id, year, name, manager_id, verifier_id, status, registered_at)
 VALUES ('TEST-POOL-2025', 2025, 'TEST Harbourline FuelEU pool 2025', 'TEST-HLM', 'TEST-VER', 'verified', '2026-04-14 10:00+00');
 
@@ -598,7 +697,7 @@ SELECT a.ref, trd.id, a.vessel, a.scheme, a.yr, a.qty, a.req, a.conf, a.by, a.xf
   JOIN trd ON trd.trade_ref = a.trade
  WHERE a.req::date <= ${U} AND a.qty > 0;
 
--- Surrenders: 2024 by both vessels; 2025 by TEST VESSEL 02 (TEST VESSEL 01 is still short).
+-- Surrenders: 2024 by both vessels; 2025 by ${TV02.name} (${TV01.name} is still short).
 INSERT INTO kris.allowance_surrenders (vessel_id, scheme, obligation_year, quantity, surrendered_at, registry_ref)
 SELECT o.vessel_id, o.scheme, o.year, o.allowances_required, s.at, s.ref
   FROM kris.ets_obligations o
@@ -614,22 +713,22 @@ SELECT i.no, 'TEST-HLM', i.vessel, i.type, i.issued, i.due, COALESCE(i.amount, r
   FROM (
     SELECT 'INV-TEST-2025-0001' AS no, '1000019' AS vessel, 'carbon_recharge' AS type, DATE '2025-04-05' AS issued, DATE '2025-05-05' AS due,
            NULL::numeric AS amount, 'EUR' AS cur, 'ALC-TEST-2025-0001' AS alloc, 'paid' AS state, DATE '2025-04-28' AS paid,
-           'EU ETS 2024 allowances allocated to TEST VESSEL 01' AS descr
+           'EU ETS 2024 allowances allocated to ${TV01.name}' AS descr
     UNION ALL SELECT 'INV-TEST-2025-0002', '1000021', 'carbon_recharge', DATE '2025-04-05', DATE '2025-05-05', NULL, 'EUR', 'ALC-TEST-2025-0002', 'paid', DATE '2025-04-30',
-           'EU ETS 2024 allowances allocated to TEST VESSEL 02'
+           'EU ETS 2024 allowances allocated to ${TV02.name}'
     UNION ALL SELECT 'INV-TEST-2026-0003', '1000021', 'carbon_recharge', DATE '2026-03-05', DATE '2026-04-04', NULL, 'EUR', 'ALC-TEST-2026-0003', 'paid', DATE '2026-03-30',
-           'EU ETS 2025 allowances allocated to TEST VESSEL 02'
+           'EU ETS 2025 allowances allocated to ${TV02.name}'
     UNION ALL SELECT 'INV-TEST-2026-0004', '1000019', 'fueleu_pooling', DATE '2026-05-04', DATE '2026-06-03',
            round((SELECT pool_transfer_g FROM kris.fueleu_flexibility WHERE vessel_id = '1000019' AND year = 2025) / 1e6 * 185, 2),
-           'EUR', NULL, 'paid', DATE '2026-06-11', 'FuelEU 2025 pool contribution received from TEST VESSEL 02 at EUR 185 per tCO2e'
+           'EUR', NULL, 'paid', DATE '2026-06-11', 'FuelEU 2025 pool contribution received from ${TV02.name} at EUR 185 per tCO2e'
     UNION ALL SELECT 'INV-TEST-2026-0005', '1000019', 'carbon_recharge', DATE '2026-06-25', DATE '2026-07-25', NULL, 'EUR', 'ALC-TEST-2026-0004', 'issued', NULL,
-           'EU ETS 2025 allowances allocated to TEST VESSEL 01 (first tranche)'
+           'EU ETS 2025 allowances allocated to ${TV01.name} (first tranche)'
     UNION ALL SELECT 'INV-TEST-2026-0006', '1000019', 'verification_fee', ${U} - 12, ${U} + 18, 4850, 'EUR', NULL, 'issued', NULL,
            'EU MRV 2025 emissions report verification'
     UNION ALL SELECT 'INV-TEST-2026-0007', '1000021', 'service_fee', DATE '2026-09-01', DATE '2026-10-01', 2400, 'EUR', NULL, 'issued', NULL,
            'Compliance monitoring service, Q3 2026'
     UNION ALL SELECT 'INV-TEST-2026-0008', '1000019', 'carbon_recharge', ${U} - 1, ${U} + 29, NULL, 'GBP', 'ALC-TEST-2026-0006', 'draft', NULL,
-           'UK ETS 2026 allowances allocated to TEST VESSEL 01'
+           'UK ETS 2026 allowances allocated to ${TV01.name}'
   ) i
   LEFT JOIN kris.carbon_allocations a ON a.allocation_ref = i.alloc
   LEFT JOIN kris.carbon_trades t ON t.id = a.trade_id
@@ -683,7 +782,7 @@ SELECT m.mid, m.thread, m.dir, m.at, m.sender, m.rcpt, m.subject, m.body, m.cat,
       FROM kris.bunker_deliveries b JOIN kris.vessels vs ON vs.id = b.vessel_id JOIN kris.companies s ON s.id = b.supplier_id JOIN kris.ports p ON p.locode = b.locode
      WHERE b.status = 'requested' AND vs.is_test
     UNION ALL
-    -- 2. BDN received for TEST VESSEL 02's latest LNG delivery
+    -- 2. BDN received for ${TV02.name}'s latest LNG delivery
     SELECT '<bdn-rcv-1@gulf-lng.example>', 'T-BDN-2', 'inbound', b.received_at,
            'operations@' || s.email_domain, ARRAY['bunkers@harbourline.example'],
            format('BDN %s: %s %s t delivered to %s', b.bdn_no, b.fuel_code, b.quantity_t, vs.name),
@@ -694,18 +793,19 @@ SELECT m.mid, m.thread, m.dir, m.at, m.sender, m.rcpt, m.subject, m.body, m.cat,
       FROM (SELECT * FROM kris.bunker_deliveries WHERE vessel_id = '1000021' AND fuel_code = 'LNG' AND received_at IS NOT NULL ORDER BY delivered_at DESC LIMIT 1) b
       JOIN kris.vessels vs ON vs.id = b.vessel_id JOIN kris.companies s ON s.id = b.supplier_id JOIN kris.ports p ON p.locode = b.locode
     UNION ALL
-    -- 3. Latest report from TEST VESSEL 01's master
-    SELECT '<report-tv01@vessel.harbourline.example>', 'T-RPT-1', 'inbound', r.report_time + INTERVAL '40 minutes',
-           'master.tv01@vessel.harbourline.example', ARRAY['operations@harbourline.example'],
+    -- 3. Latest report from ${TV01.name}'s master
+    SELECT '<report-suddha-star@vessel.harbourline.example>', 'T-RPT-1', 'inbound', r.report_time + INTERVAL '40 minutes',
+           'master.suddha-star@vessel.harbourline.example', ARRAY['operations@harbourline.example'],
            format('%s %s report %s, voyage %s', vs.name, initcap(r.form_type), to_char(r.report_time, 'DD Mon YYYY HH24:MI "UTC"'), v.voyage_no),
-           format(E'%s report, voyage %s %s to %s.\\nMode: %s. Last %s h: %s nm at %s kn average.\\nME %s t, AE %s t, boiler %s t (total %s t), CO2 %s t.\\n\\nMaster, %s',
-                  initcap(r.form_type), v.voyage_no, v.from_port, v.to_port, r.mode, round(r.hours_underway::numeric, 1), round(r.distance_nm::numeric, 1), round(r.speed_kn::numeric, 1),
+           format(E'%s report, voyage %s %s to %s.\\nPosition %s %s, course %s, wind Bf %s.\\nLast %s h: %s nm at %s kn average.\\nME %s t, AE %s t, boiler %s t (total %s t), CO2 %s t.\\n\\nMaster, %s',
+                  initcap(r.form_type), v.voyage_no, v.from_port, v.to_port, r.latitude, r.longitude, r.course_deg, r.wind_force_bft,
+                  round(r.hours_underway::numeric, 1), round(r.distance_nm::numeric, 1), round(r.speed_kn::numeric, 1),
                   r.me_fuel_mt, r.ae_fuel_mt, r.boiler_fuel_mt, r.fuel_consumed_mt, r.co2_mt, vs.name),
            'vessel_report', 'low', 'resolved', r.imo, r.voyage_id, NULL, NULL, NULL, NULL, NULL, '[]'
       FROM (SELECT * FROM kris.geoform_reports WHERE imo = '1000019' AND mode = 'sea' ORDER BY report_time DESC LIMIT 1) r
       JOIN kris.vessels vs ON vs.id = r.imo JOIN kris.voyages v ON v.id = r.voyage_id
     UNION ALL
-    -- 4. Allocation request for TEST VESSEL 01's second 2025 tranche
+    -- 4. Allocation request for ${TV01.name}'s second 2025 tranche
     SELECT '<alloc-req-1@harbourline.example>', 'T-ALC-1', 'inbound', a.requested_at,
            'fleet.finance@harbourline.example', ARRAY['carbon@harbourline.example'],
            format('Allocation request: %s EUAs to %s for EU ETS %s', a.quantity, vs.name, a.obligation_year),

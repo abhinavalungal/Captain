@@ -1251,6 +1251,13 @@
     '.vz.vz-stats{padding:0;overflow:hidden}',
     '.vz.vz-stats .vz-h{padding:13px 16px 0;margin-bottom:11px}',
     '.vz-stats-g{display:flex;flex-wrap:wrap;gap:1px;background:var(--line)}',
+    '.vz-map svg{display:block;width:100%;height:auto;background:var(--vz-grid);border-radius:10px}',
+    '.vz-map .pin{fill:var(--vz-1);stroke:#fff;stroke-width:2}',
+    '.vz-map .pin-l{font:600 11px/1 inherit;fill:var(--ink);paint-order:stroke;stroke:var(--surface,#fff);stroke-width:3px;stroke-linejoin:round}',
+    '.vz-map .trk{fill:none;stroke:var(--vz-2);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.9}',
+    '.vz-map-a{margin:6px 0 0;font-size:10.5px;color:var(--ink-3)}',
+    '.vz-map-l{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:3px;font-size:12.5px;color:var(--ink-2)}',
+    '.vz-map-l b{color:var(--ink);font-weight:600}',
     '.vz.vz-stats .vz-h + .vz-stats-g{border-top:1px solid var(--line)}',
     '.vz-stat{flex:1 1 124px;background:var(--surface);padding:13px 16px 14px;min-width:0}',
     '.vz-sl{font-size:12px;line-height:1.35;color:var(--ink-3);margin:0 0 6px}',
@@ -1993,6 +2000,7 @@
     followups: true,        // contextual next-question chips after a data answer (the user can change it)
     persist: true,          // keep the conversation for this tab (sessionStorage); false also turns history off
     localReplies: true,     // answer pure greetings/thanks instantly, offline
+    mapTiles: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', // map tiles for position answers; false: no tiles, positions only
     warm: true,             // warm the server connection when the page is idle
     maxLength: 8000,
     timeoutMs: 90000,       // longest SILENCE before giving up; every streamed event restarts it
@@ -2032,6 +2040,7 @@
 
   function Widget(options) {
     this.opts = assign({}, DEFAULTS, options || {});
+    VZ_MAP_TILES = this.opts.mapTiles;
     if (options && options.examples && !options.examples.length) this.opts.examples = [];
     this._customExamples = !!(options && Array.isArray(options.examples));
     this.pending = null;
@@ -4580,6 +4589,9 @@
     if (data.stats) container.appendChild(tableWrap(renderStats(data)));
     if (data.metrics) container.appendChild(tableWrap(renderCatalogue(data)));
 
+    // Visuals the server attached (a map of positions it read): the same renderer as the model's.
+    vzList(data.visuals, 2).forEach(function (spec) { var v = renderVisual(spec); if (v) container.appendChild(v); });
+
     if (data.interpreted) container.appendChild(el('p', 'subject', 'Read as “' + data.interpreted + '”'));
     if (data.footnote) container.appendChild(el('p', 'subject', data.footnote));
     if (data.note) container.appendChild(el('div', 'note', data.note));
@@ -5027,7 +5039,83 @@
     return fig;
   }
 
+  var VZ_MAP_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+  /** Web Mercator pixel of a position at zoom z (256-px tiles). */
+  function vzMerc(lat, lon, z) {
+    var n = 256 * Math.pow(2, z), sn = Math.sin(lat * Math.PI / 180);
+    return [(lon + 180) / 360 * n, (0.5 - Math.log((1 + sn) / (1 - sn)) / (4 * Math.PI)) * n];
+  }
+  function vzPos(lat, lon) {
+    var f = function (v, p, q) { var a = Math.abs(v), d = Math.floor(a), m = Math.round((a - d) * 60); if (m === 60) { d++; m = 0; } return d + '°' + (m < 10 ? '0' : '') + m + '′' + (v >= 0 ? p : q); };
+    return f(lat, 'N', 'S') + ' ' + f(lon, 'E', 'W');
+  }
+
   var VZ_RENDER = {
+    // Positions on a map: tiles under an SVG, so it scales with the panel and
+    // needs no library. Tile addresses come from the widget's mapTiles option,
+    // never from the spec; the spec supplies only numbers and short labels.
+    map: function (s) {
+      var pts = vzList(s.points, 12).map(function (p) {
+        if (!p || typeof p !== 'object') return null;
+        var lat = vzNum(p.lat), lon = vzNum(p.lon);
+        if (lat == null || lon == null || Math.abs(lat) > 85 || Math.abs(lon) > 180) return null;
+        return { lat: lat, lon: lon, name: vzStr(p.name, 40), note: vzStr(p.note, 90) };
+      }).filter(Boolean);
+      if (!pts.length) return null;
+      var track = vzList(s.track, 600).map(function (t) {
+        var la = vzNum(t && t[0]), lo = vzNum(t && t[1]);
+        return la != null && lo != null && Math.abs(la) <= 85 && Math.abs(lo) <= 180 ? [la, lo] : null;
+      }).filter(Boolean);
+      var W = 320, H = 200, ns = 'http://www.w3.org/2000/svg';
+      var all = pts.map(function (p) { return [p.lat, p.lon]; }).concat(track);
+      var z, box;
+      for (z = 7; z >= 1; z--) {
+        var xy = all.map(function (a) { return vzMerc(a[0], a[1], z); });
+        box = [Math.min.apply(null, xy.map(function (q) { return q[0]; })), Math.min.apply(null, xy.map(function (q) { return q[1]; })),
+               Math.max.apply(null, xy.map(function (q) { return q[0]; })), Math.max.apply(null, xy.map(function (q) { return q[1]; }))];
+        if (box[2] - box[0] <= W - 70 && box[3] - box[1] <= H - 50) break;
+      }
+      z = Math.max(z, 1);
+      var ox = (box[0] + box[2]) / 2 - W / 2, oy = (box[1] + box[3]) / 2 - H / 2;
+      var mk = function (tag, attrs) { var e = document.createElementNS(ns, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; };
+      var svg = mk('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Map: ' + pts.map(function (p) { return (p.name ? p.name + ' ' : '') + vzPos(p.lat, p.lon); }).join('; ') });
+      if (VZ_MAP_TILES && typeof VZ_MAP_TILES === 'string') {
+        var n = Math.pow(2, z);
+        for (var tx = Math.floor(ox / 256); tx <= Math.floor((ox + W) / 256); tx++) {
+          for (var ty = Math.max(0, Math.floor(oy / 256)); ty <= Math.min(n - 1, Math.floor((oy + H) / 256)); ty++) {
+            var href = VZ_MAP_TILES.replace('{z}', z).replace('{x}', ((tx % n) + n) % n).replace('{y}', ty);
+            svg.appendChild(mk('image', { href: href, x: tx * 256 - ox - 0.5, y: ty * 256 - oy - 0.5, width: 257, height: 257 }));
+          }
+        }
+      }
+      if (track.length > 1) {
+        svg.appendChild(mk('polyline', { class: 'trk', points: track.map(function (a) { var q = vzMerc(a[0], a[1], z); return (q[0] - ox).toFixed(1) + ',' + (q[1] - oy).toFixed(1); }).join(' ') }));
+      }
+      pts.forEach(function (p) {
+        var q = vzMerc(p.lat, p.lon, z), x = q[0] - ox, y = q[1] - oy;
+        svg.appendChild(mk('circle', { class: 'pin', cx: x.toFixed(1), cy: y.toFixed(1), r: 5.5 }));
+        if (p.name) {
+          var left = x > W - 90;
+          var t = mk('text', { class: 'pin-l', x: (x + (left ? -9 : 9)).toFixed(1), y: (y + 4).toFixed(1), 'text-anchor': left ? 'end' : 'start' });
+          t.textContent = p.name;
+          svg.appendChild(t);
+        }
+      });
+      var wrap = el('div', 'vz-map-b');
+      wrap.appendChild(svg);
+      var list = el('ul', 'vz-map-l');
+      pts.forEach(function (p) {
+        var li = el('li');
+        if (p.name) li.appendChild(el('b', null, p.name + ' '));
+        li.appendChild(document.createTextNode(vzPos(p.lat, p.lon) + (p.note ? ' · ' + p.note : '')));
+        list.appendChild(li);
+      });
+      wrap.appendChild(list);
+      if (VZ_MAP_TILES && typeof VZ_MAP_TILES === 'string') wrap.appendChild(el('p', 'vz-map-a', 'Map data © OpenStreetMap contributors'));
+      return wrap;
+    },
+
     stats: function (s) {
       var items = vzList(s.items, 6).map(function (it) {
         if (!it || typeof it !== 'object') return null;

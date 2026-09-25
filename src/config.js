@@ -180,6 +180,14 @@ const METRIC_GROUPS = [
  *   about          what the rows hold; the model reads this
  */
 const RECORDS = {
+  positions: {
+    table: 'kris.vessel_positions', label: 'Current position', orderBy: 'vessel_name ASC',
+    about: 'where each vessel is now, from its latest report: time, latitude, longitude, course, speed, wind (Beaufort), situation (at sea, at anchor off, alongside at, departing), current voyage, from and to port, departure, arrival, berthing, distance sailed, distance to go, ETA. A map of the positions is shown with the answer automatically',
+  },
+  fuel_on_board: {
+    table: 'kris.fuel_on_board', label: 'Fuel on board', orderBy: 'vessel_name ASC, fuel_code ASC', filters: ['fuel_code'],
+    about: 'fuel remaining on board (ROB) per fuel type as of the latest report: opening quantity, delivered by BDNs, burned, ROB in tonnes',
+  },
   vessels: {
     table: 'kris.vessel_particulars', label: 'Vessel particulars', orderBy: 'vessel_name ASC',
     about: 'name, IMO, code, type, flag, owner, manager, charterer, customer, GT, NT, DWT, cargo capacity, main engine, cylinders, MCR, RPM, auxiliary engines, scrubber, dual-fuel, fuel types, year built, builder, class, design and reference speed, whether it is test data',
@@ -198,10 +206,8 @@ const RECORDS = {
     about: 'per voyage and fuel type: tonnes at sea, in port, main engine, auxiliary engines, boiler, total, CO2 emission factor, CO2, energy',
   },
   reports: {
-    table: 'kris.geoform_reports', label: 'Vessel reports', vesselColumn: 'imo', timeColumn: 'report_time', filters: ['form_type', 'mode'],
-    columns: ['imo', 'vessel_name', 'form_type', 'report_time', 'mode', 'hours_underway', 'distance_nm', 'speed_kn', 'shaft_power_kw', 'me_rpm',
-      'me_fuel_mt', 'ae_fuel_mt', 'boiler_fuel_mt', 'fuel_consumed_mt', 'co2_mt'],
-    about: 'departure, noon and arrival reports: mode (sea or port), hours underway, distance, speed, shaft power, RPM, ME/AE/boiler fuel, total fuel and CO2 since the previous report',
+    table: 'kris.report_log', label: 'Vessel reports', timeColumn: 'report_time', voyageColumns: ['voyage_no'], filters: ['form_type', 'mode'],
+    about: 'departure, noon and arrival reports, newest first: voyage, mode (sea or port), latitude, longitude, course, wind (Beaufort), hours underway, distance, speed, shaft power, RPM, ME/AE/boiler fuel, total fuel and CO2 since the previous report. With a voyage and a higher limit, the rows trace the voyage track',
   },
   bunkers: {
     table: 'kris.bunker_log', label: 'Bunker deliveries (BDNs)', timeColumn: 'delivered_at', voyageColumns: ['voyage_no'], filters: ['fuel_code', 'status', 'locode'],

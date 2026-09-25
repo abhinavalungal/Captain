@@ -335,6 +335,10 @@ function makeTools(input, getDb, opts) {
         visuals.dataUsed = true;
         visuals.sources = visuals.sources || [];
         if (visuals.sources.indexOf(out.label) < 0) visuals.sources.push(out.label);
+        // Positions always come with a map, drawn from the rows themselves, so
+        // where the pin sits never depends on the model copying coordinates.
+        const map = positionMap(out.topic, out.rows);
+        if (map) { visuals.map = map; out.note = 'A map of these positions is shown under your answer; do not draw another.'; }
       }
       return out;
     },
@@ -737,6 +741,31 @@ async function run(input, getDb, opts) {
   }
 }
 
+/** A map visual for rows that carry positions: the current position, or a voyage's reports as a track. */
+function positionMap(topic, rows) {
+  const at = rows.filter(function (r) { return typeof r.latitude === 'number' && typeof r.longitude === 'number'; });
+  if (!at.length) return null;
+  if (topic === 'positions') {
+    return {
+      type: 'map', title: at.length === 1 ? at[0].vessel_name + ' now' : 'Where your vessels are',
+      points: at.map(function (r) {
+        const bits = [r.situation, r.to_port_name && r.situation === 'at sea' ? 'to ' + r.to_port_name : null,
+          r.speed_kn ? r.speed_kn + ' kn' : null, r.eta ? 'ETA ' + String(r.eta).slice(0, 10) : null];
+        return { name: r.vessel_name, lat: r.latitude, lon: r.longitude, note: bits.filter(Boolean).join(', ') };
+      }),
+    };
+  }
+  if (topic === 'reports' && at.length > 2 && new Set(at.map(function (r) { return r.vessel_id; })).size === 1) {
+    const newest = at[0];
+    return {
+      type: 'map', title: newest.vessel_name + (newest.voyage_no ? ' voyage ' + newest.voyage_no : '') + ' track',
+      points: [{ name: newest.vessel_name, lat: newest.latitude, lon: newest.longitude, note: String(newest.report_time).slice(0, 16) }],
+      track: at.slice().reverse().map(function (r) { return [r.latitude, r.longitude]; }),
+    };
+  }
+  return null;
+}
+
 /** A short line for the widget while a tool runs ("Reading the records"). */
 function statusFor(calls) {
   const names = calls.map(function (c) { return c.function && c.function.name; });
@@ -798,6 +827,7 @@ function finish(text, visuals, cfg, trace, input, fleet, streaming, opts, alread
   if (visuals.provenance) answer.provenance = visuals.provenance;
   // Where a record answer came from, in one line under it.
   if (visuals.sources && visuals.sources.length && !visuals.provenance) answer.footnote = 'From the records: ' + visuals.sources.join(', ');
+  if (visuals.map) answer.visuals = [visuals.map];
   if (visuals.unit) answer.unit = visuals.unit;
   // An engine question stays open only if the reply actually asks one and no
   // later lookup answered it; otherwise it would hijack the next message.

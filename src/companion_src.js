@@ -208,6 +208,7 @@ const VISUAL_GUIDE = 'VISUALS: when a picture makes the answer clearer, include 
   + '- options side by side: {"type":"compare","title":"…","items":[{"name":"…","tag":"…","points":["…","…"],"verdict":"…"}],"highlight":"…"}\n'
   + '- a process or procedure: {"type":"steps","title":"…","steps":[{"title":"…","detail":"…"}]}\n'
   + '- dated milestones or a phase-in: {"type":"timeline","title":"…","events":[{"when":"2025","title":"…","detail":"…"}]}\n'
+  + '- positions on a map: {"type":"map","title":"…","points":[{"name":"…","lat":51.9,"lon":4.1,"note":"…"}],"track":[[lat,lon],…]} (a vessel\'s current position is mapped for you automatically when you read it; draw a map yourself only for a track or places from a tool result)\n'
   + '- several views of one subject: {"type":"dashboard","title":"…","blocks":[ any of the above ]}\n'
   + 'Keep visuals compact: a comparison of two to four options is ONE compare card with 2 to 4 points each, a few words per point, and a one-line verdict; dates or a phase-in are ONE timeline of 2 to 6 events. Strict JSON: double quotes, plain numbers (no units, thousands separators or % signs inside numbers), short labels, 2 to 12 points per chart. Every number must come from the user, from a tool result in this conversation, or be a well-established public figure (a regulation\'s threshold or phase-in, a conversion factor); never an estimate presented as the user\'s own data.';
 

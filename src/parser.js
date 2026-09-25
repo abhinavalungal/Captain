@@ -402,6 +402,9 @@ function parse(text, ctx = {}) {
   if (!aggregation) {
     aggregation = defaultAggregation(metric, range);
     assumed = true;
+    // "Show me Suddha Star's CO2 for the last 6 months" asks to SEE the
+    // period, not for one total: a trend, drawn as a line.
+    if (range.days >= 28 && /\b(show|plot|chart|graph|visuali[sz]e|display|draw)\b/.test(effLower)) aggregation = 'trend';
   }
   if (aggregation === 'value' && range.days > 1 && !/\b(list|show|raw|each|all records|readings)\b/.test(effLower)) {
     aggregation = defaultAggregation(metric, range);
@@ -422,8 +425,9 @@ function parse(text, ctx = {}) {
     };
   }
 
+  // A period stated in months ("the last 6 months") is read in months.
   const group = aggregation === 'trend' || aggregation === 'summary'
-    ? (detectGroup(effLower) || autoGroup(range))
+    ? (detectGroup(effLower) || (range.days > 62 && /\bmonths?\b/.test(String(range.matched || '')) ? 'month' : autoGroup(range)))
     : null;
 
   if (byVessel && aggregation !== 'trend' && aggregation !== 'summary') {

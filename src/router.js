@@ -312,11 +312,25 @@ function fastLane(text, input, opts) {
   if (!isBriefingRequest(text) && !followUpRewrite(text, input.history, input.now, opts.dateOrder)) {
     const cachedLearned = opts.orgId ? (learnedCache.peek(opts.orgId) || peekLegacy(opts.orgId) || []) : [];
     const guideHit = matchGuide(text);
-    if (guideHit && !(cachedLearned.length && parser.classify(text, cachedLearned, input.now) === 'data')) {
+    if (guideHit && !namesAThing(text, input) && !(cachedLearned.length && parser.classify(text, cachedLearned, input.now) === 'data')) {
       return { status: 'answer', text: guideHit.answer, guide: { id: guideHit.id, title: guideHit.title }, source: 'guide', instant: true };
     }
   }
   return null;
+}
+
+/**
+ * "What is the FuelEU compliance balance for Suddha Star?" is about a vessel,
+ * not a help article, however many of its words the article shares. A name
+ * after for/of/on (a capitalised word, an IMO number) or one of the user's
+ * vessel names from the scope cache means a specific thing is being asked about.
+ */
+const NAMED_RE = /\b(?:for|of|on|at|about)\s+(?:the\s+|my\s+|our\s+)?(?:[A-Z][a-z]|[A-Z]{2,}|\d{7}\b)/;
+function namesAThing(text, input) {
+  if (NAMED_RE.test(text)) return true;
+  const cached = input && input.session ? scopeCache.peek(scopeKey(input.session)) : null;
+  const lower = String(text).toLowerCase();
+  return !!(cached && (cached.vessels || []).some(function (v) { return v.name && v.name.length >= 3 && lower.includes(String(v.name).toLowerCase()); }));
 }
 
 /**

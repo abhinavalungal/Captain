@@ -29,10 +29,10 @@ const TABLES = ['companies', 'ports', 'fuel_types', 'cii_ship_types', 'cii_reduc
   'vessels', 'vessel_fuel_types', 'voyages', 'port_calls', 'geoform_reports', 'veson_legs', 'veson_offhire', 'kris_sync_log',
   'bunker_deliveries', 'fuel_consumption', 'cii_adjustments', 'fueleu_pools', 'fueleu_flexibility', 'compliance_filings',
   'allowance_surrenders', 'carbon_prices', 'carbon_trades', 'carbon_allocations', 'invoices', 'communications',
-  'kris_term_mappings', 'kris_query_log'];
+  'kris_term_mappings', 'kris_query_log', 'route_distances'];
 const VIEWS = ['fuel_factors', 'vessel_particulars', 'fuel_emissions', 'port_call_log', 'bunker_log', 'voyage_summary', 'voyage_fuel',
   'annual_operations', 'cii_annual', 'fueleu_period', 'ets_obligations', 'carbon_exposure', 'vessel_carbon_trades',
-  'invoice_status', 'compliance_overview', 'communication_log'];
+  'invoice_status', 'compliance_overview', 'communication_log', 'report_log', 'vessel_positions', 'fuel_on_board'];
 
 // ---------------------------------------------------------------------------
 // Steps (exported for the test suite, which runs them on an in-memory Postgres)

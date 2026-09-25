@@ -125,6 +125,15 @@ CREATE TABLE IF NOT EXISTS kris.ets_years (
   PRIMARY KEY (scheme, year)
 );
 
+-- Sea distance between two ports on the usual route, for distance to go and ETA.
+CREATE TABLE IF NOT EXISTS kris.route_distances (
+  from_port  char(5) NOT NULL REFERENCES kris.ports (locode),
+  to_port    char(5) NOT NULL REFERENCES kris.ports (locode),
+  nm         numeric NOT NULL CHECK (nm > 0),
+  PRIMARY KEY (from_port, to_port),
+  CHECK (from_port <> to_port)
+);
+
 -- ============================================================================
 --  2. Vessels
 -- ============================================================================
@@ -172,8 +181,12 @@ CREATE TABLE IF NOT EXISTS kris.vessel_fuel_types (
   vessel_id  text NOT NULL REFERENCES kris.vessels (id) ON DELETE CASCADE,
   fuel_code  text NOT NULL REFERENCES kris.fuel_types (code),
   usage      text NOT NULL CHECK (usage IN ('main', 'pilot', 'eca', 'port', 'backup')),
+  opening_rob_t  numeric CHECK (opening_rob_t >= 0),   -- on board when the data starts; fuel on board is derived from it
+  opening_at     timestamptz,
   PRIMARY KEY (vessel_id, fuel_code)
 );
+ALTER TABLE kris.vessel_fuel_types ADD COLUMN IF NOT EXISTS opening_rob_t numeric CHECK (opening_rob_t >= 0);
+ALTER TABLE kris.vessel_fuel_types ADD COLUMN IF NOT EXISTS opening_at timestamptz;
 
 -- ============================================================================
 --  3. Voyages and port calls
@@ -249,11 +262,20 @@ CREATE TABLE IF NOT EXISTS kris.geoform_reports (
   mode             text CHECK (mode IN ('sea', 'port')),
   hours_underway   double precision CHECK (hours_underway BETWEEN 0 AND 25),
   boiler_fuel_mt   double precision CHECK (boiler_fuel_mt >= 0),
+  latitude         numeric(8,5) CHECK (latitude BETWEEN -90 AND 90),
+  longitude        numeric(8,5) CHECK (longitude BETWEEN -180 AND 180),
+  course_deg       smallint CHECK (course_deg BETWEEN 0 AND 359),
+  wind_force_bft   smallint CHECK (wind_force_bft BETWEEN 0 AND 12),
   UNIQUE (imo, report_time, form_type),
   FOREIGN KEY (imo, voyage_id) REFERENCES kris.voyages (vessel_id, id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS geoform_reports_lookup ON kris.geoform_reports (imo, report_date);
 CREATE INDEX IF NOT EXISTS geoform_reports_voyage ON kris.geoform_reports (voyage_id) WHERE voyage_id IS NOT NULL;
+-- Added after the first release of this file; a no-op on a fresh database.
+ALTER TABLE kris.geoform_reports ADD COLUMN IF NOT EXISTS latitude numeric(8,5) CHECK (latitude BETWEEN -90 AND 90);
+ALTER TABLE kris.geoform_reports ADD COLUMN IF NOT EXISTS longitude numeric(8,5) CHECK (longitude BETWEEN -180 AND 180);
+ALTER TABLE kris.geoform_reports ADD COLUMN IF NOT EXISTS course_deg smallint CHECK (course_deg BETWEEN 0 AND 359);
+ALTER TABLE kris.geoform_reports ADD COLUMN IF NOT EXISTS wind_force_bft smallint CHECK (wind_force_bft BETWEEN 0 AND 12);
 
 CREATE TABLE IF NOT EXISTS kris.veson_legs (
   id                 bigserial PRIMARY KEY,
@@ -610,6 +632,7 @@ ON CONFLICT (scheme, year) DO UPDATE SET
 -- ============================================================================
 
 DROP VIEW IF EXISTS
+  kris.vessel_positions, kris.fuel_on_board, kris.report_log,
   kris.communication_log, kris.compliance_overview, kris.invoice_status, kris.vessel_carbon_trades,
   kris.carbon_exposure, kris.ets_obligations, kris.fueleu_period, kris.cii_annual, kris.annual_operations,
   kris.voyage_fuel, kris.voyage_summary, kris.port_call_log, kris.bunker_log, kris.fuel_emissions,
@@ -674,6 +697,69 @@ SELECT fc.id, r.id AS report_id, r.imo AS vessel_id, r.report_time, r.report_dat
   LEFT JOIN kris.voyages v    ON v.id = r.voyage_id
   LEFT JOIN kris.ports fp     ON fp.locode = v.from_port
   LEFT JOIN kris.ports tp     ON tp.locode = v.to_port;
+
+CREATE VIEW kris.report_log WITH (security_invoker = true) AS
+SELECT r.imo AS vessel_id, r.vessel_name, v.voyage_no, r.form_type, r.report_time, r.mode,
+       r.latitude, r.longitude, r.course_deg, r.wind_force_bft,
+       r.hours_underway, r.distance_nm, r.speed_kn, r.shaft_power_kw, r.me_rpm,
+       r.me_fuel_mt, r.ae_fuel_mt, r.boiler_fuel_mt, r.fuel_consumed_mt, r.co2_mt
+  FROM kris.geoform_reports r
+  LEFT JOIN kris.voyages v ON v.id = r.voyage_id;
+
+-- Where each vessel is now: its latest report, the voyage it is on, and for a
+-- vessel at sea the distance to go and an ETA at the average speed so far.
+CREATE VIEW kris.vessel_positions WITH (security_invoker = true) AS
+WITH last AS (
+  SELECT DISTINCT ON (r.imo) r.*
+    FROM kris.geoform_reports r
+   WHERE r.latitude IS NOT NULL
+   ORDER BY r.imo, r.report_time DESC
+), sailed AS (
+  SELECT voyage_id, SUM(distance_nm) AS nm, SUM(hours_underway) AS h
+    FROM kris.geoform_reports WHERE voyage_id IS NOT NULL GROUP BY voyage_id
+)
+SELECT l.imo AS vessel_id, vs.name AS vessel_name, vs.vessel_type, l.report_time AS position_at, l.form_type AS last_report,
+       l.latitude, l.longitude, l.course_deg, l.speed_kn, l.wind_force_bft,
+       CASE WHEN l.form_type = 'departure' THEN 'departing ' || tp.name
+            WHEN pc.arrival_at IS NULL OR pc.arrival_at > l.report_time THEN 'at sea'
+            WHEN pc.berthed_at IS NOT NULL AND pc.berthed_at <= l.report_time THEN 'alongside at ' || tp.name
+            ELSE 'at anchor off ' || tp.name END AS situation,
+       v.voyage_no, v.voyage_ref, v.leg_type, v.cargo,
+       v.from_port, fp.name AS from_port_name, v.to_port, tp.name AS to_port_name, tp.country AS to_country,
+       v.departure_at, pc.arrival_at, pc.berthed_at,
+       round(s.nm::numeric, 1) AS distance_sailed_nm,
+       CASE WHEN pc.arrival_at IS NULL AND rt.nm IS NOT NULL THEN round(GREATEST(rt.nm - s.nm, 0)::numeric, 1) END AS distance_to_go_nm,
+       CASE WHEN pc.arrival_at IS NULL AND rt.nm IS NOT NULL AND s.h > 0
+            THEN l.report_time + make_interval(secs => (GREATEST(rt.nm - s.nm, 0) / (s.nm / s.h)) * 3600) END AS eta
+  FROM last l
+  JOIN kris.vessels vs ON vs.id = l.imo
+  LEFT JOIN kris.voyages v ON v.id = l.voyage_id
+  LEFT JOIN kris.ports fp ON fp.locode = v.from_port
+  LEFT JOIN kris.ports tp ON tp.locode = v.to_port
+  LEFT JOIN kris.port_calls pc ON pc.voyage_id = v.id AND pc.locode = v.to_port
+  LEFT JOIN sailed s ON s.voyage_id = v.id
+  LEFT JOIN kris.route_distances rt ON rt.from_port = v.from_port AND rt.to_port = v.to_port;
+
+-- Fuel remaining on board per vessel and fuel type: opening quantity, plus
+-- what the BDNs delivered, minus what the reports burned, up to the latest report.
+CREATE VIEW kris.fuel_on_board WITH (security_invoker = true) AS
+WITH last AS (SELECT imo, max(report_time) AS at FROM kris.geoform_reports GROUP BY imo), x AS (
+SELECT f.vessel_id, vs.name AS vessel_name, f.fuel_code, l.at AS as_of,
+       f.opening_rob_t,
+       COALESCE((SELECT SUM(b.quantity_t) FROM kris.bunker_deliveries b
+                  WHERE b.vessel_id = f.vessel_id AND b.fuel_code = f.fuel_code AND b.delivered_at <= l.at
+                    AND b.delivered_at >= COALESCE(f.opening_at, '-infinity')), 0) AS delivered_t,
+       COALESCE((SELECT SUM(c.total_t) FROM kris.fuel_consumption c JOIN kris.geoform_reports r ON r.id = c.report_id
+                  WHERE r.imo = f.vessel_id AND c.fuel_code = f.fuel_code
+                    AND r.report_time > COALESCE(f.opening_at, '-infinity')), 0) AS burned_t
+  FROM kris.vessel_fuel_types f
+  JOIN kris.vessels vs ON vs.id = f.vessel_id
+  JOIN last l ON l.imo = f.vessel_id
+ WHERE f.opening_rob_t IS NOT NULL)
+SELECT x.vessel_id, x.vessel_name, x.fuel_code, x.as_of, x.opening_rob_t,
+       round(x.delivered_t, 1) AS delivered_t, round(x.burned_t, 1) AS burned_t,
+       round(x.opening_rob_t + x.delivered_t - x.burned_t, 1) AS rob_t
+  FROM x;
 
 CREATE VIEW kris.port_call_log WITH (security_invoker = true) AS
 SELECT v.vessel_id, vs.name AS vessel_name, v.voyage_no, pc.id AS port_call_id, pc.locode, p.name AS port_name,
