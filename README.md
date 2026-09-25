@@ -1,6 +1,6 @@
 # K.R.1.S
 
-**K.R.1.S** (say it "Kris") is the vessel-data assistant embedded in GeoServe
+**K.R.1.S** (say it "Kris") is the vessel-data assistant embedded in SN
 apps. The name is a codename inspired by Lord Krishna — the calm charioteer
 who guides without taking the reins — and the whole experience is built around
 that idea: a small, friendly figure in the corner of your app who guides you
