@@ -61,6 +61,7 @@ function recordError(where, err, extra) {
   } catch (_) { /* never let diagnostics break a request */ }
 }
 const router = require('./router');
+const rbac = require('./rbac');
 const { findRenames } = require('./envcheck');
 const { takeToken } = require('./ratelimit');
 const { LIMITS, METRICS, SOURCES } = require('./config');
@@ -103,11 +104,16 @@ function classifyDbError(err) {
   if (code === '28P01' || /password authentication failed/i.test(msg)) {
     return { code: 'DB_AUTH', hint: 'The database rejected the password. KRIS_READ_URL still has a wrong or placeholder password - replace [YOUR-PASSWORD] with the real one and URL-encode special characters (@ becomes %40).' };
   }
-  if (/tenant or user not found/i.test(msg)) {
-    return { code: 'DB_TENANT', hint: 'The pooler could not find the project. With the pooler host the username must be postgres.<project-ref>, not plain postgres.' };
+  if (/tenant(?: or |\/)user\b.*not found/i.test(msg)) {
+    return { code: 'DB_TENANT', hint: 'The pooler could not find the project. With the pooler host the username must be <role>.<project-ref> (e.g. kris_reader.<ref>), and the host must be the one Supabase -> Connect shows (aws-0 or aws-1).' };
+  }
+  if (/invalid secret format|EAUTHQUERY/i.test(msg)) {
+    return { code: 'DB_ROLE_PASSWORD', hint: 'The pooler found the role, but it has no password it can use (it needs one stored as SCRAM). Set it as postgres: run node db/setup.js, or ALTER ROLE kris_reader PASSWORD \'...\' in the SQL Editor.' };
   }
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
-    return { code: 'DB_DNS', hint: 'The database hostname could not be resolved - check the host part of KRIS_READ_URL for typos.' };
+    return /\bdb\.[a-z0-9]+\.supabase\.co\b/i.test(msg)
+      ? { code: 'DB_DNS', hint: 'db.<ref>.supabase.co has only an IPv6 address, which this network cannot use. Use the session pooler from Supabase -> Connect: host aws-0-<region>.pooler.supabase.com, port 5432, user kris_reader.<ref>.' }
+      : { code: 'DB_DNS', hint: 'The database hostname could not be resolved - check the host part of KRIS_READ_URL for typos.' };
   }
   if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') {
     return { code: 'DB_NO_ROUTE', hint: 'No network route to the database. db.<ref>.supabase.co is IPv6-only; use the pooler host aws-0-<region>.pooler.supabase.com instead.' };
@@ -438,6 +444,7 @@ function readContext(raw) {
   return {
     vesselId: str(raw.vesselId, 40),
     vesselName: str(raw.vesselName, 80),
+    fleet: raw.fleet === true,   // the user set their whole fleet as the current context
     userName: userName || null,
     page: str(raw.page, 80),
     tz: str(raw.tz, 64),
@@ -482,7 +489,8 @@ async function handleKris(req) {
   catch (_) { return reply(400, { error: 'Body must be JSON.' }); }
 
   const text = String(payload.text || '').slice(0, MESSAGE_CHARS);
-  if (!text.trim()) return reply(400, { error: 'Ask a question.' });
+  const listVessels = payload.action === 'vessels';   // the widget's vessel / fleet picker
+  if (!text.trim() && !listVessels) return reply(400, { error: 'Ask a question.' });
 
   const t0 = Date.now();
   const streaming = payload.stream === true && typeof req.onEvent === 'function';
@@ -503,6 +511,23 @@ async function handleKris(req) {
       status: 'error', source: 'router', reason: 'rate_limited', code: 'RATE_LIMITED', retryAfter: allowed.retryAfter,
       text: 'You’re sending messages faster than I can answer them well. Give me ' + allowed.retryAfter + (allowed.retryAfter === 1 ? ' second' : ' seconds') + ' and ask again.',
     }, { 'Retry-After': String(allowed.retryAfter) });
+  }
+
+  // The vessels this session may read, for the picker: the same scope every
+  // question is checked against, so the list can never offer more than that.
+  if (listVessels) {
+    let db = null;
+    try {
+      db = await pools(env).readPool.connect();
+      const scope = await rbac.resolveScope(session, db);
+      return reply(200, { vessels: scope.vessels.map((v) => ({ id: v.id, name: v.name })) });
+    } catch (err) {
+      if (!(err && err.code === 'DB_NOT_CONFIGURED')) console.error('kris: vessel list failed', err);
+      const d = classifyDbError(err);
+      return reply(503, { status: 'error', reason: 'db_unreachable', vessels: [], code: diagnosticsOn(env) ? d.code : undefined, detail: diagnosticsOn(env) ? d.hint : undefined });
+    } finally {
+      if (db) db.release();
+    }
   }
 
   // The database is NOT opened here. The router decides whether this message

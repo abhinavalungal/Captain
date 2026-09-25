@@ -257,8 +257,10 @@ function systemPrompt(opts) {
     lines.push('The user\'s name is ' + opts.userName + '. Use it occasionally and naturally, not every reply.');
   }
   if (opts.vesselName) {
-    lines.push('The user is currently viewing the vessel "' + opts.vesselName
-      + '" in the app, so an unqualified "the vessel" probably means that one.');
+    lines.push('The current vessel is "' + opts.vesselName
+      + '" (the user chose it or is viewing it in the app), so a vessel question that names no vessel is about that one.');
+  } else if (opts.fleet) {
+    lines.push('The user set their whole fleet as the current context, so a vessel question that names no vessel is about all of their vessels.');
   }
   const about = profilePrompt(opts.profile, opts.userName);
   if (about) lines.push(about);
@@ -544,6 +546,7 @@ async function run(input, getDb, opts) {
     nowLabel: formatNow(input.now ? new Date(input.now) : new Date(), tz).label,
     userName: input.context && input.context.userName ? String(input.context.userName).slice(0, 60) : null,
     vesselName: input.context && input.context.vesselName ? String(input.context.vesselName).slice(0, 80) : null,
+    fleet: !!(input.context && input.context.fleet),
     profile: input.context && input.context.profile ? input.context.profile : null,
     depth: answerDepth(input.text, input.context && input.context.profile),
   });

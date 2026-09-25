@@ -427,6 +427,7 @@ async function ask(input, db, opts = {}) {
     learned,
     dateOrder: opts.dateOrder,
     defaultVesselId: input.context && input.context.vesselId ? String(input.context.vesselId) : null,
+    defaultFleet: !!(input.context && input.context.fleet),
   };
   const parsed = parser.parse(input.text, Object.assign({ pending }, ctx));
 

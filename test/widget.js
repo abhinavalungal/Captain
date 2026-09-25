@@ -558,14 +558,85 @@ function boot(opts, storage) {
     assert(/Nav/.test(w.q('.welcome h3').textContent), 'remembered name dropped from greeting');
   });
 
-  await ta('page context shows as a chip and tailors the suggested prompts', async () => {
-    const w = boot();
+  await ta('page context shows as a chip and tailors the suggested prompts (picker off)', async () => {
+    const w = boot({ vesselPicker: false });
     await wait(20);
     w.window.KRIS.setContext({ vesselId: '9851701', vesselName: 'Aurora Trader' });
     assert(w.q('.box .ctx').classList.contains('on') && /Aurora Trader/.test(w.q('.box .ctx').textContent));
     assert([...w.qa('.prompts .q')].some((q) => /for Aurora Trader/.test(q.textContent)), 'prompts not tailored');
     w.window.KRIS.clearContext();
     assert(!w.q('.box .ctx').classList.contains('on'));
+  });
+
+  const VESSELS = [{ id: '1000019', name: 'SN Star' }, { id: '1000021', name: 'SN Sky' }];
+  const lastContext = (w) => JSON.parse(w.posts().filter((c) => !JSON.parse(c.init.body).action).pop().init.body).context;
+  const pickItem = (w, label) => [...w.qa('.ctxmenu [role=menuitemradio]')].find((b) => b.textContent === label);
+
+  await ta('picker: lists the server’s vessels once; a pick is the context sent with questions; × clears it', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async (body) => (body.action === 'vessels' ? jsonResponse({ vessels: VESSELS }) : jsonResponse({ status: 'answer', source: 'agent', text: 'ok' })));
+    const chip = w.q('.box .ctx');
+    assert(chip.classList.contains('on') && chip.classList.contains('empty') && /Choose vessel or fleet/.test(chip.textContent), chip.textContent);
+    chip.click(); await wait(20);
+    const labels = [...w.qa('.ctxmenu [role=menuitemradio]')].map((b) => b.textContent);
+    assert(JSON.stringify(labels) === JSON.stringify(['Entire fleet', 'SN Star', 'SN Sky']), JSON.stringify(labels));
+    pickItem(w, 'SN Star').click();
+    assert(w.q('.ctxmenu').hidden, 'menu stayed open');
+    assert(/SN Star/.test(chip.textContent) && !chip.classList.contains('empty') && !w.q('.ctx-clear').hidden, chip.textContent);
+    await w.type('fuel last month'); await w.idle();
+    let c = lastContext(w);
+    assert(c.vesselId === '1000019' && c.vesselName === 'SN Star' && !c.fleet, JSON.stringify(c));
+    chip.click(); await wait(20);
+    pickItem(w, 'Entire fleet').click();
+    assert(/Entire fleet/.test(chip.textContent) && /whole fleet/.test(chip.title), chip.title);
+    await w.type('co2 this year'); await w.idle();
+    c = lastContext(w);
+    assert(c.fleet === true && !c.vesselId && !c.vesselName, JSON.stringify(c));
+    w.q('.ctx-clear').click();
+    assert(chip.classList.contains('empty') && w.q('.ctx-clear').hidden);
+    await w.type('co2 this year'); await w.idle();
+    c = lastContext(w);
+    assert(!c.fleet && !c.vesselId, JSON.stringify(c));
+    assert(w.posts().filter((p) => JSON.parse(p.init.body).action === 'vessels').length === 1, 'vessel list fetched more than once');
+  });
+
+  await ta('picker: the pick beats the page’s vessel, stays for new chats and page loads, Esc closes it, clearing falls back to the page', async () => {
+    const w = boot({ vessels: VESSELS });
+    await wait(20);
+    w.window.KRIS.open();
+    w.window.KRIS.setContext({ vesselId: '1000021', vesselName: 'SN Sky' });
+    const chip = w.q('.box .ctx');
+    assert(/SN Sky/.test(chip.textContent) && w.q('.ctx-clear').hidden, 'page vessel not shown');
+    chip.click(); await wait(20);
+    assert(!w.posts().some((p) => JSON.parse(p.init.body).action === 'vessels'), 'asked the server although the host gave the list');
+    pickItem(w, 'SN Star').click();
+    w.window.KRIS.setContext({ vesselId: '1000021', vesselName: 'SN Sky' });   // the host page navigates
+    assert(/SN Star/.test(chip.textContent), 'the page overrode the pick');
+    await w.type('hello'); await w.idle();
+    w.window.KRIS.newChat();
+    assert(/SN Star/.test(chip.textContent), 'a new chat dropped the pick');
+    const w2 = boot({ vessels: VESSELS }, w.snapshotStorage());
+    await wait(20);
+    assert(/SN Star/.test(w2.q('.box .ctx').textContent), 'the pick was lost on a page load: ' + w2.q('.box .ctx').textContent);
+    chip.click(); await wait(20);
+    assert(!w.q('.ctxmenu').hidden && chip.getAttribute('aria-expanded') === 'true');
+    w.doc.dispatchEvent(new w.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert(w.q('.ctxmenu').hidden, 'Esc left the menu open');
+    assert(w.inst().open, 'Esc closed the panel instead of just the menu');
+    w.q('.ctx-clear').click();
+    assert(/SN Sky/.test(chip.textContent), 'clearing did not fall back to the page vessel');
+  });
+
+  await ta('picker: a server error is shown in the menu, not a silent empty list', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    w.respond(async (body) => (body.action === 'vessels' ? jsonResponse({ status: 'error', vessels: [], detail: 'db.<ref>.supabase.co has only an IPv6 address' }, 503) : jsonResponse({ status: 'answer', text: 'ok' })));
+    w.q('.box .ctx').click(); await wait(20);
+    assert(/could not be loaded: db\.<ref>\.supabase\.co has only an IPv6 address/.test(w.q('.ctxmenu').textContent), w.q('.ctxmenu').textContent);
+    assert(pickItem(w, 'Entire fleet'), 'fleet choice missing when the list fails');
   });
 
   await ta('markdown: code block with copy, table, heading, italic, safe links', async () => {
@@ -774,8 +845,8 @@ function boot(opts, storage) {
     assert(w.q('.turn.assistant table.grid tr:nth-child(2) td:nth-child(2)').classList.contains('num'));
   });
 
-  await ta('composer foot appears only for the context chip or the counter', async () => {
-    const w = boot({ maxLength: 50 });
+  await ta('composer foot appears only for the context chip or the counter (picker off)', async () => {
+    const w = boot({ maxLength: 50, vesselPicker: false });
     await wait(20);
     const foot = w.q('.box .foot');
     assert(foot && !foot.classList.contains('on'), 'foot visible with nothing to show');

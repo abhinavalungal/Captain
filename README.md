@@ -139,7 +139,11 @@ can be added on these seams without rebuilding the widget.
   `KRIS_READ_URL` / `KRIS_WRITE_URL` into `.env` without printing them, loads
   the test data and runs the checks, first as the owner, then as
   `kris_reader` through K.R.1.S's own engine and records code.
-  `--print-seed > seed.sql` gives the test data as SQL for the SQL editor.
+  `--print-seed > seed.sql` gives the test data as one SQL script (for psql).
+  The Supabase SQL Editor limits a query's size, so `--write-seed` writes it
+  as `db/002_test_data_part1.sql`, `part2`, … to run there in order after the
+  schema; the last part only sets where each vessel is on the map and can be
+  edited and re-run on its own.
 - **Security.** The `kris` schema is not exposed to Supabase's Data API, and
   `anon` / `authenticated` are revoked on it, so the publishable key reaches
   nothing. Row-level security is on for every table: the two server roles
@@ -172,14 +176,14 @@ can be added on these seams without rebuilding the widget.
   average: the energy-weighted intensity is in the FuelEU records.
 - **Router.** The engine still answers a complete figure question without the
   model. Its clarifying questions now go to the model, which can answer the
-  likely reading from the records ("How much VLSFO did Suddha Star consume?"
+  likely reading from the records ("How much VLSFO did SN Star consume?"
   gets the figures by year, not "over what period?"). A question that names a
   vessel is never answered by a help-centre article.
 - **Briefing.** The FuelEU rule reads this year's balance after pooling, and a
   new rule flags allowances still to surrender within 30 days of the deadline.
-- **Test data** (`db/test_data.js`): **Suddha Star** (IMO 1000019, code SSTAR,
-  Ultramax bulk carrier, scrubber, HSFO/VLSFO/MGO) and **Suddha Sky** (IMO
-  1000021, code SSKY, LNG dual-fuel Aframax tanker), January 2023 to the day it
+- **Test data** (`db/test_data.js`): **SN Star** (IMO 1000019, code SNSTAR,
+  Ultramax bulk carrier, scrubber, HSFO/VLSFO/MGO) and **SN Sky** (IMO
+  1000021, code SNSKY, LNG dual-fuel Aframax tanker), January 2023 to the day it
   is loaded. Each voyage timeline is simulated, and reports and fuel follow
   from engine power and speed. Every report has a position along the route's
   sea lane (never over land), a course and the wind; `kris.vessel_positions`
@@ -188,8 +192,8 @@ can be added on these seams without rebuilding the widget.
   `kris.fuel_on_board` the fuel remaining on board. Pooling, surrenders,
   allocations, invoice amounts and the figures quoted in emails are inserted
   by SQL that reads the views, so every number agrees. Scenarios built in:
-  Suddha Star rated CII D three years running (corrective action plan due), a
-  2025 FuelEU deficit covered by pooling with Suddha Sky, 2025 EUAs still to
+  SN Star rated CII D three years running (corrective action plan due), a
+  2025 FuelEU deficit covered by pooling with SN Sky, 2025 EUAs still to
   source close to the deadline, a UK ETS obligation from an August 2026
   Immingham–Teesport voyage, an EU MRV verification held on a disputed BDN,
   and paid, pending, overdue and draft invoices. IMO numbers in the 1000000

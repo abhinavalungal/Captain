@@ -55,6 +55,32 @@ const lastToolResult = (seen) => {
     await setup.seedTestData(db, UNTIL);
     assert.strictEqual(Number((await one('SELECT count(*) AS n FROM kris.vessels WHERE is_test')).n), 2);
   });
+  await ta('current vessel / fleet: an unqualified question uses it and the answer names it; a named vessel still wins', async () => {
+    const ask = (text, context) => engine.ask({ text, session, now: NOW, context }, db, { orgId: 'o', disableLog: true });
+    const vessel = await ask('fuel consumption last month', { vesselId: TV02, vesselName: 'SN Sky' });
+    assert.ok(vessel.status === 'answer' && /for SN Sky,/.test(vessel.text), vessel.text);
+    const fleet = await ask('fuel consumption last month', { fleet: true });
+    assert.ok(fleet.status === 'answer' && /for 2 vessels,/.test(fleet.text), fleet.text);
+    const named = await ask('fuel consumption for SN Star last month', { fleet: true });
+    assert.ok(named.status === 'answer' && /for SN Star,/.test(named.text), named.text);
+    assert.strictEqual((await ask('fuel consumption last month', null)).status, 'clarify');
+  });
+  await ta('the SQL Editor parts fit its size limit and load in order to the same data', async () => {
+    const parts = require('../db/test_data').buildParts({ until: UNTIL });
+    assert.ok(parts.length > 1 && parts.every((p) => p.length < 260000), parts.map((p) => p.length).join(', '));
+    const count = async () => (await one('SELECT count(*) AS n FROM kris.fuel_consumption')).n;
+    const before = await count();
+    for (const p of parts) await db.exec(p);
+    assert.strictEqual(await count(), before);
+  });
+  await ta('on a database from an older schema, part 1 stops first, names what is missing, and changes nothing', async () => {
+    const part1 = require('../db/test_data').buildParts({ until: UNTIL })[0];
+    await db.exec('ALTER TABLE kris.route_distances RENAME TO route_distances_x');
+    try {
+      await assert.rejects(db.exec(part1), /older db\/001_schema\.sql\. Missing: kris\.route_distances\./);
+      assert.strictEqual(Number((await one('SELECT count(*) AS n FROM kris.vessels WHERE is_test')).n), 2);
+    } finally { await db.exec('ALTER TABLE kris.route_distances_x RENAME TO route_distances'); }
+  });
   await ta('every structural, security and consistency check passes', async () => {
     const results = await setup.verify(db);
     const bad = results.filter((r) => !r.ok);
@@ -81,7 +107,7 @@ const lastToolResult = (seen) => {
   });
 
   // --- derived figures behave as designed ---------------------------------------
-  await ta('CII: Suddha Star rated D three years running needs a corrective plan; Suddha Sky rated A', async () => {
+  await ta('CII: SN Star rated D three years running needs a corrective plan; SN Sky rated A', async () => {
     const r = (await db.query('SELECT vessel_id, year, rating, status, aer, attained_cii FROM kris.cii_annual WHERE year BETWEEN 2023 AND 2025 ORDER BY 1, 2')).rows;
     assert.deepStrictEqual(r.filter((x) => x.vessel_id === TV01).map((x) => x.rating), ['D', 'D', 'D']);
     assert.ok(/corrective action plan/.test(r.find((x) => x.vessel_id === TV01 && x.year === 2025).status));
@@ -117,8 +143,8 @@ const lastToolResult = (seen) => {
   // --- through K.R.1.S -----------------------------------------------------------
   const scope = await rbac.resolveScope(session, db);
   await ta('access control finds both vessels by the new register', async () => {
-    assert.deepStrictEqual(scope.vessels.map((v) => v.name).sort(), ['Suddha Sky', 'Suddha Star']);
-    assert.ok(scope.vessels[0].altNames.includes('SSKY') || scope.vessels[1].altNames.includes('SSKY'), 'vessel code is an alternative name');
+    assert.deepStrictEqual(scope.vessels.map((v) => v.name).sort(), ['SN Sky', 'SN Star']);
+    assert.ok(scope.vessels[0].altNames.includes('SNSKY') || scope.vessels[1].altNames.includes('SNSKY'), 'vessel code is an alternative name');
   });
   await ta('every records topic returns rows', async () => {
     for (const topic of records.TOPICS) {
@@ -127,25 +153,25 @@ const lastToolResult = (seen) => {
     }
   });
   await ta('records: a vessel can be named by name, number, code or IMO; nothing outside the scope', async () => {
-    for (const name of ['Suddha Star', 'suddha-star', 'SSTAR', '1000019']) {
+    for (const name of ['SN Star', 'sn-star', 'SNSTAR', '1000019']) {
       const out = await records.lookup(db, scope, { topic: 'vessels', vessel: name });
       assert.deepStrictEqual(out.rows.map((r) => r.imo), [TV01], name);
     }
-    const other = await records.lookup(db, { vessels: scope.vessels.filter((v) => v.id !== TV01) }, { topic: 'vessels', vessel: 'Suddha Star' });
+    const other = await records.lookup(db, { vessels: scope.vessels.filter((v) => v.id !== TV01) }, { topic: 'vessels', vessel: 'SN Star' });
     assert.ok(other.error && !other.rows, 'a vessel outside the scope must not be found');
   });
   await ta('records: latest voyage, its ports and days', async () => {
-    const out = await records.lookup(db, scope, { topic: 'voyages', vessel: 'Suddha Star', latest: true });
+    const out = await records.lookup(db, scope, { topic: 'voyages', vessel: 'SN Star', latest: true });
     assert.strictEqual(out.row_count, 1);
     const v = out.rows[0];
     assert.ok(v.from_port_name && v.to_port_name && v.departure_at && v.status, JSON.stringify(v));
-    const prev = await records.lookup(db, scope, { topic: 'voyages', vessel: 'SSTAR', limit: 2 });
+    const prev = await records.lookup(db, scope, { topic: 'voyages', vessel: 'SNSTAR', limit: 2 });
     assert.strictEqual(prev.rows[1].to_port, v.from_port, 'the latest voyage starts where the previous one ended');
     const done = prev.rows[1];
     assert.ok(Math.abs(done.total_days - (done.sea_days + done.port_days)) < 0.02 && Math.abs(done.net_days - (done.total_days - (done.offhire_days || 0))) < 0.02);
   });
   await ta('records: filters and years are bound, undeclared filters ignored', async () => {
-    const mrv = await records.lookup(db, scope, { topic: 'compliance', vessel: 'SSTAR', year: 2025, filter: { regime: 'EU_MRV' } });
+    const mrv = await records.lookup(db, scope, { topic: 'compliance', vessel: 'SNSTAR', year: 2025, filter: { regime: 'EU_MRV' } });
     assert.strictEqual(mrv.row_count, 1);
     assert.strictEqual(mrv.rows[0].verification_status, 'in_review');
     const evil = await records.lookup(db, scope, { topic: 'invoices', filter: { "status' OR 1=1 --": 'x', status: "' OR ''='" } });
@@ -154,19 +180,19 @@ const lastToolResult = (seen) => {
     assert.ok(!/nope/.test(built.text), 'undeclared filter columns never reach SQL');
   });
   await ta('engine: a figure over a period matches an independent SQL sum', async () => {
-    const out = await engine.ask({ text: 'fuel consumption for Suddha Star last month', session, now: NOW }, db, { orgId: 'o', disableLog: true });
+    const out = await engine.ask({ text: 'fuel consumption for SN Star last month', session, now: NOW }, db, { orgId: 'o', disableLog: true });
     assert.strictEqual(out.status, 'answer', out.text);
     const r = await one("SELECT SUM(fuel_consumed_mt) AS s FROM kris.geoform_reports WHERE imo = $1 AND report_date BETWEEN '2026-08-01' AND '2026-08-31'", [TV01]);
     assert.ok(Math.abs(out.value - Number(r.s)) < 0.01, `${out.value} vs ${r.s}`);
   });
   await ta('engine: VLSFO for a year reads the voyage summary', async () => {
-    const out = await engine.ask({ text: 'VLSFO consumption for Suddha Sky in 2025', session, now: NOW }, db, { orgId: 'o', disableLog: true });
+    const out = await engine.ask({ text: 'VLSFO consumption for SN Sky in 2025', session, now: NOW }, db, { orgId: 'o', disableLog: true });
     assert.strictEqual(out.status, 'answer', out.text);
     const r = await one("SELECT SUM(vlsfo_t) AS s FROM kris.voyage_summary WHERE vessel_id = $1 AND departure_at >= '2025-01-01' AND departure_at < '2026-01-01'", [TV02]);
     assert.ok(Math.abs(out.value - Number(r.s)) < 0.01, `${out.value} vs ${r.s}`);
   });
   await ta('briefing runs every rule against the new schema', async () => {
-    const b = await buildBriefing(setup.TEST_IDS, ['Suddha Star', 'Suddha Sky'], db);
+    const b = await buildBriefing(setup.TEST_IDS, ['SN Star', 'SN Sky'], db);
     assert.ok(!b.degraded, 'a briefing rule failed: ' + b.text);
   });
 
@@ -211,7 +237,7 @@ const lastToolResult = (seen) => {
   };
   await ta('"Where is my vessel now?" comes with a map of both vessels, pinned from the records', async () => {
     const { out } = await route('Where is my vessel now?', [
-      tool('get_vessel_records', { topic: 'positions' }), say('Suddha Star is at sea and Suddha Sky is in port.'),
+      tool('get_vessel_records', { topic: 'positions' }), say('SN Star is at sea and SN Sky is in port.'),
     ]);
     const map = (out.visuals || [])[0];
     assert.ok(map && map.type === 'map' && map.points.length === 2, JSON.stringify(out.visuals));
@@ -221,8 +247,8 @@ const lastToolResult = (seen) => {
       assert.ok(pin && Math.abs(pin.lat - Number(t.latitude)) < 1e-6 && Math.abs(pin.lon - Number(t.longitude)) < 1e-6, t.vessel_name);
     }
   });
-  await ta('"Show me Suddha Star\u2019s CO2 emissions for the last 6 months" is a monthly line from the engine, no model call', async () => {
-    const { out, seen } = await route('Show me Suddha Star\u2019s CO\u2082 emissions for the last 6 months.', [say('unused')]);
+  await ta('"Show me SN Star\u2019s CO2 emissions for the last 6 months" is a monthly line from the engine, no model call', async () => {
+    const { out, seen } = await route('Show me SN Star\u2019s CO\u2082 emissions for the last 6 months.', [say('unused')]);
     assert.strictEqual(out.status, 'answer', out.text);
     assert.strictEqual(seen.length, 0);
     assert.ok(Array.isArray(out.series) && out.series.length >= 6 && out.series.length <= 7, 'monthly points: ' + (out.series || []).length);
@@ -232,16 +258,16 @@ const lastToolResult = (seen) => {
   });
   await ta('a voyage track: reports of one voyage are drawn as a line on the map', async () => {
     const v = (await db.query("SELECT voyage_no FROM kris.voyage_summary WHERE vessel_id = $1 AND status = 'completed' ORDER BY departure_at DESC LIMIT 1", [TV02])).rows[0];
-    const { out } = await route('Show me the track of Suddha Sky\'s last voyage', [
-      tool('get_vessel_records', { topic: 'reports', vessel: 'Suddha Sky', voyage: v.voyage_no, limit: 40 }), say('Here is the track.'),
+    const { out } = await route('Show me the track of SN Sky\'s last voyage', [
+      tool('get_vessel_records', { topic: 'reports', vessel: 'SN Sky', voyage: v.voyage_no, limit: 40 }), say('Here is the track.'),
     ]);
     const map = (out.visuals || [])[0];
     assert.ok(map && map.track && map.track.length > 2, JSON.stringify(out.visuals));
   });
-  await ta('"Give me the details of Suddha Star." is answered from the particulars', async () => {
-    const { out, seen } = await route('Give me the details of Suddha Star.', [
-      tool('get_vessel_records', { topic: 'vessels', vessel: 'Suddha Star' }),
-      say('Suddha Star (IMO 1000019) is a 63,520 DWT Ultramax bulk carrier built in 2016.'),
+  await ta('"Give me the details of SN Star." is answered from the particulars', async () => {
+    const { out, seen } = await route('Give me the details of SN Star.', [
+      tool('get_vessel_records', { topic: 'vessels', vessel: 'SN Star' }),
+      say('SN Star (IMO 1000019) is a 63,520 DWT Ultramax bulk carrier built in 2016.'),
     ]);
     const res = lastToolResult(seen);
     assert.strictEqual(res.rows[0].imo, TV01);
@@ -250,23 +276,23 @@ const lastToolResult = (seen) => {
     assert.strictEqual(out.footnote, 'From the records: Vessel particulars');
   });
   await ta('"What is the FuelEU compliance balance?" reaches the model with the pooled balance', async () => {
-    const { out, seen } = await route('What is the FuelEU compliance balance for Suddha Star?', [
-      tool('get_vessel_records', { topic: 'fueleu', vessel: 'Suddha Star', year: 2025, filter: { period: 'YEAR' } }),
+    const { out, seen } = await route('What is the FuelEU compliance balance for SN Star?', [
+      tool('get_vessel_records', { topic: 'fueleu', vessel: 'SN Star', year: 2025, filter: { period: 'YEAR' } }),
       say('ok'),
     ]);
     assert.strictEqual(out.source, 'agent');
     const row = lastToolResult(seen).rows[0];
     assert.ok(/pooling/.test(row.status) && row.penalty_eur === 0 && row.pool_id === 'TEST-POOL-2025', JSON.stringify(row));
   });
-  await ta('"How much VLSFO did Suddha Star consume?" (no period) goes to the model, not "over what period?"', async () => {
-    const { out } = await route('How much VLSFO did Suddha Star consume?', [
-      tool('get_vessel_records', { topic: 'annual', vessel: 'Suddha Star' }), say('By year: ...'),
+  await ta('"How much VLSFO did SN Star consume?" (no period) goes to the model, not "over what period?"', async () => {
+    const { out } = await route('How much VLSFO did SN Star consume?', [
+      tool('get_vessel_records', { topic: 'annual', vessel: 'SN Star' }), say('By year: ...'),
     ]);
     assert.strictEqual(out.source, 'agent');
     assert.notStrictEqual(out.status, 'clarify');
   });
   await ta('a complete figure question is answered by the engine with no model call', async () => {
-    const { out, seen } = await route('CO2 emissions for Suddha Sky last month', [say('unused')]);
+    const { out, seen } = await route('CO2 emissions for SN Sky last month', [say('unused')]);
     assert.strictEqual(out.status, 'answer', out.text);
     assert.strictEqual(seen.length, 0);
   });

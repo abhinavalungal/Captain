@@ -174,6 +174,7 @@ function detectVesselMention(text, vessels) {
  *   ctx.pending        a clarification this message is answering
  *   ctx.dateOrder      'DMY' | 'MDY'
  *   ctx.defaultVesselId vessel the user is currently viewing, if any
+ *   ctx.defaultFleet   the user set their whole fleet as the current context
  */
 function parse(text, ctx = {}) {
   const raw = String(text || '').trim();
@@ -239,7 +240,7 @@ function parse(text, ctx = {}) {
     if (!matches.length && detectAggregation(effLower) === 'summary') {
       const overviewRange = dates.resolveTimeRange(effectiveText, now, { dateOrder: ctx.dateOrder });
       if (overviewRange && !overviewRange.needsDate && !overviewRange.droppedClock) {
-        const ids = resolveVesselIds(effectiveText, effLower, vessels, pending, { raw: raw, defaultVesselId: ctx.defaultVesselId });
+        const ids = resolveVesselIds(effectiveText, effLower, vessels, pending, { raw: raw, defaultVesselId: ctx.defaultVesselId, defaultFleet: ctx.defaultFleet });
         if (ids.clarify) return ids.clarify;
         return {
           status: 'plan',
@@ -295,7 +296,7 @@ function parse(text, ctx = {}) {
   }
 
   // --- vessel ---------------------------------------------------------------
-  const resolvedVessels = resolveVesselIds(effectiveText, effLower, vessels, pending, { raw, metricKey, defaultVesselId: ctx.defaultVesselId });
+  const resolvedVessels = resolveVesselIds(effectiveText, effLower, vessels, pending, { raw, metricKey, defaultVesselId: ctx.defaultVesselId, defaultFleet: ctx.defaultFleet });
   if (resolvedVessels.clarify) return resolvedVessels.clarify;
   const vesselIds = resolvedVessels.vesselIds;
 
@@ -500,7 +501,9 @@ function resolveVesselIds(text, lower, vessels, pending, extra = {}) {
 
   if (!vesselIds) {
     const mentioned = detectVesselMention(text, vessels);
-    const fleetWide = /\b(fleet|all vessels|all ships|every vessel|whole fleet|across the fleet)\b/.test(lower);
+    // Said in the question, or set as the chat's current context (a vessel named in the question still wins).
+    const fleetWide = (extra.defaultFleet && mentioned.length === 0)
+      || /\b(fleet|all vessels|all ships|every vessel|whole fleet|across the fleet)\b/.test(lower);
 
     const ranking = detectRanking(lower);
     if (ranking && mentioned.length <= 1) {

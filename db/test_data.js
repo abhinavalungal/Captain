@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * K.R.1.S test data: two fictional vessels, Suddha Star and Suddha Sky, from
+ * K.R.1.S test data: two fictional vessels, SN Star and SN Sky, from
  * 1 January 2023 up to the moment it is generated.
  *
  * NOTHING HERE IS REAL. Company names start with TEST, emails use the
@@ -111,7 +111,7 @@ WP.SAINTJOHN_CORPUS = WP.CORPUS_SAINTJOHN.slice().reverse();
 // ecaFrom / ecaTo: miles of the passage inside an emission control area,
 // counted from the departure port / towards the arrival port.
 const TV01 = {
-  id: '1000019', name: 'Suddha Star', code: 'SSTAR', kind: 'bulk', department: 'Emission',
+  id: '1000019', name: 'SN Star', code: 'SNSTAR', kind: 'bulk', department: 'Emission',
   ship_type: 'bulk_carrier', vessel_type: 'Ultramax bulk carrier (geared, 4 x 30 t cranes)', flag: 'Marshall Islands',
   owner: 'TEST-NWO', manager: 'TEST-HLM', charterer: 'TEST-MCH', customer: 'TEST-HLM',
   gt: 36420, nt: 21390, dwt: 63520, capacity: 79600, capUnit: 'm3',
@@ -140,7 +140,7 @@ const TV01 = {
 };
 
 const TV02 = {
-  id: '1000021', name: 'Suddha Sky', code: 'SSKY', kind: 'tanker', department: 'Emission',
+  id: '1000021', name: 'SN Sky', code: 'SNSKY', kind: 'tanker', department: 'Emission',
   ship_type: 'tanker', vessel_type: 'Aframax crude oil tanker, LNG dual-fuel', flag: 'Malta',
   owner: 'TEST-AOT', manager: 'TEST-HLM', charterer: 'TEST-ATE', customer: 'TEST-HLM',
   gt: 63910, nt: 34480, dwt: 114650, capacity: 125400, capUnit: 'm3',
@@ -279,7 +279,7 @@ function burn(spec, v, mode, hours, ctx) {
     }
     return f;
   }
-  // Suddha Sky: LNG dual-fuel. Gas mode burns LNG with 1% of the energy as MGO pilot.
+  // SN Sky: LNG dual-fuel. Gas mode burns LNG with 1% of the energy as MGO pilot.
   const gas = !v.liquid;
   const liquid = ctx.eca || portRegion !== 'OTHER' ? 'MGO' : 'VLSFO';
   const gasEnergy = (kwh, bsec) => kwh * bsec / 1000;   // MJ
@@ -411,16 +411,51 @@ function lit(v) {
   return `'${String(v).replace(/'/g, "''")}'`;
 }
 const tuple = (vals) => `(${vals.map(lit).join(', ')})`;
+const RULE = '-- ' + '='.repeat(76);
+const banner = (title, ...lines) => [RULE, `--  ${title}`, ...lines.map((l) => `--  ${l}`.trimEnd()), RULE].join('\n');
 
-function valuesInsert(head, rows, select, chunk = 800) {
+function valuesInsert(head, rows, select, chunk = 250) {
   const out = [];
   for (let i = 0; i < rows.length; i += chunk) {
     out.push(`${head}\n${select.replace('%VALUES%', rows.slice(i, i + chunk).map(tuple).join(',\n'))};`);
   }
-  return out.join('\n');
+  return out;
 }
 
+const tx = (blocks) => ['BEGIN;\nSET LOCAL search_path = kris;', ...blocks, 'COMMIT;'].join('\n\n');
+
+/** The test data as one SQL script. */
 function buildSql(opts = {}) {
+  const { head, guard, body, positions, checks } = seed(opts);
+  return [head, guard, tx([...body, positions]), checks].join('\n\n');
+}
+
+/**
+ * The same data cut into scripts of at most about maxChars each, for editors
+ * that cap a query's size (Supabase's SQL Editor). Each part is one
+ * transaction, to run in order; the last holds only the current positions,
+ * so it can be edited and re-run on its own.
+ */
+function buildParts(opts = {}, maxChars = 250000) {
+  const { head, guard, body, positions, checks } = seed(opts);
+  const groups = [[]];
+  let size = 0;
+  for (const b of body) {
+    if (size + b.length > maxChars && groups[groups.length - 1].length) { groups.push([]); size = 0; }
+    groups[groups.length - 1].push(b);
+    size += b.length + 2;
+  }
+  groups.push([positions]);
+  const n = groups.length;
+  return groups.map((g, i) => [
+    i === 0 ? `${head}\n\n${guard}` : '',
+    `-- K.R.1.S TEST DATA — PART ${i + 1} OF ${n}. Run the parts in order${i ? `, after part ${i} has finished` : ''}.`,
+    tx(g),
+    i === n - 1 ? checks : '',
+  ].filter(Boolean).join('\n\n'));
+}
+
+function seed(opts) {
   const until = (opts.until ? new Date(opts.until) : new Date()).getTime();
   const ships = [TV01, TV02];
   const sim = ships.map((s) => {
@@ -429,13 +464,75 @@ function buildSql(opts = {}) {
   });
   const untilDate = ymd(until);
   const sql = [];
+  let note = '';   // a section banner, written with the statement that follows it
+  const section = (...a) => { note += banner(...a) + '\n'; };
+  const add = (...stmts) => { for (const s of stmts) { sql.push(note + s); note = ''; } };
 
-  sql.push(`-- K.R.1.S TEST DATA — fictional vessels, generated ${iso(Date.now())} for data up to ${iso(until)}.
-BEGIN;
-SET LOCAL search_path = kris;
+  // Where each vessel is at `until`: its latest report, the one the map shows.
+  const portName = Object.fromEntries(PORTS.map((p) => [p[0], p[1]]));
+  const now = sim.map(({ spec, voyages, reports: rs }) => {
+    const r = rs[rs.length - 1];
+    const v = voyages.find((x) => x.ref === r.voyage);
+    const port = portName[v.leg.to];
+    const where = r.form === 'departure' ? `departing ${port}`
+      : r.mode === 'sea' ? `at sea, ${portName[v.leg.from]} to ${port}`
+      : r.at < v.berthed ? `at anchor off ${port}` : `alongside at ${port}`;
+    return { spec, r, where };
+  });
+  const pad = (s, n) => String(s).padEnd(n);
 
--- Remove earlier test data (children first where there is no cascade).
-DELETE FROM kris.communications WHERE customer_id LIKE 'TEST-%' OR vessel_id IN (SELECT id FROM kris.vessels WHERE is_test);
+  const head = `-- ============================================================================
+--  K.R.1.S TEST DATA — SN Star and SN Sky
+--
+--  Generated ${iso(Date.now())} by db/test_data.js, with data from
+--  1 January 2023 up to ${iso(until)}.
+--  As the database owner (postgres):
+--    1. Run db/001_schema.sql — also on a database set up earlier: it is safe to
+--       re-run, keeps the data, and adds any table, column or view added since
+--       (section 0 below stops, before changing anything, if one is missing).
+--    2. Supabase SQL Editor: it limits a query's size, so the data comes in
+--       parts: run db/002_test_data_part1.sql, part2, ... in order, each after
+--       the previous one has finished.
+--       Or, from a terminal, both steps at once: node db/setup.js
+--  Safe to re-run: the earlier test rows are deleted first.
+--
+--  THE VESSELS — fictional. IMO numbers are in the 1000000 range (valid check
+--  digit, never issued to a ship), companies start with TEST, email addresses
+--  use the reserved .example domain.
+${now.map(({ spec: s }) => `--    ${pad(s.name, 8)} IMO ${s.id}  ${s.vessel_type}, ${s.dwt} DWT, built ${s.built}
+--                          trades ${[...new Set(s.route.map((l) => portName[l.from]))].join(' - ')}`).join('\n')}
+--
+--  WHERE THEY ARE NOW — what the map shows (latest report of each vessel)
+${now.map(({ spec: s, r, where }) => `--    ${pad(s.name, 8)} ${pad(where, 40)} lat ${r.lat}, lon ${r.lon}`).join('\n')}
+--    To move a vessel on the map, edit section 15 "CURRENT POSITIONS" (the last
+--    part) and run it again; it can be re-run on its own at any time.
+--
+--  SECTIONS
+--     0  schema check (stops before any change if a table or column is missing)
+--     1  earlier test data removed
+--     2  companies: owners, manager/customer, charterers, carbon brokers,
+--        verifier, bunker suppliers
+--     3  ports: UN/LOCODE, region (EEA / UK / OTHER), ECA, latitude/longitude
+--     4  vessels: IMO, particulars, tonnage, engines, owner/manager/charterer
+--     5  sea distances between ports (distance to go and ETA)
+--     6  voyages   7  port calls   8  off-hire
+--     9  daily reports: position, course, speed, power, fuel, CO2
+--    10  fuel burned per report and fuel type   11  bunker deliveries (BDNs)
+--    12  fuel types per vessel, with the fuel on board when the data starts
+--    13  EUA / UKA prices (illustrative, not market data)
+--    14  CII corrections, FuelEU pool, allowance trades, allocations,
+--        surrenders, invoices, compliance filings, emails
+--    15  CURRENT POSITIONS: where the map shows each vessel (edit here)
+--
+--  NOT INSERTED BECAUSE IT IS COMPUTED: CO2 per voyage and year, AER, CII and
+--  its rating, FuelEU balance and penalty, ETS allowances owed, voyage days,
+--  distance to go, ETA, fuel on board. Those are views (db/001_schema.sql) over
+--  the rows below, so they always agree with them. Queries to look at them
+--  are at the end (the last part).
+-- ============================================================================`;
+
+  section('1. Remove earlier test data (children first where there is no cascade)');
+  add(`DELETE FROM kris.communications WHERE customer_id LIKE 'TEST-%' OR vessel_id IN (SELECT id FROM kris.vessels WHERE is_test);
 DELETE FROM kris.invoices WHERE customer_id LIKE 'TEST-%';
 DELETE FROM kris.carbon_allocations WHERE vessel_id IN (SELECT id FROM kris.vessels WHERE is_test);
 DELETE FROM kris.carbon_trades WHERE customer_id LIKE 'TEST-%';
@@ -444,17 +541,26 @@ DELETE FROM kris.veson_offhire WHERE imo IN (SELECT id FROM kris.vessels WHERE i
 DELETE FROM kris.vessels WHERE is_test;
 DELETE FROM kris.fueleu_pools WHERE id LIKE 'TEST-%';
 DELETE FROM kris.carbon_prices WHERE source LIKE 'TEST%';
-DELETE FROM kris.companies WHERE id LIKE 'TEST-%';
-`);
+DELETE FROM kris.companies WHERE id LIKE 'TEST-%';`);
 
-  sql.push(valuesInsert('INSERT INTO kris.companies (id, name, roles, country_code, email_domain, is_test)',
+  section('2. Companies — every party the vessels deal with (fictional, prefixed TEST)',
+    'roles: owner, manager, charterer, customer (who K.R.1.S reports to), counterparty',
+    '(carbon broker), verifier, supplier (bunkers). One company can have several roles.');
+  add(...valuesInsert('INSERT INTO kris.companies (id, name, roles, country_code, email_domain, is_test)',
     COMPANIES.map((c) => [...c, true]), 'VALUES %VALUES%'));
-  sql.push(valuesInsert('INSERT INTO kris.ports (locode, name, country_code, country, region, in_eca, latitude, longitude)',
+  section('3. Ports — real UN/LOCODEs, approximate positions',
+    'region decides regulation: EEA = EU MRV / EU ETS / FuelEU, UK = UK ETS, OTHER = neither.',
+    'in_eca = inside an emission control area (0.10% sulphur). latitude/longitude are the',
+    'berth a vessel alongside is shown at. Upserted, so a port that already exists is updated.');
+  add(...valuesInsert('INSERT INTO kris.ports (locode, name, country_code, country, region, in_eca, latitude, longitude)',
     PORTS, `VALUES %VALUES%
 ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.country, region = EXCLUDED.region,
   in_eca = EXCLUDED.in_eca, latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude`));
 
-  sql.push(valuesInsert(`INSERT INTO kris.vessels (id, imo, name, department, vessel_code, ship_type, vessel_type, flag,
+  section('4. Vessels — id is the IMO number (every other table keys on it)',
+    'ship_type picks the CII reference line (kris.cii_ship_types); deadweight_t is the CII',
+    'capacity. department is what access control scopes on. is_test marks them as test rows.');
+  add(...valuesInsert(`INSERT INTO kris.vessels (id, imo, name, department, vessel_code, ship_type, vessel_type, flag,
   owner_id, manager_id, charterer_id, customer_id, gross_tonnage, net_tonnage, deadweight_t, cargo_capacity, cargo_capacity_unit,
   main_engine, main_engine_cylinders, main_engine_mcr_kw, main_engine_rpm, aux_engines, scrubber, dual_fuel,
   year_built, builder, class_society, design_speed_kn, reference_speed_kn, is_test)`,
@@ -462,7 +568,8 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
     s.owner, s.manager, s.charterer, s.customer, s.gt, s.nt, s.dwt, s.capacity, s.capUnit,
     s.me, s.cyl, s.mcr, s.rpm, s.aux, s.scrubber, s.dual, s.built, s.builder, s.klass, s.design, s.ref, true]),
   'VALUES %VALUES%'));
-  sql.push(valuesInsert('INSERT INTO kris.route_distances (from_port, to_port, nm)',
+  section('5. Sea distances (nm) on the usual route: distance to go and ETA come from these');
+  add(...valuesInsert('INSERT INTO kris.route_distances (from_port, to_port, nm)',
     ships.flatMap((s) => s.route.map((l) => [l.from, l.to, l.nm])),
     'VALUES %VALUES%\nON CONFLICT (from_port, to_port) DO UPDATE SET nm = EXCLUDED.nm'));
 
@@ -485,15 +592,23 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
       }
     }
   }
-  sql.push(valuesInsert('INSERT INTO kris.voyages (vessel_id, voyage_no, voyage_ref, from_port, to_port, departure_at, leg_type, cargo, cargo_qty_t, charterer_id)',
+  section('6. Voyages — one passage plus the stay at its destination',
+    'A voyage starts when the vessel leaves from_port and ends when it leaves to_port, which',
+    'is when the next one starts. laden legs carry cargo_qty_t (used for EEOI), ballast legs none.',
+    'voyage_ref (e.g. SNSTAR-2026-05) is how the rows below find their voyage.');
+  add(...valuesInsert('INSERT INTO kris.voyages (vessel_id, voyage_no, voyage_ref, from_port, to_port, departure_at, leg_type, cargo, cargo_qty_t, charterer_id)',
     voyRows, `SELECT d.vessel_id, d.voyage_no, d.voyage_ref, d.from_port, d.to_port, d.departure_at::timestamptz, d.leg_type, d.cargo, d.qty::numeric, d.charterer
   FROM (VALUES %VALUES%) AS d(vessel_id, voyage_no, voyage_ref, from_port, to_port, departure_at, leg_type, cargo, qty, charterer)`));
-  sql.push(valuesInsert('INSERT INTO kris.port_calls (voyage_id, locode, purpose, arrival_at, berthed_at, departure_at, distance_in_port_nm)',
+  section('7. Port calls — arrival (end of passage), berthed (after waiting at anchor), departure',
+    'departure_at NULL = still in port; berthed_at NULL = still at anchor. The voyage status',
+    '(underway / in_port / completed) is derived from these.');
+  add(...valuesInsert('INSERT INTO kris.port_calls (voyage_id, locode, purpose, arrival_at, berthed_at, departure_at, distance_in_port_nm)',
     callRows, `SELECT v.id, d.locode, d.purpose, d.arrival_at::timestamptz, d.berthed_at::timestamptz, d.departure_at::timestamptz, d.nm
   FROM (VALUES %VALUES%) AS d(voyage_ref, locode, purpose, arrival_at, berthed_at, departure_at, nm)
   JOIN kris.voyages v ON v.voyage_ref = d.voyage_ref`));
   if (offRows.length) {
-    sql.push(valuesInsert('INSERT INTO kris.veson_offhire (imo, vessel_name, voyage_no, start_time, end_time, start_date, offhire_hours, offhire_days, reason)',
+    section('8. Off-hire events (Veson), tied to a voyage by voyage_no; subtracted from net voyage days');
+    add(...valuesInsert('INSERT INTO kris.veson_offhire (imo, vessel_name, voyage_no, start_time, end_time, start_date, offhire_hours, offhire_days, reason)',
       offRows, `SELECT d.imo, d.name, d.voyage_no, d.s::timestamptz, d.e::timestamptz, d.sd::date, d.h, d.dd, d.reason
   FROM (VALUES %VALUES%) AS d(imo, name, voyage_no, s, e, sd, h, dd, reason)`));
   }
@@ -507,17 +622,25 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
       for (const f of r.fuels) fuelRows.push([r.imo, iso(r.at), r.form, f.code, f.me, f.ae, f.boiler]);
     }
   }
-  sql.push(valuesInsert(`INSERT INTO kris.geoform_reports (imo, vessel_name, form_type, report_time, report_date, shaft_power_kw, fuel_consumed_mt,
+  section('9. Daily reports (kris.geoform_reports): departure, noon (12:00 UTC) and arrival reports',
+    'Each covers the time since the previous report. At sea: position along the sea lane, course,',
+    'distance, speed, main-engine power and rpm, wind. In port: position of the anchorage or berth.',
+    'fuel_consumed_mt = me + ae + boiler and equals the fuel-by-type rows in section 10;',
+    'co2_mt = fuel x emission factor. CII, AER, FuelEU and ETS are all computed from these rows.');
+  add(...valuesInsert(`INSERT INTO kris.geoform_reports (imo, vessel_name, form_type, report_time, report_date, shaft_power_kw, fuel_consumed_mt,
   me_fuel_mt, ae_fuel_mt, boiler_fuel_mt, distance_nm, speed_kn, me_rpm, co2_mt, mode, hours_underway,
   latitude, longitude, course_deg, wind_force_bft, voyage_id)`, repRows,
   `SELECT d.imo, d.name, d.form, d.at::timestamptz, d.day::date, d.power, d.total, d.me, d.ae, d.boiler, d.distance, d.speed, d.rpm, d.co2, d.mode, d.hours,
           d.lat, d.lon, d.course::smallint, d.wind::smallint, v.id
   FROM (VALUES %VALUES%) AS d(imo, name, form, at, day, power, total, me, ae, boiler, distance, speed, rpm, co2, mode, hours, lat, lon, course, wind, voyage_ref)
   JOIN kris.voyages v ON v.voyage_ref = d.voyage_ref`));
-  sql.push(valuesInsert('INSERT INTO kris.fuel_consumption (report_id, fuel_code, me_t, ae_t, boiler_t)', fuelRows,
+
+  section('10. Fuel burned per report, by fuel type and consumer (main engine, auxiliaries, boiler)',
+    'The emissions ledger: CO2, CO2e, energy and EU/UK scope are computed per row by kris.fuel_emissions.');
+  add(...valuesInsert('INSERT INTO kris.fuel_consumption (report_id, fuel_code, me_t, ae_t, boiler_t)', fuelRows,
     `SELECT r.id, d.fuel, d.me, d.ae, d.boiler
   FROM (VALUES %VALUES%) AS d(imo, at, form, fuel, me, ae, boiler)
-  JOIN kris.geoform_reports r ON r.imo = d.imo AND r.report_time = d.at::timestamptz AND r.form_type = d.form`, 1000));
+  JOIN kris.geoform_reports r ON r.imo = d.imo AND r.report_time = d.at::timestamptz AND r.form_type = d.form`, 600));
 
   // --- bunker deliveries: what was burned since the previous delivery of that fuel,
   //     delivered at the vessel's usual bunker ports -------------------------------
@@ -551,7 +674,9 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
   const recent = bdnRows.filter((b) => b.at > until - 60 * D);
   const requested = recent[recent.length - 1];
   const disputedIdx = bdnRows.findIndex((b) => b.vessel === TV01.id && new Date(b.at).getUTCFullYear() === 2025 && b.code === 'HSFO');
-  sql.push(valuesInsert('INSERT INTO kris.bunker_deliveries (bdn_no, vessel_id, voyage_id, locode, delivered_at, fuel_code, quantity_t, sulphur_pct, density_kg_m3, supplier_id, status, received_at, verified_at)',
+  section('11. Bunker deliveries (BDNs) — what was burned since the last delivery of that fuel',
+    'status: verified (checked), received (recent), requested (note still missing), disputed.');
+  add(...valuesInsert('INSERT INTO kris.bunker_deliveries (bdn_no, vessel_id, voyage_id, locode, delivered_at, fuel_code, quantity_t, sulphur_pct, density_kg_m3, supplier_id, status, received_at, verified_at)',
     bdnRows.map((b, i) => {
       const status = b === requested ? 'requested' : i === disputedIdx ? 'disputed' : recent.includes(b) ? 'received' : 'verified';
       const received = status === 'requested' ? null : iso(b.at + 20 * H);
@@ -576,7 +701,9 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
       onBoard.push([spec.id, code, usage, Math.ceil((reserve - low) / 5) * 5, iso(START)]);
     }
   }
-  sql.push(valuesInsert('INSERT INTO kris.vessel_fuel_types (vessel_id, fuel_code, usage, opening_rob_t, opening_at)', onBoard,
+  section('12. Fuel types each vessel burns, and what was on board (ROB) when the data starts',
+    'Fuel on board now = opening ROB + deliveries - consumption (view kris.fuel_on_board).');
+  add(...valuesInsert('INSERT INTO kris.vessel_fuel_types (vessel_id, fuel_code, usage, opening_rob_t, opening_at)', onBoard,
     'SELECT d.v, d.f, d.u, d.rob, d.at::timestamptz FROM (VALUES %VALUES%) AS d(v, f, u, rob, at)'));
 
   // --- illustrative carbon prices, first business day of each month ---------------
@@ -591,11 +718,74 @@ ON CONFLICT (locode) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.coun
       prices.push(['UKA', ymd(day), Math.round((38 + 5 * Math.sin(t / 5 + 1) + t * 0.2 + (pr() - 0.5) * 3) * 100) / 100, 'GBP', 'TEST data (illustrative, not market prices)']);
     }
   }
-  sql.push(valuesInsert('INSERT INTO kris.carbon_prices (instrument, price_date, price, currency, source)', prices, 'VALUES %VALUES%'));
+  section('13. Carbon prices, monthly — illustrative, NOT market data',
+    'EUA in EUR (EU ETS), UKA in GBP (UK ETS). Exposure is priced at the latest row.');
+  add(...valuesInsert('INSERT INTO kris.carbon_prices (instrument, price_date, price, currency, source)', prices, 'VALUES %VALUES%'));
 
-  sql.push(derived(untilDate));
-  sql.push('COMMIT;');
-  return sql.join('\n\n');
+  section('14. Compliance and commercial records',
+    'Quantities and amounts here are read from the views (CII, FuelEU, ETS obligations), so every',
+    'figure matches what K.R.1.S reports: CII corrections, FuelEU pooling and banking, allowance',
+    'trades, allocations and surrenders, invoices, filings (IMO DCS, EU MRV, FuelEU, CII, SEEMP,',
+    'UK ETS) and emails.');
+  add(derived(untilDate));
+
+  const positions = `${banner('15. CURRENT POSITIONS — edit here to move a vessel on the map',
+    'The map and "where is ..." answers read kris.vessel_positions: each vessel\'s LATEST report.',
+    'The values below are where it already is: running this unchanged changes nothing. It can be',
+    're-run on its own at any time, once the rest of the data is loaded.',
+    'Change lat/lon (decimal degrees: north and east positive) and course (0-359, NULL in port).',
+    'Keep a vessel at sea on water. "at sea / at anchor / alongside", the voyage, distance to go',
+    'and ETA come from the voyage and port-call rows, not from these coordinates.')}
+UPDATE kris.geoform_reports r
+   SET latitude = p.lat, longitude = p.lon, course_deg = p.course
+  FROM (VALUES
+${now.map(({ spec: s, r, where }, i) => `    (${lit(s.id)}, ${r.lat}, ${r.lon}, ${lit(r.course)}::smallint)${i < now.length - 1 ? ',' : ' '}   -- ${s.name}: ${where}`).join('\n')}
+  ) AS p(imo, lat, lon, course)
+ WHERE r.imo = p.imo
+   AND r.report_time = (SELECT max(x.report_time) FROM kris.geoform_reports x WHERE x.imo = p.imo AND x.latitude IS NOT NULL);`;
+
+  const checks = `${banner('CHECKS — what the application will show (run after the script)')}
+-- SELECT vessel_name, situation, latitude, longitude, voyage_no, from_port_name, to_port_name, distance_to_go_nm, eta FROM kris.vessel_positions;
+-- SELECT * FROM kris.vessel_particulars;
+-- SELECT vessel_name, voyage_no, from_port_name, to_port_name, status, departure_at, arrival_at, distance_nm, fuel_t, co2_t FROM kris.voyage_summary ORDER BY departure_at DESC LIMIT 10;
+-- SELECT vessel_name, year, distance_nm, co2_t, aer, attained_cii, required_cii, rating, status FROM kris.cii_annual ORDER BY vessel_name, year;
+-- SELECT vessel_name, year, fuel_t, hsfo_t, vlsfo_t, mgo_t, lng_t, co2_t, eu_co2_t FROM kris.annual_operations ORDER BY vessel_name, year;
+-- SELECT vessel_name, year, ghg_intensity, target_intensity, compliance_balance_t, final_balance_t, penalty_eur, status FROM kris.fueleu_period WHERE period = 'YEAR';
+-- SELECT vessel_name, scheme, year, emissions_in_scope_t, allowances_required, allowances_surrendered, status FROM kris.ets_obligations ORDER BY vessel_name, scheme, year;
+-- SELECT vessel_name, fuel_code, rob_t FROM kris.fuel_on_board;`;
+
+  // Every table and column this script writes, every relation it reads, and
+  // the views the map needs: checked before anything is deleted or inserted.
+  const need = new Map();
+  const want = (rel, col = null) => need.set(col ? `${rel}.${col}` : rel, [rel, col]);
+  ['kris.vessel_positions', 'kris.fuel_on_board'].forEach((rel) => want(rel));
+  for (const b of [...sql, positions]) {
+    for (const [, rel, cols] of b.matchAll(/INSERT INTO (kris\.\w+) \(([^)]*)\)/g)) {
+      want(rel);
+      for (const c of cols.split(',')) want(rel, c.trim());
+    }
+    for (const [, rel] of b.matchAll(/(?:FROM|JOIN|UPDATE) (kris\.\w+)/g)) want(rel);
+  }
+  const guard = `${banner('0. Schema check — stops here, before anything is changed, if this database',
+    'was set up from an older db/001_schema.sql and lacks a table or column used below.',
+    'Fix: run db/001_schema.sql (safe to re-run: it keeps your data and adds what is missing).')}
+DO $$
+DECLARE missing text;
+BEGIN
+  SELECT string_agg(n.rel || COALESCE('.' || n.col, ''), ', ' ORDER BY n.rel, n.col) INTO missing
+    FROM (VALUES
+${[...need.values()].map(([rel, col]) => `      (${lit(rel)}, ${lit(col)})`).join(',\n')}
+    ) AS n(rel, col)
+   WHERE (n.col IS NULL AND to_regclass(n.rel) IS NULL)
+      OR (n.col IS NOT NULL AND to_regclass(n.rel) IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns c
+             WHERE c.table_schema = split_part(n.rel, '.', 1) AND c.table_name = split_part(n.rel, '.', 2)
+               AND c.column_name = n.col));
+  IF missing IS NOT NULL THEN
+    RAISE EXCEPTION 'This database was set up from an older db/001_schema.sql. Missing: %. Run db/001_schema.sql first (safe to re-run, it keeps your data), then this script.', missing;
+  END IF;
+END $$;`;
+  return { head, guard, body: sql, positions, checks };
 }
 
 /**
@@ -794,8 +984,8 @@ SELECT m.mid, m.thread, m.dir, m.at, m.sender, m.rcpt, m.subject, m.body, m.cat,
       JOIN kris.vessels vs ON vs.id = b.vessel_id JOIN kris.companies s ON s.id = b.supplier_id JOIN kris.ports p ON p.locode = b.locode
     UNION ALL
     -- 3. Latest report from ${TV01.name}'s master
-    SELECT '<report-suddha-star@vessel.harbourline.example>', 'T-RPT-1', 'inbound', r.report_time + INTERVAL '40 minutes',
-           'master.suddha-star@vessel.harbourline.example', ARRAY['operations@harbourline.example'],
+    SELECT '<report-sn-star@vessel.harbourline.example>', 'T-RPT-1', 'inbound', r.report_time + INTERVAL '40 minutes',
+           'master.sn-star@vessel.harbourline.example', ARRAY['operations@harbourline.example'],
            format('%s %s report %s, voyage %s', vs.name, initcap(r.form_type), to_char(r.report_time, 'DD Mon YYYY HH24:MI "UTC"'), v.voyage_no),
            format(E'%s report, voyage %s %s to %s.\\nPosition %s %s, course %s, wind Bf %s.\\nLast %s h: %s nm at %s kn average.\\nME %s t, AE %s t, boiler %s t (total %s t), CO2 %s t.\\n\\nMaster, %s',
                   initcap(r.form_type), v.voyage_no, v.from_port, v.to_port, r.latitude, r.longitude, r.course_deg, r.wind_force_bft,
@@ -902,4 +1092,4 @@ SELECT m.mid, m.thread, m.dir, m.at, m.sender, m.rcpt, m.subject, m.body, m.cat,
 `;
 }
 
-module.exports = { buildSql };
+module.exports = { buildSql, buildParts };

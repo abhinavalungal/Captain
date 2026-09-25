@@ -589,7 +589,9 @@
     '.kicker::after{transform:scaleX(-1)}',
     '.welcome h3{margin:0 0 8px;font:650 23px/1.2 var(--display);letter-spacing:-.022em;color:var(--ink)}',
     '.welcome .intro{margin:0 auto;color:var(--ink-2);font-size:14.5px;line-height:1.55;max-width:31em}',
-    '.ctxline{margin-top:12px;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--peacock);background:var(--peacock-soft);padding:4px 11px 4px 9px;border-radius:999px}',
+    '.ctxline{margin-top:12px;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--peacock);background:var(--peacock-soft);padding:4px 11px 4px 9px;border-radius:14px;max-width:100%;text-align:left;line-height:1.4}',
+    '.ctxline svg{flex:none}',
+    '.welcome .ctxline{white-space:normal;overflow:visible}',
     '.prompts{list-style:none;margin:20px 0 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:left}',
     '.prompts li{display:flex}',
     '.prompts button{position:relative;width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:9px;padding:12px;border:1px solid var(--line);background:var(--surface);cursor:pointer;text-align:left;color:var(--ink);font-size:13.5px;line-height:1.38;border-radius:var(--r-card);' +
@@ -767,11 +769,29 @@
     '.send:active:not(:disabled){transform:scale(.92)}',
     '.send:disabled{background:var(--surface-3);color:var(--ink-4);box-shadow:none}',
     '.send:focus-visible{outline:2px solid var(--gold);outline-offset:2px}',
-    '.foot{grid-column:1 / -1;display:none;align-items:center;gap:8px;padding:0 12px 9px 12px;min-height:30px}',
+    '.foot{grid-column:1 / -1;display:none;align-items:center;gap:8px;padding:0 12px 9px 12px;min-height:30px;position:relative}',
     '.foot.on{display:flex}',
-    '.ctx{display:none;align-items:center;gap:6px;max-width:70%;padding:3px 9px 3px 7px;border-radius:999px;background:var(--peacock-soft);color:var(--peacock);font-size:12px;line-height:1.3}',
+    '.ctx{display:none;align-items:center;gap:6px;max-width:70%;min-width:0;padding:3px 9px 3px 7px;border:0;border-radius:999px;background:var(--peacock-soft);color:var(--peacock);font-size:12px;line-height:1.3;cursor:pointer}',
     '.ctx.on{display:inline-flex}',
+    '.ctx.empty{background:transparent;color:var(--ink-3);box-shadow:inset 0 0 0 1px var(--line-2)}',
+    '.ctx:hover:not(:disabled){box-shadow:inset 0 0 0 1px var(--peacock)}',
+    '.ctx:disabled{cursor:default}',
+    '.ctx:focus-visible,.ctx-clear:focus-visible,.ctxmenu button:focus-visible{outline:2px solid var(--peacock);outline-offset:2px}',
     '.ctx span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.ctx-clear{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;margin-left:-4px;padding:0;border:0;border-radius:999px;background:transparent;color:var(--ink-3);cursor:pointer}',
+    '.ctx-clear[hidden]{display:none}',
+    '.ctx-clear:hover{color:var(--ink);background:var(--peacock-soft)}',
+    '.ctx-clear svg{width:13px;height:13px}',
+    '.ctxmenu{position:absolute;left:8px;bottom:calc(100% + 6px);z-index:6;min-width:220px;max-width:calc(100% - 16px);max-height:260px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);box-shadow:var(--shadow-md)}',
+    '.ctxmenu[hidden]{display:none}',
+    '.ctxmenu-h{padding:6px 10px 4px;font-size:11.5px;color:var(--ink-3)}',
+    '.ctxmenu-note{padding:6px 10px 8px;font-size:12.5px;line-height:1.4;color:var(--ink-3)}',
+    '.ctxmenu button{display:flex;align-items:center;gap:8px;width:100%;min-height:36px;padding:7px 10px;border:0;border-radius:8px;background:transparent;text-align:left;font-size:13.5px;cursor:pointer}',
+    '.ctxmenu button span:first-child{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.ctxmenu button:hover{background:var(--peacock-soft)}',
+    '.ctxmenu button[aria-checked="true"]{color:var(--peacock);font-weight:600}',
+    '.ctxmenu button.clear{color:var(--ink-3);border-top:1px solid var(--line);border-radius:0 0 8px 8px;margin-top:4px}',
+    '.ctxmenu .tick{display:inline-flex;color:var(--peacock)}',
     '.foot .spacer{flex:1}',
     '.count{font:400 11px/1 var(--mono);color:var(--ink-3)}',
     '.count.over{color:var(--danger)}',
@@ -2046,7 +2066,10 @@
     this.pending = null;
     this.history = [];
     this.turns = [];          // this conversation: { role, text, data, at, ms, send, memo }
-    this.context = null;
+    this.context = null;      // what questions default to: the user's pick, else the host page's vessel
+    this.pageContext = null;  // set by the host page (KRIS.setContext)
+    this.pick = null;         // set by the user in the picker: { fleet: true } or { vesselId, vesselName }; kept with the chat
+    this._vessels = null;     // the picker's list, loaded on first open
     this.convId = uid();
     this.convFacts = {};      // conversation context: what the user said about themselves in THIS chat
     this.suggested = {};      // "key|value" already offered for memory in this chat
@@ -2164,7 +2187,7 @@
       if (s) {
         try {
           var turns = this.turns.slice(-40);
-          var rec = { v: 2, id: this.convId, turns: turns, facts: this.convFacts, suggested: this.suggested, pending: this.pending, open: this.open, wide: this.root.classList.contains('wide'), at: Date.now() };
+          var rec = { v: 2, id: this.convId, turns: turns, facts: this.convFacts, suggested: this.suggested, pending: this.pending, pick: this.pick, open: this.open, wide: this.root.classList.contains('wide'), at: Date.now() };
           var blob = JSON.stringify(rec);
           if (blob.length > 400000) { rec.turns = turns.slice(-10); blob = JSON.stringify(rec); }
           s.setItem(this._storeKey, blob);
@@ -2289,6 +2312,7 @@
       if (e.key !== 'Escape' || !self.open) return;
       var path = e.composedPath ? e.composedPath() : [];
       if (path.indexOf(self.host) < 0 && document.activeElement !== self.host) return;
+      if (!self.ctxMenu.hidden) { self.closePicker(true); return; }
       if (self.panel.classList.contains('drawer-open')) { self.toggleDrawer(false); return; }
       if (self.view !== 'chat') { self.showView('chat'); return; }
       if (self.busy) { self.stop(); return; }
@@ -2296,6 +2320,10 @@
     };
     document.addEventListener('keydown', this._onKeydown);
     root.addEventListener('keydown', function (e) { self.trapDrawerFocus(e); });
+    root.addEventListener('pointerdown', function (e) {
+      var p = e.composedPath ? e.composedPath() : [];
+      if (!self.ctxMenu.hidden && p.indexOf(self.ctxMenu) < 0 && p.indexOf(self.ctxChip) < 0) self.closePicker();
+    });
 
     // Another tab changed what K.R.1.S remembers: follow it.
     this._onStorage = function (e) {
@@ -2310,6 +2338,7 @@
     // Restore this tab's conversation (page navigations inside the app).
     var saved = this.load();
     if (saved) this.restore(saved);
+    else this.applyContext();
     this.histPrune();
     if (!saved || !saved.turns.length) this.refreshWelcome();
 
@@ -2436,16 +2465,32 @@
     send.setAttribute('aria-label', 'Send message');
     send.disabled = true;
 
-    // Below the text: the page-context chip and the length counter, shown
-    // only when one of them has something to say.
+    // Below the text: the current vessel / fleet (a button that opens the
+    // picker) and the length counter.
     var foot = el('div', 'foot');
-    var ctx = el('span', 'ctx');
+    var ctx = el('button', 'ctx');
+    ctx.type = 'button';
+    ctx.setAttribute('aria-haspopup', 'menu');
+    ctx.setAttribute('aria-expanded', 'false');
     ctx.innerHTML = ICON.vessel;
     this.ctxText = el('span');
     ctx.appendChild(this.ctxText);
+    ctx.addEventListener('click', function () { self.togglePicker(); });
     this.ctxChip = ctx;
+    var clr = el('button', 'ctx-clear');
+    clr.type = 'button';
+    clr.hidden = true;
+    clr.innerHTML = ICON.close;
+    clr.setAttribute('aria-label', 'Clear the current vessel or fleet');
+    clr.addEventListener('click', function () { self.pickContext(null); });
+    this.ctxClear = clr;
+    this.ctxMenu = el('div', 'ctxmenu');
+    this.ctxMenu.setAttribute('role', 'menu');
+    this.ctxMenu.setAttribute('aria-label', 'Current vessel or fleet');
+    this.ctxMenu.hidden = true;
     this.countEl = el('span', 'count');
-    foot.appendChild(ctx); foot.appendChild(el('span', 'spacer')); foot.appendChild(this.countEl);
+    foot.appendChild(ctx); foot.appendChild(clr); foot.appendChild(this.ctxMenu);
+    foot.appendChild(el('span', 'spacer')); foot.appendChild(this.countEl);
     this.foot = foot;
 
     form.appendChild(ta); form.appendChild(send); form.appendChild(foot);
@@ -2876,7 +2921,7 @@
   };
 
   Widget.prototype.updateFoot = function () {
-    this.foot.classList.toggle('on', this.ctxChip.classList.contains('on') || !!this.countEl.textContent);
+    this.foot.classList.toggle('on', this.opts.vesselPicker !== false || this.ctxChip.classList.contains('on') || !!this.countEl.textContent);
   };
 
   Widget.prototype.lastUserText = function () {
@@ -3041,7 +3086,7 @@
     this.clearLog();
     this.turns = []; this.history = []; this.pending = null;
     this._histSig = null;
-    this.restore({ id: rec.id, turns: rec.turns, facts: rec.facts, suggested: rec.suggested, pending: rec.pending || null });
+    this.restore({ id: rec.id, turns: rec.turns, facts: rec.facts, suggested: rec.suggested, pending: rec.pending || null, pick: rec.pick || null });
     this._histSig = this.histSig();   // opening a conversation is not a change to it
     if (!this.turns.length) this.showWelcome();
     this.showView('chat');
@@ -3053,22 +3098,125 @@
 
   /** Tell K.R.1.S what the user is looking at. Pass null to clear. */
   Widget.prototype.setContext = function (ctx) {
-    this.context = ctx && typeof ctx === 'object'
+    this.pageContext = ctx && typeof ctx === 'object'
       ? { vesselId: ctx.vesselId != null ? String(ctx.vesselId) : null,
           vesselName: ctx.vesselName != null ? String(ctx.vesselName) : null,
           page: ctx.page != null ? String(ctx.page) : null }
       : null;
-    var name = this.context && (this.context.vesselName || this.context.vesselId);
-    this.ctxText.textContent = name ? String(name) : '';
-    this.ctxChip.classList.toggle('on', !!name);
-    this.ctxChip.title = name ? 'Questions default to ' + name : '';
+    this.applyContext();
+  };
+
+  /** A pick from the vessel / fleet picker, or from a saved chat. */
+  function cleanPick(p) {
+    if (!p || typeof p !== 'object') return null;
+    if (p.fleet === true) return { fleet: true };
+    if (p.vesselId == null || p.vesselId === '') return null;
+    return { vesselId: String(p.vesselId).slice(0, 40), vesselName: p.vesselName != null ? String(p.vesselName).slice(0, 80) : null };
+  }
+
+  /** The user's own choice: it stays for this chat (and new ones) until they change or clear it. */
+  Widget.prototype.pickContext = function (pick) {
+    this.pick = cleanPick(pick);
+    this.applyContext();
+    this.closePicker(true);
+    this.save();
+  };
+
+  /** What the chip shows and questions default to: the user's pick beats the page's vessel. */
+  Widget.prototype.applyContext = function () {
+    var page = this.pageContext;
+    var pk = this.pick;
+    this.context = pk
+      ? (pk.fleet ? { fleet: true, page: page && page.page } : { vesselId: pk.vesselId, vesselName: pk.vesselName, page: page && page.page })
+      : page;
+    var name = this.ctxName();
+    var picker = this.opts.vesselPicker !== false;
+    var scope = this.context && this.context.fleet ? 'your whole fleet' : name;
+    this.ctxText.textContent = name || (picker ? 'Choose vessel or fleet' : '');
+    this.ctxChip.classList.toggle('on', !!name || picker);
+    this.ctxChip.classList.toggle('empty', !name);
+    this.ctxChip.disabled = !picker;
+    this.ctxChip.title = name ? 'Questions default to ' + scope + (picker ? '. Click to change.' : '') : 'Set a vessel or your fleet as the current context';
+    this.ctxClear.hidden = !pk;
     this.updateFoot();
     if (this.welcomeCtx) {
       this.welcomeCtx.hidden = !name;
-      this.welcomeCtxText.textContent = name ? 'Questions default to ' + name + ' unless you name another vessel' : '';
+      this.welcomeCtxText.textContent = !name ? ''
+        : this.context.fleet ? 'Questions default to your whole fleet unless you name a vessel'
+        : 'Questions default to ' + name + ' unless you name another vessel';
     }
     this.refreshPrompts();
     if (this.view === 'memory') this.refreshView('memory');
+  };
+
+  Widget.prototype.ctxName = function () {
+    var c = this.context;
+    return !c ? null : c.fleet ? 'Entire fleet' : (c.vesselName || c.vesselId || null);
+  };
+
+  /** The vessels this user may read: the host's list if it gave one, else the server's. */
+  Widget.prototype.loadVessels = function () {
+    var self = this;
+    if (this._vessels) return Promise.resolve(this._vessels);
+    var norm = function (list) {
+      return (Array.isArray(list) ? list : []).filter(function (v) { return v && v.id != null; })
+        .map(function (v) { return { id: String(v.id), name: String(v.name || v.id) }; });
+    };
+    if (Array.isArray(this.opts.vessels)) return Promise.resolve(this._vessels = norm(this.opts.vessels));
+    if (!this.opts.endpoint) return Promise.resolve([]);
+    return this.post({ action: 'vessels', client: CLIENT }).then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error((data && data.detail) || (data && data.text) || 'HTTP ' + res.status);
+        return (self._vessels = norm(data && data.vessels));
+      });
+    });
+  };
+
+  Widget.prototype.togglePicker = function () {
+    if (this.opts.vesselPicker === false) return;
+    if (!this.ctxMenu.hidden) { this.closePicker(); return; }
+    this.ctxMenu.hidden = false;
+    this.ctxChip.setAttribute('aria-expanded', 'true');
+    this.renderPicker(null, 'loading');
+    var self = this;
+    this.loadVessels().then(function (list) { if (!self.ctxMenu.hidden) self.renderPicker(list); },
+      function (err) { if (!self.ctxMenu.hidden) self.renderPicker(null, 'error', err && err.message); });
+  };
+
+  Widget.prototype.closePicker = function (focusChip) {
+    if (!this.ctxMenu || this.ctxMenu.hidden) return;
+    this.ctxMenu.hidden = true;
+    this.ctxChip.setAttribute('aria-expanded', 'false');
+    if (focusChip) { try { this.ctxChip.focus({ preventScroll: true }); } catch (_) { /* ignore */ } }
+  };
+
+  Widget.prototype.renderPicker = function (list, state, detail) {
+    var self = this;
+    var m = this.ctxMenu;
+    m.textContent = '';
+    m.appendChild(el('div', 'ctxmenu-h', 'Answer questions about'));
+    var item = function (label, checked, onPick, cls) {
+      var b = el('button', cls || null);
+      b.type = 'button';
+      b.setAttribute('role', 'menuitemradio');
+      b.setAttribute('aria-checked', checked ? 'true' : 'false');
+      b.appendChild(el('span', null, label));
+      if (checked) { var ok = el('span', 'tick'); ok.innerHTML = ICON.check; b.appendChild(ok); }
+      b.addEventListener('click', onPick);
+      m.appendChild(b);
+      return b;
+    };
+    var pk = this.pick;
+    var first = item('Entire fleet', !!(pk && pk.fleet), function () { self.pickContext({ fleet: true }); });
+    if (state === 'loading') m.appendChild(el('div', 'ctxmenu-note', 'Loading your vessels…'));
+    else if (state === 'error') {
+      m.appendChild(el('div', 'ctxmenu-note', 'Your vessels could not be loaded' + (detail ? ': ' + String(detail).slice(0, 160) : '.')));
+    } else if (!list.length) m.appendChild(el('div', 'ctxmenu-note', 'No vessels are linked to your account.'));
+    else list.forEach(function (v) {
+      item(v.name, !!(pk && !pk.fleet && pk.vesselId === v.id), function () { self.pickContext({ vesselId: v.id, vesselName: v.name }); });
+    });
+    if (pk) item(this.pageContext && (this.pageContext.vesselName || this.pageContext.vesselId) ? 'Clear (use this page’s vessel)' : 'Clear', false, function () { self.pickContext(null); }, 'clear');
+    if (state !== 'loading') { try { first.focus({ preventScroll: true }); } catch (_) { /* ignore */ } }
   };
 
   // --- sections ----------------------------------------------------------------
@@ -3445,18 +3593,13 @@
    * Send one message. Resolves to the final payload. `hooks.onDelta(evt)` is
    * called for streamed events: { t: 'delta'|'replace'|'status', text }.
    */
-  Widget.prototype.transport = function (text, pending, history, hooks) {
+  /** POST to the K.R.1.S endpoint with the host's sign-in token. */
+  Widget.prototype.post = function (payload, signal) {
     var self = this;
-    var context = this.buildContext();
-    if (typeof this.opts.ask === 'function') {
-      return Promise.resolve(this.opts.ask(text, pending, history, context, hooks));
-    }
     var tokenP;
     try { tokenP = Promise.resolve(typeof this.opts.getToken === 'function' ? this.opts.getToken() : null); }
     catch (e) { tokenP = Promise.resolve(null); }
-
     return tokenP.then(function (token) {
-      var payload = { text: text, pending: pending, history: history, context: context, stream: true, client: CLIENT };
       // text/plain + token in the body = a CORS "simple request": no preflight.
       var headers = { 'Content-Type': 'text/plain;charset=UTF-8' };
       if (token && typeof token === 'string') {
@@ -3469,9 +3612,18 @@
         credentials: 'omit',
         cache: 'no-store',
         body: JSON.stringify(payload),
-        signal: hooks && hooks.signal
+        signal: signal
       });
-    }).then(function (res) {
+    });
+  };
+
+  Widget.prototype.transport = function (text, pending, history, hooks) {
+    var self = this;
+    var context = this.buildContext();
+    if (typeof this.opts.ask === 'function') {
+      return Promise.resolve(this.opts.ask(text, pending, history, context, hooks));
+    }
+    return this.post({ text: text, pending: pending, history: history, context: context, stream: true, client: CLIENT }, hooks && hooks.signal).then(function (res) {
       self.setConn('online');
       var ctype = (res.headers && res.headers.get && res.headers.get('content-type')) || '';
       if (/ndjson/i.test(ctype) && res.body && res.body.getReader) return readStream(res, hooks);
@@ -4446,6 +4598,8 @@
     var self = this;
     if (saved.id) this.convId = String(saved.id).slice(0, 40);
     this.convFacts = cleanFacts(saved.facts);
+    this.pick = cleanPick(saved.pick);
+    this.applyContext();
     this.suggested = saved.suggested && typeof saved.suggested === 'object' ? saved.suggested : {};
     if (saved.pending) this.pending = saved.pending;
     var turns = Array.isArray(saved.turns) ? saved.turns.filter(function (t) { return t && (t.role === 'user' || t.role === 'assistant'); }) : [];
@@ -6058,7 +6212,7 @@
     var existing = null;
     for (var i = 0; i < idx.items.length; i++) if (idx.items[i].id === this.convId) { existing = idx.items[i]; break; }
     var created = existing ? existing.created : (turns[0].at || now);
-    var rec = { v: 2, id: this.convId, created: created, updated: now, turns: turns, facts: this.convFacts, suggested: this.suggested, pending: this.pending };
+    var rec = { v: 2, id: this.convId, created: created, updated: now, turns: turns, facts: this.convFacts, suggested: this.suggested, pending: this.pending, pick: this.pick };
     var key = this._ns + ':c:' + this.convId;
     var ok = writeJSON(key, rec);
     // Out of room: let the oldest conversations go first.
@@ -6508,8 +6662,8 @@
       }
       cg.appendChild(row);
     });
-    var vessel = this.context && (this.context.vesselName || this.context.vesselId);
-    if (vessel) cg.appendChild(infoRow('Vessel on this page', vessel, 'Questions default to it unless you name another'));
+    var vessel = this.ctxName();
+    if (vessel) cg.appendChild(infoRow(this.pick ? 'Chosen for this chat' : 'Vessel on this page', vessel, this.pick && this.pick.fleet ? 'Questions default to all your vessels unless you name one' : 'Questions default to it unless you name another'));
     if (this.turns.length) cg.appendChild(infoRow('Recent messages', this.turns.length + (this.turns.length === 1 ? ' message' : ' messages') + ' in this chat', 'The latest few go with each question so follow-ups make sense'));
     if (!cg.childNodes.length) cg.appendChild(el('div', 'empty', 'Nothing yet — this fills in as you chat.'));
     cs.appendChild(cg);

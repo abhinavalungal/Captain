@@ -8,7 +8,9 @@
  *   node db/setup.js --no-seed     schema + roles + checks, no test data
  *   node db/setup.js --check       checks only; changes nothing
  *   node db/setup.js --print-seed > seed.sql
- *                                  the test data as SQL, for the Supabase SQL editor
+ *                                  the test data as one SQL script, for psql
+ *   node db/setup.js --write-seed  the test data as db/002_test_data_part*.sql,
+ *                                  small enough for the Supabase SQL Editor
  *   --env <file>                   env file to read and update (default .env)
  *
  * Needs DATABASE_URL: the Supabase `postgres` connection (Project → Connect).
@@ -221,7 +223,7 @@ async function verifyReader(url) {
         return [!out.error && (out.row_count > 0 || topic === 'offhire'), out.error || `${out.row_count} rows`];
       });
     }
-    for (const text of ['fuel consumption for TEST VESSEL 01 last month', 'CO2 emitted by TEST VESSEL 02 this year', 'VLSFO consumption for TEST VESSEL 01 in 2025']) {
+    for (const text of ['fuel consumption for SN Star last month', 'CO2 emitted by SN Sky this year', 'VLSFO consumption for SN Star in 2025']) {
       await check(`KRIS engine: "${text}"`, async () => {
         const out = await engine.ask({ text, session, now: new Date() }, db, { orgId: 'setup', disableLog: true });
         return [out.status === 'answer', String(out.text || out.status).slice(0, 140)];
@@ -265,6 +267,8 @@ function existingPassword(url, role, adminUrl) {
 
 async function setRolePasswords(db, adminUrl, env) {
   const out = {};
+  // Supabase's pooler can only log a role in with a SCRAM password (an md5 one fails "invalid secret format").
+  await db.query("SET password_encryption = 'scram-sha-256'");
   for (const [role, key] of [['kris_reader', 'KRIS_READ_URL'], ['kris_writer', 'KRIS_WRITE_URL']]) {
     const keep = existingPassword(env[key], role, adminUrl);
     const password = keep || crypto.randomBytes(24).toString('base64url');
@@ -305,6 +309,13 @@ async function main(argv) {
     process.stdout.write(require('./test_data').buildSql({ until: new Date() }) + '\n');
     return 0;
   }
+  if (flag('--write-seed')) {
+    const parts = require('./test_data').buildParts({ until: new Date() });
+    for (const f of fs.readdirSync(__dirname)) if (/^002_test_data.*\.sql$/.test(f)) fs.unlinkSync(path.join(__dirname, f));
+    parts.forEach((p, i) => fs.writeFileSync(path.join(__dirname, `002_test_data_part${i + 1}.sql`), p + '\n'));
+    console.log(`Wrote db/002_test_data_part1.sql to part${parts.length}.sql: run them in order in the Supabase SQL Editor.`);
+    return 0;
+  }
   if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
   const renames = require('../src/envcheck').findRenames(process.env);
   if (renames.length) {
@@ -335,7 +346,7 @@ async function main(argv) {
         console.log('  done  role passwords kept from the env file');
       }
       if (!flag('--no-seed')) {
-        process.stdout.write('  …   test data'); await seedTestData(db); console.log('\r  done  test data (TEST VESSEL 01, TEST VESSEL 02)');
+        process.stdout.write('  …   test data'); await seedTestData(db); console.log('\r  done  test data (SN Star, SN Sky)');
       }
     }
     console.log('\nChecks as the database owner:');

@@ -28,8 +28,15 @@ t('IPv6-only direct host -> DB_NO_ROUTE naming the pooler host', () => {
 t('connect timeout -> DB_TIMEOUT', () => {
   assert.strictEqual(classifyDbError(E('Connection terminated due to connection timeout')).code, 'DB_TIMEOUT');
 });
-t('DNS failure -> DB_DNS', () => {
-  assert.strictEqual(classifyDbError(E('getaddrinfo ENOTFOUND db.x.supabase.co', 'ENOTFOUND')).code, 'DB_DNS');
+t('DNS failure -> DB_DNS; on the IPv6-only direct host the hint names the pooler', () => {
+  const d = classifyDbError(E('getaddrinfo ENOTFOUND db.x.supabase.co', 'ENOTFOUND'));
+  assert.strictEqual(d.code, 'DB_DNS');
+  assert.ok(/IPv6/.test(d.hint) && /pooler\.supabase\.com/.test(d.hint), d.hint);
+  assert.ok(/typos/.test(classifyDbError(E('getaddrinfo ENOTFOUND dbhost.example', 'ENOTFOUND')).hint));
+});
+t('pooler: role without a SCRAM password -> DB_ROLE_PASSWORD; newer tenant wording -> DB_TENANT', () => {
+  assert.strictEqual(classifyDbError(E('(EAUTHQUERY) unsupported or invalid secret format', 'XX000')).code, 'DB_ROLE_PASSWORD');
+  assert.strictEqual(classifyDbError(E('(ENOTFOUND) tenant/user kris_reader.abc not found', 'XX000')).code, 'DB_TENANT');
 });
 t('pooler rejecting a startup parameter -> DB_POOLER_PARAM', () => {
   assert.strictEqual(classifyDbError(E('unsupported startup parameter in options: statement_timeout')).code, 'DB_POOLER_PARAM');

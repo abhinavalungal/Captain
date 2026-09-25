@@ -67,6 +67,14 @@ const LEGACY = { OLDAPP_READ_URL: 'postgres://x', OLDAPP_DEV_SESSION: '1', OLDAP
     const r = await ask({ KRIS_DEV_SESSION: '1', KRIS_ENABLE_LLM: '0' }, { text: 'hi', token: devToken });
     assert.notStrictEqual(r.statusCode, 401, r.body);
   });
+  await ta('vessel list for the picker: needs sign-in; without a database it says so and offers nothing', async () => {
+    assert.strictEqual((await ask({}, { action: 'vessels' })).statusCode, 401);
+    const r = await ask({ KRIS_DEV_SESSION: '1' }, { action: 'vessels', token: devToken });
+    const body = JSON.parse(r.body);
+    assert.strictEqual(r.statusCode, 503, r.body);
+    assert.deepStrictEqual(body.vessels, []);
+    assert.strictEqual(body.reason, 'db_unreachable');
+  });
 
   // --- the per-user message limit -------------------------------------------------
   const tokenFor = (sub) => Buffer.from(JSON.stringify({ sub, org: 'o', departments: ['Emission'] })).toString('base64');
