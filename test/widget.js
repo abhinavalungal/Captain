@@ -578,13 +578,16 @@ function boot(opts, storage) {
     w.window.KRIS.open();
     w.respond(async (body) => (body.action === 'vessels' ? jsonResponse({ vessels: VESSELS }) : jsonResponse({ status: 'answer', source: 'agent', text: 'ok' })));
     const chip = w.q('.box .ctx');
-    assert(chip.classList.contains('on') && chip.classList.contains('empty') && /Choose vessel or fleet/.test(chip.textContent), chip.textContent);
+    assert(chip.classList.contains('on') && chip.classList.contains('unset') && /Choose vessel or fleet/.test(chip.textContent), chip.textContent);
+    // No class on the chip may also be styled on its own: a stray ".empty" rule once made it 72px tall.
+    const bare = new Set([...SRC.matchAll(/'\.([a-z][\w-]*)\{/g)].map((m) => m[1]));
+    for (const cls of chip.classList) assert(cls === 'ctx' || !bare.has(cls), `chip class ".${cls}" is also styled on its own`);
     chip.click(); await wait(20);
     const labels = [...w.qa('.ctxmenu [role=menuitemradio]')].map((b) => b.textContent);
     assert(JSON.stringify(labels) === JSON.stringify(['Entire fleet', 'SN Star', 'SN Sky']), JSON.stringify(labels));
     pickItem(w, 'SN Star').click();
     assert(w.q('.ctxmenu').hidden, 'menu stayed open');
-    assert(/SN Star/.test(chip.textContent) && !chip.classList.contains('empty') && !w.q('.ctx-clear').hidden, chip.textContent);
+    assert(/SN Star/.test(chip.textContent) && !chip.classList.contains('unset') && !w.q('.ctx-clear').hidden, chip.textContent);
     await w.type('fuel last month'); await w.idle();
     let c = lastContext(w);
     assert(c.vesselId === '1000019' && c.vesselName === 'SN Star' && !c.fleet, JSON.stringify(c));
@@ -595,7 +598,7 @@ function boot(opts, storage) {
     c = lastContext(w);
     assert(c.fleet === true && !c.vesselId && !c.vesselName, JSON.stringify(c));
     w.q('.ctx-clear').click();
-    assert(chip.classList.contains('empty') && w.q('.ctx-clear').hidden);
+    assert(chip.classList.contains('unset') && w.q('.ctx-clear').hidden);
     await w.type('co2 this year'); await w.idle();
     c = lastContext(w);
     assert(!c.fleet && !c.vesselId, JSON.stringify(c));

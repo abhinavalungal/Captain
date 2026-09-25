@@ -773,7 +773,7 @@
     '.foot.on{display:flex}',
     '.ctx{display:none;align-items:center;gap:6px;max-width:70%;min-width:0;padding:3px 9px 3px 7px;border:0;border-radius:999px;background:var(--peacock-soft);color:var(--peacock);font-size:12px;line-height:1.3;cursor:pointer}',
     '.ctx.on{display:inline-flex}',
-    '.ctx.empty{background:transparent;color:var(--ink-3);box-shadow:inset 0 0 0 1px var(--line-2)}',
+    '.ctx.unset{background:transparent;color:var(--ink-3);box-shadow:inset 0 0 0 1px var(--line-2)}',
     '.ctx:hover:not(:disabled){box-shadow:inset 0 0 0 1px var(--peacock)}',
     '.ctx:disabled{cursor:default}',
     '.ctx:focus-visible,.ctx-clear:focus-visible,.ctxmenu button:focus-visible{outline:2px solid var(--peacock);outline-offset:2px}',
@@ -3134,7 +3134,7 @@
     var scope = this.context && this.context.fleet ? 'your whole fleet' : name;
     this.ctxText.textContent = name || (picker ? 'Choose vessel or fleet' : '');
     this.ctxChip.classList.toggle('on', !!name || picker);
-    this.ctxChip.classList.toggle('empty', !name);
+    this.ctxChip.classList.toggle('unset', !name);
     this.ctxChip.disabled = !picker;
     this.ctxChip.title = name ? 'Questions default to ' + scope + (picker ? '. Click to change.' : '') : 'Set a vessel or your fleet as the current context';
     this.ctxClear.hidden = !pk;
