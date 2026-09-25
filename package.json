@@ -5,7 +5,7 @@
   "description": "K.R.1.S — a Krishna-inspired vessel-data assistant with a deterministic core (never fabricates a figure), an instant local fast lane, and a streamed LLM layer for conversation and app help.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --env-file-if-exists=.env --use-system-ca server.js",
     "test": "node test/run.js && node test/instant_test.js && node test/persona_test.js && node test/agent_test.js && node test/companion_test.js && node test/context_test.js && node test/db_test.js && node test/reasoning_test.js && node test/stream_test.js && node test/widget.js && node test/widget_memory.js && node test/profile_test.js && node test/about_me_test.js && node test/server.js && node test/cors_test.js && node test/auth_test.js",
     "test:offline": "KRIS_TEST_URL= npm test",
     "bench": "node test/latency_bench.js",

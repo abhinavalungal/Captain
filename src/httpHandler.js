@@ -1,10 +1,17 @@
 'use strict';
 
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// pg reads DATE and TIMESTAMP (no zone) as LOCAL time, so on a server east of
+// UTC (India) a report dated 1 August came back as 31 July. Everything here
+// formats in UTC: read both as UTC and a calendar day stays that day anywhere.
+const asUtc = (v, suffix) => { const d = new Date(v.replace(' ', 'T') + suffix); return Number.isNaN(d.getTime()) ? v : d; };
+types.setTypeParser(types.builtins.DATE, (v) => asUtc(v, 'T00:00:00Z'));
+types.setTypeParser(types.builtins.TIMESTAMP, (v) => asUtc(v, 'Z'));
 
 // Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const KRIS_BUILD = '2026-09-25.kris-12';
+const KRIS_BUILD = '2026-09-25.kris-13';
 
 // Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch

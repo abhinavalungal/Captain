@@ -60,7 +60,7 @@
 
   if (global.KRIS && global.KRIS.__loaded) return;
 
-  var VERSION = '2026-09-25.kris-12';
+  var VERSION = '2026-09-25.kris-13';
 
   // Where was this script loaded from? The API lives on the same origin.
   var SCRIPT_ORIGIN = '';

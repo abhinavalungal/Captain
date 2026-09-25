@@ -736,8 +736,12 @@ explicit list.
 ### 6. Run it
 
 ```bash
-KRIS_READ_URL=... KRIS_WRITE_URL=... node server.js
+npm start      # reads .env; variables already set on the host win
 ```
+
+`npm start` also trusts the operating system's certificate store, so model
+calls work behind a TLS-inspecting proxy (Netskope, Zscaler). Both need Node
+22.15+. Plain `node server.js` reads neither: set the variables on the host.
 
 That starts a plain HTTP server on `PORT` (default `8787`) serving:
 

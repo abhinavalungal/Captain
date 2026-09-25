@@ -42,6 +42,12 @@ const LEGACY = { OLDAPP_READ_URL: 'postgres://x', OLDAPP_DEV_SESSION: '1', OLDAP
     assert.strictEqual(health({ KRIS_READ_URL: 'postgresql://kris_reader.abcdef:pw@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres' }).databaseVia, 'supabase-pooler');
     assert.strictEqual(health({}).databaseVia, null);
   });
+  t('pg: DATE and TIMESTAMP keep their calendar day on a server east of UTC (read as UTC)', () => {
+    const { types } = require('pg');
+    assert.strictEqual(types.getTypeParser(types.builtins.DATE)('2026-08-01').toISOString(), '2026-08-01T00:00:00.000Z');
+    assert.strictEqual(types.getTypeParser(types.builtins.TIMESTAMP)('2026-08-01 00:00:00').toISOString(), '2026-08-01T00:00:00.000Z');
+    assert.strictEqual(types.getTypeParser(types.builtins.DATE)('infinity'), 'infinity');
+  });
 
   await ta('401: no token at all asks the user to sign in', async () => {
     const r = await ask({}, { text: 'fuel consumption last month' });
