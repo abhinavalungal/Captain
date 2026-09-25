@@ -196,10 +196,10 @@ const NO_DB = async () => { const e = new Error('KRIS_READ_URL is not set'); e.c
     assert.strictEqual(fin.data.source, 'agent');
   });
 
-  await ta('http: the widget is served compressed, cached and revalidated', async () => {
+  await ta('http: the widget is served compressed and revalidated on every load, so a deploy is live at once', async () => {
     const r = await fetch(base + '/kris-widget.js', { headers: { 'Accept-Encoding': 'br' } });
     assert.strictEqual(r.headers.get('content-encoding'), 'br');
-    assert.ok(/max-age/.test(r.headers.get('cache-control')));
+    assert.strictEqual(r.headers.get('cache-control'), 'no-cache');
     const etag = r.headers.get('etag');
     await r.arrayBuffer();
     const r2 = await fetch(base + '/kris-widget.js', { headers: { 'If-None-Match': etag } });

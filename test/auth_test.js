@@ -35,6 +35,13 @@ const LEGACY = { OLDAPP_READ_URL: 'postgres://x', OLDAPP_DEV_SESSION: '1', OLDAP
     assert.strictEqual(h.auth, 'production');
     assert.deepStrictEqual(health({ KRIS_DEV_SESSION: '1' }).renameNeeded, []);
   });
+  t('health: names the kind of database address (Supabase direct host is IPv6-only), never the address', () => {
+    const direct = health({ KRIS_READ_URL: 'postgresql://kris_reader:pw-secret@db.abcdef.supabase.co:5432/postgres' });
+    assert.ok(/^supabase-direct/.test(direct.databaseVia), direct.databaseVia);
+    assert.ok(!JSON.stringify(direct).includes('pw-secret') && !JSON.stringify(direct).includes('abcdef'), 'the address leaked');
+    assert.strictEqual(health({ KRIS_READ_URL: 'postgresql://kris_reader.abcdef:pw@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres' }).databaseVia, 'supabase-pooler');
+    assert.strictEqual(health({}).databaseVia, null);
+  });
 
   await ta('401: no token at all asks the user to sign in', async () => {
     const r = await ask({}, { text: 'fuel consumption last month' });

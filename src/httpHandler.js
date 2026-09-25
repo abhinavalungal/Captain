@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 
 // Bump on every delivery. Shows up in GET /api/kris (health) and in every
 // error body, so a screenshot alone tells us which build is actually running.
-const KRIS_BUILD = '2026-09-25.kris-11';
+const KRIS_BUILD = '2026-09-25.kris-12';
 
 // Fingerprint every source file so /api/kris shows exactly what is
 // deployed. Compare against MANIFEST.txt from the same delivery: a mismatch
@@ -389,6 +389,17 @@ function safeAgentBuild() {
   try { return require('./agent').AGENT_BUILD || 'pre-2026-09-04'; } catch (_) { return 'missing'; }
 }
 
+/** What kind of address KRIS_READ_URL is, never the address: Supabase's direct host is IPv6-only. */
+function dbVia(url) {
+  if (!url) return null;
+  try {
+    const h = new URL(url).hostname;
+    if (/^db\.[a-z0-9]+\.supabase\.co$/i.test(h)) return 'supabase-direct (IPv6 only: most hosts cannot reach it, use the pooler)';
+    if (/\.pooler\.supabase\.com$/i.test(h)) return 'supabase-pooler';
+    return 'other';
+  } catch (_) { return 'not a URL'; }
+}
+
 function health(env) {
   const llm = llmConfig(env);
   const state = llmStatus();
@@ -401,6 +412,7 @@ function health(env) {
     // copy/paste pipeline produces.
     builds: { httpHandler: KRIS_BUILD, router: router.ROUTER_BUILD || 'pre-2026-09-04', agent: safeAgentBuild() },
     database: !!env.KRIS_READ_URL,
+    databaseVia: dbVia(env.KRIS_READ_URL),
     writer: !!env.KRIS_WRITE_URL,
     auth: env.KRIS_DEV_SESSION === '1' ? 'prototype' : 'production',
     // `label` is the only model name a page should show; `model` is for whoever runs the server.

@@ -578,7 +578,7 @@ function boot(opts, storage) {
     w.window.KRIS.open();
     w.respond(async (body) => (body.action === 'vessels' ? jsonResponse({ vessels: VESSELS }) : jsonResponse({ status: 'answer', source: 'agent', text: 'ok' })));
     const chip = w.q('.box .ctx');
-    assert(chip.classList.contains('on') && chip.classList.contains('unset') && /Choose vessel or fleet/.test(chip.textContent), chip.textContent);
+    assert(chip.classList.contains('on') && chip.classList.contains('unset') && chip.textContent === 'Vessel or fleet', chip.textContent);
     // No class on the chip may also be styled on its own: a stray ".empty" rule once made it 72px tall.
     const bare = new Set([...SRC.matchAll(/'\.([a-z][\w-]*)\{/g)].map((m) => m[1]));
     for (const cls of chip.classList) assert(cls === 'ctx' || !bare.has(cls), `chip class ".${cls}" is also styled on its own`);

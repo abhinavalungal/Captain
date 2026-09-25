@@ -108,9 +108,10 @@ function serveStatic(req, res, pathname) {
     'Content-Type': f.type,
     ETag: f.etag,
     Vary: 'Accept-Encoding',
-    // The widget can be cached briefly and revalidated cheaply (304) —
-    // pages load it from cache instead of re-downloading on every navigation.
-    'Cache-Control': f.type.startsWith('text/html') ? 'no-cache' : 'public, max-age=300, stale-while-revalidate=86400',
+    // Pages and scripts are revalidated on every load (a cheap 304 when
+    // unchanged), so a deploy is live at once instead of after a stale day;
+    // images and fonts are cached.
+    'Cache-Control': /^text\/html|javascript/.test(f.type) ? 'no-cache' : 'public, max-age=300, stale-while-revalidate=86400',
     // Pages on other origins embed the widget script.
     'Access-Control-Allow-Origin': '*',
     'Cross-Origin-Resource-Policy': 'cross-origin',

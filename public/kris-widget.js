@@ -60,7 +60,7 @@
 
   if (global.KRIS && global.KRIS.__loaded) return;
 
-  var VERSION = '2026-09-25.kris-11';
+  var VERSION = '2026-09-25.kris-12';
 
   // Where was this script loaded from? The API lives on the same origin.
   var SCRIPT_ORIGIN = '';
@@ -771,7 +771,8 @@
     '.send:focus-visible{outline:2px solid var(--gold);outline-offset:2px}',
     '.foot{grid-column:1 / -1;display:none;align-items:center;gap:8px;padding:0 12px 9px 12px;min-height:30px;position:relative}',
     '.foot.on{display:flex}',
-    '.ctx{display:none;align-items:center;gap:6px;max-width:70%;min-width:0;padding:3px 9px 3px 7px;border:0;border-radius:999px;background:var(--peacock-soft);color:var(--peacock);font-size:12px;line-height:1.3;cursor:pointer}',
+    '.ctx{display:none;align-items:center;gap:5px;max-width:60%;min-width:0;height:22px;padding:0 8px 0 6px;border:0;border-radius:999px;background:var(--peacock-soft);color:var(--peacock);font-size:11.5px;line-height:1;cursor:pointer}',
+    '.ctx svg{width:13px;height:13px;flex:none}',
     '.ctx.on{display:inline-flex}',
     '.ctx.unset{background:transparent;color:var(--ink-3);box-shadow:inset 0 0 0 1px var(--line-2)}',
     '.ctx:hover:not(:disabled){box-shadow:inset 0 0 0 1px var(--peacock)}',
@@ -3132,7 +3133,7 @@
     var name = this.ctxName();
     var picker = this.opts.vesselPicker !== false;
     var scope = this.context && this.context.fleet ? 'your whole fleet' : name;
-    this.ctxText.textContent = name || (picker ? 'Choose vessel or fleet' : '');
+    this.ctxText.textContent = name || (picker ? 'Vessel or fleet' : '');
     this.ctxChip.classList.toggle('on', !!name || picker);
     this.ctxChip.classList.toggle('unset', !name);
     this.ctxChip.disabled = !picker;
