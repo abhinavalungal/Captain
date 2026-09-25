@@ -11,7 +11,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { startMockLLM } = require('./mock_llm');
 const router = require('../src/router');
-const { SentenceGate } = require('../src/stream');
+const { SentenceGate, guardable } = require('../src/stream');
 const { containsStatedFigure, SAFE_REDIRECT } = require('../src/companion_src');
 
 let passed = 0; const fails = [];
@@ -56,6 +56,24 @@ const NO_DB = async () => { const e = new Error('KRIS_READ_URL is not set'); e.c
       g.end();
       assert.strictEqual(g.blocked, containsStatedFigure(t, []), 'disagreement on: ' + t);
     }
+  });
+
+  await ta('gate: a visual fenced as ```json is relabelled ```visual, held, and guarded like one', async () => {
+    const out = []; let held = 0;
+    const g = new SentenceGate({ check: (t) => containsStatedFigure(t, []), emit: (t) => out.push(t), onHold: () => { held++; } });
+    const reply = 'Quick picture:\n\n```json\n{"type":"meter","title":"CII","value":1.05,"min":0,"max":2}\n```\n\nDone.';
+    for (const ch of reply) g.push(ch);
+    g.end();
+    const shown = out.join('');
+    assert.ok(/```visual\n\{"type":"meter"/.test(shown) && !/```json/.test(shown), shown);
+    assert.strictEqual(held, 1, 'the visual was not held');
+    assert.ok(!out.some((p) => p === '```json\n'), 'the json fence leaked before it was relabelled');
+    // Real code is left alone.
+    const code = []; const g2 = new SentenceGate({ check: () => false, emit: (t) => code.push(t) });
+    for (const ch of '```json\n{"name":"x","value":2}\n```\n') g2.push(ch);
+    g2.end();
+    assert.ok(/^```json\n/.test(code.join('')), code.join(''));
+    assert.ok(/SN Star a 1\.4 MT/.test(guardable('```json\n{"type":"bar","title":"SN Star","unit":"MT","labels":["a","b"],"values":[1.4,2]}\n```')), 'guard did not read the json visual');
   });
 
   // --- fast lane: zero model calls in every mode -----------------------------

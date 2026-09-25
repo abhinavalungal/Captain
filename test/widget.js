@@ -275,6 +275,25 @@ function boot(opts, storage) {
     assert(/And that is the picture\./.test(m.textContent), 'prose after a malformed visual was lost');
   });
 
+  await ta('visuals: a spec fenced as ```json is still drawn; crowded rating bands get a legend; real JSON stays code', async () => {
+    const w = boot();
+    await wait(20);
+    w.window.KRIS.open();
+    const meter = { type: 'meter', title: 'CII rating scale', value: 1.05, unit: 'attained / required', min: 0, max: 6, target: 1, better: 'lower',
+      bands: [{ label: 'A', to: 0.86 }, { label: 'B', to: 0.94 }, { label: 'C', to: 1.06 }, { label: 'D', to: 1.18 }, { label: 'E', to: 6 }] };
+    const text = '### Quick picture\n```json\n' + JSON.stringify(meter) + '\n```\n\nConfig:\n```json\n{"name":"kris","value":2}\n```';
+    w.respond(async () => jsonResponse({ status: 'answer', source: 'agent', text: text }));
+    await w.type('explain cii');
+    await w.idle();
+    const m = w.q('.turn.assistant.last .msg');
+    assert(m.querySelector('figure.vz-meter'), 'the json-fenced meter was not drawn');
+    assert(!/"type"/.test(m.textContent), 'the visual spec leaked as text');
+    assert(m.querySelectorAll('.codeblock').length === 1 && /"name":"kris"/.test(m.querySelector('.codeblock').textContent), 'ordinary JSON should stay a code block');
+    const legend = [...m.querySelectorAll('.vz-mlegend li')].map((li) => li.textContent);
+    assert(legend.length === 5 && legend[2] === 'C ≤ 1.06' && legend[4] === 'E > 1.18', 'legend: ' + legend.join(' | '));
+    assert(m.querySelector('.vz-mlegend li.on') && /C/.test(m.querySelector('.vz-mlegend li.on').textContent), 'the current band is not marked');
+  });
+
   await ta('visuals: a map pins positions from its numbers; tiles come only from the widget option', async () => {
     const w = boot({ mapTiles: 'https://tiles.test/{z}/{x}/{y}.png' });
     await wait(20);

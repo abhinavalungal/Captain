@@ -40,7 +40,7 @@ const agent = require('./agent');
 const turns = require('./turn');
 const { scopeCache, learnedCache, scopeKey } = require('./cache');
 
-const ROUTER_BUILD = '2026-09-25.kris-13';
+const ROUTER_BUILD = '2026-09-25.kris-14';
 const dates = require('./dates');
 const { METRICS } = require('./config');
 

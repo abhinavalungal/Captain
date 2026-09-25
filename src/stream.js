@@ -150,8 +150,38 @@ function findVisual(buf, final) {
 
 /** A whole reply as the guard should read it: each visual block turned into visualText. */
 function guardable(text) {
-  return String(text || '').replace(/(^|\n)([ \t]*```[ \t]*visual[ \t]*\n[\s\S]*?(?:\n[ \t]*```[ \t]*(?=\n|$)|$))/gi,
+  return relabelVisuals(text).text.replace(/(^|\n)([ \t]*```[ \t]*visual[ \t]*\n[\s\S]*?(?:\n[ \t]*```[ \t]*(?=\n|$)|$))/gi,
     function (all, pre, block) { return pre + visualText(block); });
+}
+
+// Models sometimes fence a visual spec as ```json (or bare ```). Without the
+// "visual" label it would reach the user as raw JSON and skip the guard.
+const VISUAL_SPEC_START = /^\{ ?"type" ?: ?"(?:stats|bar|line|breakdown|meter|compare|steps|timeline|map|dashboard)"/i;
+const FENCE_LINE = /^[ \t]*```[ \t]*([\w+#.-]*)[ \t]*$/;
+
+/**
+ * Relabel every ```json / ```js / bare fence that holds a visual spec as
+ * ```visual. `open`: the text starts inside a fence. `undecided` is where a
+ * json fence starts whose content is too short to tell yet (-1 if none):
+ * the gate holds text from there until it can.
+ */
+function relabelVisuals(text, open) {
+  const lines = String(text || '').split('\n');
+  let at = 0, undecided = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = FENCE_LINE.exec(lines[i]);
+    if (m && open) { if (!m[1]) open = false; }
+    else if (m) {
+      open = true;
+      if (/^(?:json|js|javascript)?$/i.test(m[1])) {
+        const body = lines.slice(i + 1).join(' ').replace(/\s+/g, ' ').trim();
+        if (VISUAL_SPEC_START.test(body)) lines[i] = lines[i].replace(/```.*$/, '```visual');
+        else if (undecided < 0 && body.length < 40 && (!body || body[0] === '{')) undecided = at;
+      }
+    }
+    at += lines[i].length + 1;
+  }
+  return { text: lines.join('\n'), undecided: undecided, open: open };
 }
 
 /**
@@ -216,7 +246,7 @@ class SentenceGate {
 
   push(text) {
     if (this.blocked || !text) return;
-    this.buf += text;
+    this.buf = relabelVisuals(this.buf + text, relabelVisuals(this.released).open).text;
     this._drain(false);
   }
 
@@ -244,8 +274,11 @@ class SentenceGate {
         continue;
       }
       const before = this.buf.length;
-      this._drainText(final, v ? v.start : this.buf.length);
-      if (!v || this.blocked || this.buf.length === before) return;
+      // A ```json fence that may yet turn out to be a visual is not released early.
+      const u = final ? -1 : relabelVisuals(this.buf, relabelVisuals(this.released).open).undecided;
+      const stopAt = Math.min(v ? v.start : this.buf.length, u >= 0 ? u : this.buf.length);
+      this._drainText(final, stopAt);
+      if (this.blocked || this.buf.length === before || (!v && u < 0)) return;
     }
   }
 

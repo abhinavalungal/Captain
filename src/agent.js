@@ -49,7 +49,7 @@ const turns = require('./turn');
 const records = require('./records');
 const { scopeCache, scopeKey } = require('./cache');
 
-const AGENT_BUILD = '2026-09-25.kris-13';
+const AGENT_BUILD = '2026-09-25.kris-14';
 
 const DEFAULTS = {
   maxSteps: 4,          // model turns per message, including the final answer
